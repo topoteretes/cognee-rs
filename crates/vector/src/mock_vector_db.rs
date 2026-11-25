@@ -40,6 +40,10 @@ pub struct MockVectorDB {
     /// Injected errors returned from any `index_points` call carrying one of
     /// these point ids.
     point_index_errors: Arc<Mutex<HashMap<Uuid, String>>>,
+    /// Bulk-load scopes closed by `end_bulk_load` (finished, maintenance run).
+    bulk_loads_finished: Arc<std::sync::atomic::AtomicUsize>,
+    /// Bulk-load scopes closed by `abandon_bulk_load` (a dropped guard).
+    bulk_loads_abandoned: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[derive(Clone)]
@@ -59,7 +63,20 @@ impl MockVectorDB {
             index_error: Arc::new(Mutex::new(None)),
             retrieve_error: Arc::new(Mutex::new(None)),
             point_index_errors: Arc::new(Mutex::new(HashMap::new())),
+            bulk_loads_finished: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            bulk_loads_abandoned: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
+    }
+
+    /// How many bulk-load scopes were closed by `end_bulk_load` (finished)
+    /// and by `abandon_bulk_load` (a dropped guard), in that order.
+    pub fn bulk_load_closes(&self) -> (usize, usize) {
+        (
+            self.bulk_loads_finished
+                .load(std::sync::atomic::Ordering::SeqCst),
+            self.bulk_loads_abandoned
+                .load(std::sync::atomic::Ordering::SeqCst),
+        )
     }
 
     /// Generate collection key from data_type and field_name
@@ -169,6 +186,17 @@ impl Default for MockVectorDB {
 
 #[async_trait]
 impl VectorDB for MockVectorDB {
+    async fn end_bulk_load(&self) -> VectorDBResult<()> {
+        self.bulk_loads_finished
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn abandon_bulk_load(&self) {
+        self.bulk_loads_abandoned
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
     async fn create_collection(
         &self,
         data_type: &str,

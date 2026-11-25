@@ -40,16 +40,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     its graph is loaded; a DLT row only after the post-run step wrote its
     foreign-key edges. A document whose save failed or was cut off mid-save is
     not completed.
-  - **A `failed_items` run that fails** — over the chunk failure ratio, with no
-    survivor, a failed post-run step, a cancellation — **still returns `Err`,
-    but keeps the documents it completed**, markers and all, and sweeps only
-    the rest. It used to escalate to a whole-run sweep that deleted the
-    completed documents and their markers too; select `whole_run` for that end
-    state.
+  - **A `failed_items` run with a failed document errors** (`RunFailed`,
+    `ERRORED`) whatever the chunk failure ratio, as Python's `run_tasks` raises
+    whenever a data item errored; `FailureReport::is_fatal` is true on any
+    failed item under every scope, and `chunk_failure_ratio_threshold` /
+    `COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO` no longer decide anything (still
+    read and validated). It used to return `Ok` below the ratio, so a re-run
+    that stopped at the same bad document reported success every time.
+  - **A `failed_items` run that fails** (a failed document, a failed post-run
+    step, a cancellation) **keeps the documents it completed**, markers and
+    all, and sweeps everything else it wrote — as Python's rollback deletes
+    every row of the run but the kept items'. It used to escalate to a
+    whole-run sweep that deleted the completed documents and their markers
+    too; select `whole_run` for that end state. The sweep is "the whole run
+    except the kept documents" (`RunSweeper::sweep_run_keeping`): the kept
+    rows are moved to a holding run id in batches, the run is swept whole and
+    they are moved back, so no list of documents is bound into the sweep's
+    queries and its size is not bounded by the backends' bind-variable caps.
+    Run-level nil rows no kept document stands beside (a DLT schema node) go
+    with the run.
+  - **Startup recovery keeps the documents a killed run marked complete**, as
+    Python's recovery keeps the stamped items, and sweeps the rest.
   - **A failed save of one document fails only that document** under
-    `failed_items` (new `FailureStage::Persistence`, not counted in the chunk
-    ratio): it is swept, the run goes on (under `FailFast` it stops
-    dispatching), and the run can complete with the failure reported. Under
+    `failed_items` (new `FailureStage::Persistence`): it is swept, the run
+    goes on (under `FailFast` it stops dispatching) and errors at the end. Under
     `whole_run` and `nothing` a failed save still fails the run; the writer
     now returns that error before finishing its bulk-load scope.
   - **An item-scoped sweep now removes the run's nil-`data_id` row of an
@@ -67,8 +81,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **API changes:** `CognifyConfig` gains `completion` (an opaque
   `CompletionHandle` that `cognify()` fills; callers leave it `None`);
   `FailureStage` gains `Persistence` (`Display`: `persistence`);
-  `ProvenanceDb` gains `keep_completed_items_evidence`;
-  `MockVectorDB::set_index_error_for_point` (testing).
+  `ProvenanceDb` gains `keep_completed_items_evidence`, `retag_run_rows` and
+  `retag_guarded_nil_rows` (required methods); `RunSweeper` gains
+  `sweep_run_keeping` (+ `_logging_failure`) and `holding_run_id`;
+  `MockVectorDB::set_index_error_for_point` and `bulk_load_closes` (testing).
 - **cognify saves each document as soon as it is complete, from one ordered
   writer (SDK-1694, stage O4b).** Extraction, summarization and
   `add_data_points` are now **one streaming pipeline stage**,

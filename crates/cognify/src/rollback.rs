@@ -266,7 +266,10 @@ pub(crate) enum SweepDecision {
     Nothing,
     /// Everything this run created in the dataset.
     WholeRun,
-    /// The failed and unreached items only. Never empty.
+    /// Everything this run created in the dataset except what these items —
+    /// the ones it completed — own. Never empty.
+    WholeRunKeeping(Vec<Uuid>),
+    /// The given items only. Never empty.
     Items(Vec<Uuid>),
 }
 
@@ -275,57 +278,40 @@ pub(crate) enum SweepDecision {
 /// | scope \ ending | `Failed` | `Completed` |
 /// |---|---|---|
 /// | `WholeRun` | `WholeRun` | `Nothing` |
-/// | `FailedItems` | `Items(processed − completed)` — the escalation | `Items(failed ∪ unreached)` |
+/// | `FailedItems` | `WholeRunKeeping(completed)` (`WholeRun` when it completed nothing) | `Items(failed ∪ unreached)` |
 /// | `Nothing` | `Nothing` | `Nothing` |
 ///
-/// The escalation is the one entry worth spelling out. A `FailedItems` run
-/// that ended in failure did so because the chunk failure ratio was exceeded,
-/// because no item survived, or because the failure was run-fatal
-/// (persistence outside a document's own save, cancellation). In every one of
-/// those the run as a whole did not finish, and it reports an error — but the
-/// documents it **completed** before that are kept, markers and all, as
-/// Python's per-item rollback keeps the items its failed run stamped
-/// (`rollback.py` `_kept_data_ids`). Everything else the run processed is
-/// swept: the documents that failed, the ones it never reached, and the ones
-/// it was still saving. With nothing completed this is the whole run, and it
-/// is swept as one (`WholeRun`), so rows that name no processed item — a DLT
-/// schema node — go too.
+/// A `FailedItems` run fails whenever an item failed
+/// ([`FailureReport::is_fatal`]), when a save outside one document failed, or
+/// when it was cancelled. It reports the error — but the documents it
+/// **completed** are kept, markers and all, as Python's per-item rollback
+/// keeps the items its failed run stamped (`rollback.py` `_kept_data_ids`,
+/// `Node.data_id.notin_(kept)`). Everything else the run wrote is swept: the
+/// documents that failed, the ones it was still saving, and the run-level
+/// rows no kept document stands beside (a DLT schema node). It is expressed
+/// as "the whole run except", not as a list of the swept items, so the sweep
+/// binds no list whatever the run's size
+/// ([`cognee_delete::RunSweeper::sweep_run_keeping`]).
 ///
-/// Before SDK-1694 O5b the escalation swept the whole run, the completed
-/// documents included, because documents were saved and marked only at the
-/// end. A caller who would rather converge on the pre-run state selects
-/// `WholeRun`.
+/// Before SDK-1694 O5b this swept the whole run, the completed documents
+/// included, because documents were saved and marked only at the end. A
+/// caller who would rather converge on the pre-run state selects `WholeRun`.
 ///
-/// `unreached` is folded in with `failed` because neither is marked complete
-/// and neither should keep artifacts. Under `FailFast` an unreached item wrote
-/// no ownership rows, so the sweep is a no-op for it; under `RunToEnd` the set
-/// is empty. Including it costs nothing and cannot under-sweep.
-pub(crate) fn decide_sweep(
-    scope: RollbackScope,
-    ending: &RunEnding<'_>,
-    processed: &[Uuid],
-) -> SweepDecision {
+/// A completed `FailedItems` run failed no item; what it can leave behind are
+/// items no document type matched, recorded as unreached. They wrote no rows,
+/// so their item sweep is a no-op, kept so that it cannot under-sweep.
+pub(crate) fn decide_sweep(scope: RollbackScope, ending: &RunEnding<'_>) -> SweepDecision {
     match (scope, ending) {
         (RollbackScope::Nothing, _) => SweepDecision::Nothing,
         (RollbackScope::WholeRun, RunEnding::Failed { .. }) => SweepDecision::WholeRun,
         // A completed `WholeRun` run has no failed items — `is_fatal` is true
-        // for any of them under this scope — so there is nothing to remove.
+        // for any of them — so there is nothing to remove.
         (RollbackScope::WholeRun, RunEnding::Completed(_)) => SweepDecision::Nothing,
         (RollbackScope::FailedItems, RunEnding::Failed { completed }) => {
             if completed.is_empty() {
-                return SweepDecision::WholeRun;
-            }
-            let unfinished: Vec<Uuid> = processed
-                .iter()
-                .filter(|id| !completed.contains(id))
-                .copied()
-                .collect::<BTreeSet<Uuid>>()
-                .into_iter()
-                .collect();
-            if unfinished.is_empty() {
-                SweepDecision::Nothing
+                SweepDecision::WholeRun
             } else {
-                SweepDecision::Items(unfinished)
+                SweepDecision::WholeRunKeeping(completed.iter().copied().collect())
             }
         }
         (RollbackScope::FailedItems, RunEnding::Completed(report)) => {
@@ -381,15 +367,34 @@ impl RunContext<'_> {
     /// Run `scope` through a [`RunSweeper`], folding any failure of the sweep
     /// itself into a log line.
     async fn sweep(&self, scope: SweepScope) {
-        let sweeper = RunSweeper::new(
+        let sweeper = self.sweeper();
+        let outcome = sweeper.sweep_logging_failure(&scope).await;
+        self.log_sweep(scope.pipeline_run_id, &outcome);
+    }
+
+    /// Sweep the whole run except what `keep` owns
+    /// ([`RunSweeper::sweep_run_keeping`]), folding any failure into a log
+    /// line.
+    async fn sweep_keeping(&self, pipeline_run_id: Uuid, keep: &[Uuid]) {
+        let outcome = self
+            .sweeper()
+            .sweep_run_keeping_logging_failure(pipeline_run_id, self.dataset_id, keep)
+            .await;
+        self.log_sweep(pipeline_run_id, &outcome);
+    }
+
+    fn sweeper(&self) -> RunSweeper {
+        RunSweeper::new(
             Arc::clone(&self.database),
             Arc::clone(&self.graph_db),
             Arc::clone(&self.vector_db),
-        );
-        let outcome = sweeper.sweep_logging_failure(&scope).await;
+        )
+    }
+
+    fn log_sweep(&self, pipeline_run_id: Uuid, outcome: &cognee_delete::SweepOutcome) {
         info!(
             dataset_id = %self.dataset_id,
-            pipeline_run_id = %scope.pipeline_run_id,
+            pipeline_run_id = %pipeline_run_id,
             graph_nodes_deleted = outcome.graph_nodes_deleted,
             vector_points_deleted = outcome.vector_points_deleted,
             provenance_nodes_deleted = outcome.provenance_nodes_deleted,
@@ -398,7 +403,7 @@ impl RunContext<'_> {
             "cognify: run sweep finished"
         );
         for warning in &outcome.warnings {
-            warn!(pipeline_run_id = %scope.pipeline_run_id, "cognify: {warning}");
+            warn!(pipeline_run_id = %pipeline_run_id, "cognify: {warning}");
         }
     }
 
@@ -536,7 +541,7 @@ pub(crate) async fn on_run_failed(
     let ending = RunEnding::Failed {
         completed: &ctx.completed,
     };
-    match decide_sweep(scope, &ending, &ctx.processed) {
+    match decide_sweep(scope, &ending) {
         SweepDecision::Nothing => {}
         SweepDecision::WholeRun => {
             if let Some(run_id) = ctx.sweepable_run_id() {
@@ -550,15 +555,20 @@ pub(crate) async fn on_run_failed(
                     .await;
             }
         }
-        SweepDecision::Items(items) => {
+        SweepDecision::WholeRunKeeping(keep) => {
             if let Some(run_id) = ctx.sweepable_run_id() {
                 info!(
                     dataset_id = %ctx.dataset_id,
                     pipeline_run_id = %run_id,
-                    kept = ctx.completed.len(),
-                    swept = items.len(),
+                    kept = keep.len(),
                     "cognify: run failed; keeping the documents it completed and sweeping the rest"
                 );
+                ctx.sweep_keeping(run_id, &keep).await;
+            }
+        }
+        // A failed run's ending never selects items.
+        SweepDecision::Items(items) => {
+            if let Some(run_id) = ctx.sweepable_run_id() {
                 ctx.sweep(SweepScope::for_data(run_id, ctx.dataset_id, items))
                     .await;
             }
@@ -586,8 +596,7 @@ pub(crate) async fn on_run_completed(ctx: &RunContext<'_>, report: &FailureRepor
     let scope = ctx.config.failure_policy().scope;
     let outstanding = outstanding_items(report);
 
-    if let SweepDecision::Items(items) =
-        decide_sweep(scope, &RunEnding::Completed(report), &ctx.processed)
+    if let SweepDecision::Items(items) = decide_sweep(scope, &RunEnding::Completed(report))
         && let Some(run_id) = ctx.sweepable_run_id()
     {
         info!(
@@ -737,72 +746,42 @@ mod tests {
         let unreached = Uuid::new_v4();
         let report = report_with(&[failed], &[unreached]);
         let saved = Uuid::new_v4();
-        let processed = [saved, failed, unreached];
         let nothing_completed = BTreeSet::new();
         let saved_completed = BTreeSet::from([saved]);
         let failed_with = |completed| RunEnding::Failed { completed };
 
         for completed in [&nothing_completed, &saved_completed] {
             assert_eq!(
-                decide_sweep(RollbackScope::WholeRun, &failed_with(completed), &processed),
+                decide_sweep(RollbackScope::WholeRun, &failed_with(completed)),
                 SweepDecision::WholeRun,
                 "WholeRun sweeps the whole run whatever it completed"
             );
             assert_eq!(
-                decide_sweep(RollbackScope::Nothing, &failed_with(completed), &processed),
+                decide_sweep(RollbackScope::Nothing, &failed_with(completed)),
                 SweepDecision::Nothing
             );
         }
         assert_eq!(
-            decide_sweep(
-                RollbackScope::WholeRun,
-                &RunEnding::Completed(&report),
-                &processed
-            ),
+            decide_sweep(RollbackScope::WholeRun, &RunEnding::Completed(&report)),
             SweepDecision::Nothing,
             "a completed WholeRun run has no failed items to sweep"
         );
         assert_eq!(
-            decide_sweep(
-                RollbackScope::Nothing,
-                &RunEnding::Completed(&report),
-                &processed
-            ),
+            decide_sweep(RollbackScope::Nothing, &RunEnding::Completed(&report)),
             SweepDecision::Nothing
         );
         assert_eq!(
-            decide_sweep(
-                RollbackScope::FailedItems,
-                &failed_with(&nothing_completed),
-                &processed
-            ),
+            decide_sweep(RollbackScope::FailedItems, &failed_with(&nothing_completed)),
             SweepDecision::WholeRun,
             "the escalation with nothing completed sweeps the whole run"
         );
         assert_eq!(
-            decide_sweep(
-                RollbackScope::FailedItems,
-                &failed_with(&saved_completed),
-                &processed
-            ),
-            SweepDecision::Items(BTreeSet::from([failed, unreached]).into_iter().collect()),
+            decide_sweep(RollbackScope::FailedItems, &failed_with(&saved_completed)),
+            SweepDecision::WholeRunKeeping(vec![saved]),
             "the escalation keeps the document the run completed (SDK-1694 O5b)"
         );
-        assert_eq!(
-            decide_sweep(
-                RollbackScope::FailedItems,
-                &failed_with(&BTreeSet::from(processed)),
-                &processed
-            ),
-            SweepDecision::Nothing,
-            "a run that completed everything it processed and then failed keeps it all"
-        );
 
-        match decide_sweep(
-            RollbackScope::FailedItems,
-            &RunEnding::Completed(&report),
-            &processed,
-        ) {
+        match decide_sweep(RollbackScope::FailedItems, &RunEnding::Completed(&report)) {
             SweepDecision::Items(items) => {
                 assert_eq!(items.len(), 2);
                 assert!(items.contains(&failed));
@@ -824,7 +803,7 @@ mod tests {
             RollbackScope::Nothing,
         ] {
             assert_eq!(
-                decide_sweep(scope, &RunEnding::Completed(&clean), &[]),
+                decide_sweep(scope, &RunEnding::Completed(&clean)),
                 SweepDecision::Nothing,
                 "scope={scope:?}"
             );
@@ -858,8 +837,7 @@ mod tests {
                     scope,
                     &RunEnding::Failed {
                         completed: &BTreeSet::new()
-                    },
-                    &[]
+                    }
                 ),
                 SweepDecision::WholeRun,
                 "scope={scope:?}"
@@ -870,8 +848,7 @@ mod tests {
                 RollbackScope::Nothing,
                 &RunEnding::Failed {
                     completed: &BTreeSet::new()
-                },
-                &[]
+                }
             ),
             SweepDecision::Nothing,
             "…except the escape hatch, which is the point of the escape hatch"
@@ -899,11 +876,7 @@ mod tests {
             });
         }
 
-        match decide_sweep(
-            RollbackScope::FailedItems,
-            &RunEnding::Completed(&report),
-            &[],
-        ) {
+        match decide_sweep(RollbackScope::FailedItems, &RunEnding::Completed(&report)) {
             SweepDecision::Items(items) => assert_eq!(items.len(), 5),
             other => panic!("expected an item-scoped sweep, got {other:?}"),
         }
@@ -1010,22 +983,21 @@ mod tests {
         );
     }
 
-    /// The escalation since SDK-1694 O5b: a `FailedItems` run that crossed
-    /// the ratio threshold errors, and keeps the file it **completed** while
-    /// sweeping the one that failed — Python's per-item rollback, which keeps
-    /// the items its failed run stamped.
+    /// Since SDK-1694 O5b a `FailedItems` run with a failed file errors, and
+    /// keeps the file it **completed** while sweeping the one that failed —
+    /// Python's per-item rollback, which keeps the items its failed run
+    /// stamped.
     ///
-    /// Both halves of the path are pinned here, because either alone is
-    /// misleading. [`FailureReport::is_fatal`] turns the ratio into a `Failed`
-    /// ending — with a survivor present, so it is the ratio doing it and not
-    /// the no-survivor backstop — and [`decide_sweep`] turns that ending into
-    /// an item sweep of what the run did not complete. The assertions are on
-    /// the end state a caller actually inherits: the survivor's graph node,
-    /// its ownership row and its completion marker stay, so the next run
-    /// skips it; the failed file's go. (Before O5b the escalation swept the
-    /// whole run, the survivor included.)
+    /// Both halves of the path are pinned here. [`FailureReport::is_fatal`]
+    /// turns the failed file into a `Failed` ending — with a survivor present
+    /// and whatever the ratio threshold — and [`decide_sweep`] turns that
+    /// ending into a sweep of the whole run except what it completed. The
+    /// assertions are on the end state a caller actually inherits: the
+    /// survivor's graph node, its ownership row and its completion marker
+    /// stay, so the next run skips it; the failed file's go. (Before O5b the
+    /// run swept the whole run, the survivor included.)
     #[tokio::test]
-    async fn the_ratio_escalation_keeps_the_files_the_run_completed() {
+    async fn a_failed_run_keeps_the_files_it_completed() {
         use cognee_database::ops::graph_storage;
         use cognee_database::{GraphNode, RunScope};
 
@@ -1113,24 +1085,15 @@ mod tests {
         );
         assert!(
             report.is_fatal(&policy),
-            "0.2 > the default 0.05 threshold, so this FailedItems run failed"
+            "a file failed, so this FailedItems run failed"
         );
-
-        // The counterfactual, on the same report: tolerate the ratio and the
-        // survivor is not even in the sweep selection.
         let tolerant = FailurePolicy {
-            chunk_failure_ratio_threshold: 0.5,
+            chunk_failure_ratio_threshold: 1.0,
             ..policy
         };
-        assert!(!report.is_fatal(&tolerant));
-        assert_eq!(
-            decide_sweep(
-                RollbackScope::FailedItems,
-                &RunEnding::Completed(&report),
-                &[survivor, failed]
-            ),
-            SweepDecision::Items(vec![failed]),
-            "below the threshold the run completes and only the failed file goes"
+        assert!(
+            report.is_fatal(&tolerant),
+            "whatever the ratio threshold: Python errors whenever an item failed"
         );
 
         let ctx = RunContext {

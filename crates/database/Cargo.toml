@@ -122,6 +122,11 @@ path = "tests/structural_edge_ownership.rs"
 required-features = ["sqlite"]
 
 [[test]]
+name = "run_sweep_nil_rows"
+path = "tests/run_sweep_nil_rows.rs"
+required-features = ["sqlite"]
+
+[[test]]
 name = "relational_ops_span_instrumentation"
 path = "tests/relational_ops_span_instrumentation.rs"
 required-features = ["sqlite"]

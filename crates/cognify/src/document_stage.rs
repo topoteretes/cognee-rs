@@ -2086,9 +2086,12 @@ mod tests {
         );
     }
 
-    /// An embedding engine that stalls on any text holding `SLOWSAVE`, so a
-    /// save can be caught half-way.
-    struct StallingEmbedding(Arc<cognee_embedding::MockEmbeddingEngine>);
+    /// An embedding engine that never returns on a text holding `SLOWSAVE`,
+    /// and says so: a save can be caught half-way without a clock.
+    struct StallingEmbedding {
+        inner: Arc<cognee_embedding::MockEmbeddingEngine>,
+        stalled: Arc<tokio::sync::Notify>,
+    }
 
     #[async_trait]
     impl EmbeddingEngine for StallingEmbedding {
@@ -2097,35 +2100,64 @@ mod tests {
             texts: &[&str],
         ) -> cognee_embedding::error::EmbeddingResult<Vec<Vec<f32>>> {
             if texts.iter().any(|text| text.contains("SLOWSAVE")) {
-                tokio::time::sleep(Duration::from_secs(30)).await;
+                self.stalled.notify_one();
+                std::future::pending::<()>().await;
             }
-            self.0.embed(texts).await
+            self.inner.embed(texts).await
         }
 
         fn dimension(&self) -> usize {
-            self.0.dimension()
+            self.inner.dimension()
         }
 
         fn batch_size(&self) -> usize {
-            self.0.batch_size()
+            self.inner.batch_size()
         }
 
         fn max_sequence_length(&self) -> usize {
-            self.0.max_sequence_length()
+            self.inner.max_sequence_length()
+        }
+    }
+
+    /// A [`crate::rollback::RunContext`] over the test stores, for run 7 (the
+    /// stage's stamp), under `config`.
+    fn run_context<'a>(
+        test: &Stores,
+        processed: Vec<Uuid>,
+        completed: BTreeSet<Uuid>,
+        config: &'a CognifyConfig,
+    ) -> crate::rollback::RunContext<'a> {
+        let db = Arc::new(test.db.clone());
+        crate::rollback::RunContext {
+            database: db.clone(),
+            graph_db: test.graph.clone(),
+            vector_db: test.vector.clone(),
+            repo: db.pipeline_runs(),
+            dataset_id: DATASET,
+            pipeline_run_id: Some(Uuid::from_u128(7)),
+            pipeline_id: Some(Uuid::new_v4()),
+            pipeline_name: COGNIFY_PIPELINE_STAMP_NAME,
+            processed,
+            completed,
+            config,
         }
     }
 
     /// A document whose save is cut off half-way — the stage dropped, as
     /// `try_join!` drops the writer when another branch errors — is never
-    /// completed, so a failed run sweeps it as unsaved; the document saved
-    /// before it is completed (SDK-1694 O5b).
+    /// completed, so the failed run's rollback sweeps it as unsaved, while the
+    /// document saved before it is completed and kept (SDK-1694 O5b).
     #[tokio::test]
     async fn a_document_dropped_mid_save_is_not_completed() {
         use crate::rollback::CompletionLog;
         use cognee_database::ops::graph_storage::get_nodes_by_dataset;
         let test = Stores::new().await;
+        let stalled = Arc::new(tokio::sync::Notify::new());
         let mut stores = stores_of(&test, Arc::new(TextLlm::default()));
-        stores.embedding_engine = Arc::new(StallingEmbedding(test.engine.clone()));
+        stores.embedding_engine = Arc::new(StallingEmbedding {
+            inner: test.engine.clone(),
+            stalled: Arc::clone(&stalled),
+        });
         let input = input(&[
             (1, vec![("Alice:Person", None)]),
             (2, vec![("Bob:Person SLOWSAVE", None)]),
@@ -2141,12 +2173,10 @@ mod tests {
         };
         let stage_stamp = stamp();
         let stage = run_document_stage(&input, &stores, &config, &stage_stamp);
-        assert!(
-            tokio::time::timeout(Duration::from_millis(500), stage)
-                .await
-                .is_err(),
-            "the second save stalls"
-        );
+        tokio::select! {
+            outcome = stage => panic!("the second save never returns: {outcome:?}"),
+            () = stalled.notified() => {}
+        }
 
         let rows = get_nodes_by_dataset(&test.db, DATASET).await.unwrap();
         assert!(
@@ -2158,6 +2188,137 @@ mod tests {
             BTreeSet::from([Uuid::from_u128(1)]),
             "only the document whose save returned is completed"
         );
+
+        // The run failed: its rollback keeps the completed document and
+        // sweeps the one cut off mid-save.
+        let ctx = run_context(
+            &test,
+            vec![Uuid::from_u128(1), Uuid::from_u128(2)],
+            log.completed(),
+            &config,
+        );
+        crate::rollback::on_run_failed(&ctx, &CognifyError::Execute("dropped".into()), true).await;
+        let owners: BTreeSet<Uuid> = get_nodes_by_dataset(&test.db, DATASET)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.data_id)
+            .collect();
+        assert!(owners.contains(&Uuid::from_u128(1)), "{owners:?}");
+        assert!(!owners.contains(&Uuid::from_u128(2)), "{owners:?}");
+        let (graph_nodes, _) = test.graph.get_graph_data().await.unwrap();
+        let ids: BTreeSet<String> = graph_nodes.into_iter().map(|(id, _)| id).collect();
+        assert!(ids.contains(&Uuid::from_u128(1).to_string()));
+        assert!(!ids.contains(&Uuid::from_u128(2).to_string()));
+    }
+
+    /// Under `RunToEnd` and a scope that fails the stage on a failed save, the
+    /// writer returns the error without finishing its bulk-load scope first:
+    /// the guard is dropped, which closes the scope without its maintenance,
+    /// so the stage ends at once rather than while dispatch runs on (O4b
+    /// review).
+    #[tokio::test]
+    async fn a_failed_save_returns_before_the_bulk_load_finishes() {
+        let test = Stores::new().await;
+        test.vector
+            .set_index_error_for_point(Uuid::from_u128(1), "the vector store is down");
+        let documents: Vec<DocumentSpec<'_>> = (1..=4)
+            .map(|id| (id as u128, vec![("Alice:Person Bob:Person", None)]))
+            .collect();
+        let config = CognifyConfig::default()
+            .with_failure_stop(FailureStop::RunToEnd)
+            .with_rollback_scope(RollbackScope::WholeRun);
+        let error = run(
+            &test,
+            Arc::new(TextLlm::default()),
+            &input(&documents),
+            &config,
+        )
+        .await
+        .expect_err("the save fails the stage");
+        assert!(
+            error.to_string().contains("vector store is down"),
+            "{error}"
+        );
+        // The persistence layer's own index pass finishes its nested scope;
+        // the writer's scope is the one that is abandoned, not finished.
+        let (_, abandoned) = test.vector.bulk_load_closes();
+        assert_eq!(abandoned, 1, "the writer's scope was dropped, not finished");
+    }
+
+    /// The sweep of a failed run's unfinished documents takes the nil row of
+    /// an ontology-first entity (`x_y`, brought in by Alice's lookup) when
+    /// only a swept document reached it, and keeps it when a kept document
+    /// reached it too (SDK-1694 O5b).
+    #[tokio::test]
+    async fn an_ontology_first_entity_goes_with_the_documents_that_reached_it() {
+        use cognee_database::ops::graph_storage::get_nodes_by_dataset;
+        use cognee_delete::RunSweeper;
+        for kept_reaches_it in [false, true] {
+            let test = Stores::new().await;
+            let mut stores = stores_of(&test, Arc::new(TextLlm::default()));
+            stores.ontology = ontology();
+            let kept_text = if kept_reaches_it {
+                "Alice:Human Dave:Pilot"
+            } else {
+                "Dave:Pilot"
+            };
+            let input = stamped(input(&[
+                (0xa, vec![("Alice:Human", None)]),
+                (0xb, vec![(kept_text, None)]),
+            ]));
+            run_document_stage(&input, &stores, &CognifyConfig::default(), &stamp())
+                .await
+                .unwrap();
+            let nodes = get_nodes_by_dataset(&test.db, DATASET).await.unwrap();
+            let x_y: BTreeSet<Uuid> = nodes
+                .iter()
+                .filter(|row| {
+                    row.node_type == "Entity"
+                        && row.data_id.is_nil()
+                        && row.label.as_deref().is_some_and(|label| {
+                            label.to_lowercase().replace(' ', "_").contains("x_y")
+                        })
+                })
+                .map(|row| row.slug)
+                .collect();
+            assert_eq!(x_y.len(), 1, "x_y is ontology-first, with a nil row");
+            let slug = *x_y.iter().next().unwrap();
+
+            RunSweeper::new(
+                Arc::new(test.db.clone()),
+                test.graph.clone(),
+                test.vector.clone(),
+            )
+            .sweep_run_keeping(Uuid::from_u128(7), DATASET, &[doc('b')])
+            .await
+            .unwrap();
+
+            let rows: BTreeSet<Uuid> = get_nodes_by_dataset(&test.db, DATASET)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|row| row.slug == slug)
+                .map(|row| row.data_id)
+                .collect();
+            let in_graph = test
+                .graph
+                .get_node(&slug.to_string())
+                .await
+                .unwrap()
+                .is_some();
+            if kept_reaches_it {
+                assert_eq!(
+                    rows,
+                    owners("b"),
+                    "the kept document's row and the guard stay"
+                );
+                assert!(in_graph);
+            } else {
+                assert!(rows.is_empty(), "every row of x_y went: {rows:?}");
+                assert!(!in_graph, "and so did the node");
+            }
+        }
     }
 
     /// Per-document groups, each built from its own document's expansion

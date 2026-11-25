@@ -48,6 +48,27 @@ pub trait ProvenanceDb: Send + Sync {
         data_ids: &[Uuid],
     ) -> Result<u64, DatabaseError>;
 
+    /// Move the ledger rows run `from` wrote in the dataset — all, or those
+    /// naming `data_ids` — to run `to`; returns the rows moved. See
+    /// [`graph_storage::retag_run_rows`].
+    async fn retag_run_rows(
+        &self,
+        from: Uuid,
+        dataset_id: Uuid,
+        data_ids: Option<&[Uuid]>,
+        to: Uuid,
+    ) -> Result<u64, DatabaseError>;
+
+    /// Move run `from`'s nil-`data_id` rows in the dataset that a non-nil row
+    /// of the same artifact outside `from` stands beside to run `to`; returns
+    /// the rows moved. See [`graph_storage::retag_guarded_nil_rows`].
+    async fn retag_guarded_nil_rows(
+        &self,
+        from: Uuid,
+        dataset_id: Uuid,
+        to: Uuid,
+    ) -> Result<u64, DatabaseError>;
+
     /// The recorded nodes with these ids.
     async fn get_nodes_by_ids(&self, ids: &[String]) -> Result<Vec<GraphNode>, DatabaseError>;
 
@@ -164,6 +185,25 @@ impl ProvenanceDb for DatabaseConnection {
     ) -> Result<u64, DatabaseError> {
         edge_evidence::keep_completed_items_evidence(self, dataset_id, pipeline_run_id, data_ids)
             .await
+    }
+
+    async fn retag_run_rows(
+        &self,
+        from: Uuid,
+        dataset_id: Uuid,
+        data_ids: Option<&[Uuid]>,
+        to: Uuid,
+    ) -> Result<u64, DatabaseError> {
+        graph_storage::retag_run_rows(self, from, dataset_id, data_ids, to).await
+    }
+
+    async fn retag_guarded_nil_rows(
+        &self,
+        from: Uuid,
+        dataset_id: Uuid,
+        to: Uuid,
+    ) -> Result<u64, DatabaseError> {
+        graph_storage::retag_guarded_nil_rows(self, from, dataset_id, to).await
     }
 
     async fn get_nodes_by_ids(&self, ids: &[String]) -> Result<Vec<GraphNode>, DatabaseError> {

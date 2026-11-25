@@ -14931,9 +14931,10 @@ mod tests {
         assert!(result.chunks.iter().any(|chunk| chunk.document_id == c));
     }
 
-    /// The end-of-run gate reads the policy, not the report alone: the same
-    /// failures error the run under `WholeRun` and complete it under
-    /// `FailedItems` below the threshold.
+    /// The end-of-run gate errors the run on a failed item under every scope,
+    /// `FailedItems` included and below the ratio threshold, as Python errors
+    /// whenever a data item errored (SDK-1694 O5b review); what `FailedItems`
+    /// changes is the rollback, which keeps the completed documents.
     #[tokio::test]
     async fn fatality_gate_defers_to_the_policy() {
         use cognee_core::TypedTask;
@@ -14982,7 +14983,7 @@ mod tests {
             ),
             (
                 CognifyConfig::default().with_rollback_scope(RollbackScope::FailedItems),
-                false,
+                true,
             ),
         ] {
             let task = make_add_data_points_task(

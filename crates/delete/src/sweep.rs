@@ -74,6 +74,13 @@ impl SweepScope {
     }
 }
 
+/// The run id [`RunSweeper::sweep_run_keeping`] sets a run's kept rows aside
+/// under while it sweeps the run: deterministic in the run, so a retry finds
+/// rows a failed move-back left there.
+pub fn holding_run_id(pipeline_run_id: Uuid) -> Uuid {
+    Uuid::new_v5(&pipeline_run_id, b"cognee-rollback-kept-items")
+}
+
 /// What a sweep removed. Counts are per store, because a slug kept by an
 /// outside claimant still loses its ownership row: `provenance_nodes_deleted`
 /// is routinely larger than `graph_nodes_deleted`.
@@ -182,6 +189,117 @@ impl RunSweeper {
             outcome.warnings.push(format!("Run sweep failed: {e}"));
         }
         outcome
+    }
+
+    /// Remove everything run `pipeline_run_id` wrote in `dataset_id` **except
+    /// what the data items in `keep` own** (Python's rollback:
+    /// `Node.data_id.notin_(kept)`), and clear the markers of every other item
+    /// it touched (SDK-1694 O5b).
+    ///
+    /// A kept item keeps its rows, its artifacts (and every artifact it shares
+    /// with a swept item) and its completion marker. A nil-`data_id` row of
+    /// the run stays while a kept item, or a row outside the run, still
+    /// produces the artifact; one nothing else stands beside — a DLT schema
+    /// node, a type only swept items declared — goes.
+    ///
+    /// Done without binding the swept or the kept items into the sweep's
+    /// queries, so neither set is bounded by the backends' bound-variable
+    /// caps: the kept rows (and the nil rows they guard) are moved to a
+    /// holding run id, the run is swept whole — the moved rows are claimants
+    /// outside it — and they are moved back. A failure of the move-back is
+    /// reported; the kept rows then stay under the holding id
+    /// ([`holding_run_id`]), still owned by their items, which no sweep of
+    /// the run selects. With `keep` empty this is
+    /// [`SweepScope::whole_run`].
+    pub async fn sweep_run_keeping(
+        &self,
+        pipeline_run_id: Uuid,
+        dataset_id: Uuid,
+        keep: &[Uuid],
+    ) -> Result<SweepOutcome, DeleteError> {
+        let scope = SweepScope::whole_run(pipeline_run_id, dataset_id);
+        let mut outcome = SweepOutcome::default();
+        if keep.is_empty() {
+            self.run(&scope, &mut outcome).await?;
+            return Ok(outcome);
+        }
+        cognee_models::dataset_scope::with_dataset(dataset_id, async {
+            let holding = holding_run_id(pipeline_run_id);
+            let db = &*self.database;
+            let moved = async {
+                cognee_database::ProvenanceDb::retag_run_rows(
+                    db,
+                    pipeline_run_id,
+                    dataset_id,
+                    Some(keep),
+                    holding,
+                )
+                .await?;
+                cognee_database::ProvenanceDb::retag_guarded_nil_rows(
+                    db,
+                    pipeline_run_id,
+                    dataset_id,
+                    holding,
+                )
+                .await
+            }
+            .await
+            .map_err(|e| {
+                DeleteError::Runtime(format!(
+                    "Failed to set the kept items' rows of run {pipeline_run_id} aside: {e}"
+                ))
+            });
+            let swept = match moved {
+                Ok(_) => self.run_in_scope(&scope, &mut outcome).await,
+                Err(e) => Err(e),
+            };
+            // Always move back whatever was moved, even after a failed sweep.
+            let restored = cognee_database::ProvenanceDb::retag_run_rows(
+                db,
+                holding,
+                dataset_id,
+                None,
+                pipeline_run_id,
+            )
+            .await
+            .map_err(|e| {
+                DeleteError::Runtime(format!(
+                    "Failed to move the kept items' rows back to run {pipeline_run_id} (they \
+                     stay under {holding}): {e}"
+                ))
+            });
+            swept?;
+            restored?;
+            Ok(outcome)
+        })
+        .await
+    }
+
+    /// [`RunSweeper::sweep_run_keeping`], reporting its own failure instead of
+    /// returning it (see [`RunSweeper::sweep_logging_failure`]).
+    pub async fn sweep_run_keeping_logging_failure(
+        &self,
+        pipeline_run_id: Uuid,
+        dataset_id: Uuid,
+        keep: &[Uuid],
+    ) -> SweepOutcome {
+        match self
+            .sweep_run_keeping(pipeline_run_id, dataset_id, keep)
+            .await
+        {
+            Ok(outcome) => outcome,
+            Err(e) => {
+                error!(
+                    pipeline_run_id = %pipeline_run_id,
+                    dataset_id = %dataset_id,
+                    "Run sweep failed; the store may still hold this run's artifacts: {e}"
+                );
+                SweepOutcome {
+                    warnings: vec![format!("Run sweep failed: {e}")],
+                    ..SweepOutcome::default()
+                }
+            }
+        }
     }
 
     /// The sweep, in the run's dataset scope: under per-dataset storage the

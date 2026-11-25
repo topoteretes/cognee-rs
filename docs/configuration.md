@@ -983,8 +983,10 @@ nothing to turn on.
   `cognify.stale_run_recovery_min_age_seconds`, whose dataset no run of this
   process holds the lock of, whose marker can be claimed without blocking, and
   whose dataset still exists, is **rolled back** (a `cognify` run's graph and
-  vector artifacts, scoped to that run in its dataset; other pipelines have
-  nothing to roll back, as in Python's `ROLLBACK_HANDLERS`) and then **closed**
+  vector artifacts, scoped to that run in its dataset, except what the items
+  it touched that now carry a completion marker own — Python's recovery keeps
+  the stamped items too, `_kept_data_ids` without run results; other pipelines
+  have nothing to roll back, as in Python's `ROLLBACK_HANDLERS`) and then **closed**
   with an `ERRORED` row whose `run_info` is
   `{"error": "AbandonedPipelineRunError: …"}`. A row without a marker, or whose
   marker is locked by a live process, cannot be proven abandoned and is left
@@ -1135,7 +1137,7 @@ compares against Python's.
 | `with_failure_stop` | `failure_stop` | `RAISE_INCREMENTAL_LOADING_ERRORS` / `COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS` | `cognify.raise_incremental_loading_errors` (`raise_incremental_loading_errors`) | `FailFast` (unset) |
 | `with_rollback_scope` | `rollback_scope` | `COGNEE_COGNIFY_ROLLBACK_SCOPE` (`whole_run` / `failed_items` only) | `cognify.rollback_scope` | unset: `FailedItems` with `incremental_loading`, `WholeRun` without (`effective_rollback_scope`) |
 | `with_summarization_failure_tolerance` | `tolerate_summarization_failures` | `COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES` | `cognify.tolerate_summarization_failures` | `false` |
-| `with_chunk_failure_ratio_threshold` | `chunk_failure_ratio_threshold` | `COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO` | `cognify.max_chunk_failure_ratio` | `0.05` |
+| `with_chunk_failure_ratio_threshold` | `chunk_failure_ratio_threshold` | `COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO` | `cognify.max_chunk_failure_ratio` | `0.05` — **decides nothing** since SDK-1694 O5b; still read and validated |
 | `with_failure_report_cap` | `failure_report_cap` | `COGNEE_COGNIFY_FAILURE_REPORT_CAP` | `cognify.failure_report_cap` | `100` |
 
 **Axis 1 shares Python's variable name.** `RAISE_INCREMENTAL_LOADING_ERRORS` is
@@ -1207,9 +1209,7 @@ complete and keeps the rest. `WholeRun` is Python's end state with
 whole run); `FailedItems` is Python's end state with it on (its rollback keeps
 the items it stamped). **An unset `rollback_scope` follows
 `incremental_loading`** accordingly (SDK-1694 D4): `FailedItems` by default,
-`WholeRun` with `incremental_loading` off. One difference stays: below the
-failure ratio a `FailedItems` run completes and returns `Ok` with the failed
-files in its report, where Python errors the run whenever an item failed.
+`WholeRun` with `incremental_loading` off.
 
 Under `FailedItems` each file is **completed as soon as it is saved**
 (SDK-1694 O5b): the document stage saves a file once all its results are in
@@ -1218,26 +1218,30 @@ completed once its graph is loaded; a DLT row only once the post-run step has
 written its foreign-key edges. A completed file is kept whatever happens to
 the run afterwards:
 
-- **Below the failure ratio**, with at least one survivor, the run completes:
-  the failed and unreached files are removed and the call returns `Ok`
-  carrying them.
-- **Above it**, or with no survivor, or after a failure outside one file's own
-  work (a failed post-run step, a cancellation), the run errors and returns
-  `Err` — and removes every file it processed **except** the ones it
-  completed, as Python's rollback does. The threshold therefore decides whether
-  the run reports success, not whether completed files survive. Before O5b the
-  run escalated to a whole-run sweep that deleted the completed files and their
-  markers too; select `WholeRun` for that end state.
+- **No item failed**: the run completes and returns `Ok`.
+- **An item failed**, or a failure hit outside one file's own work (a failed
+  post-run step, a cancellation): the run errors and returns `Err` carrying the
+  report — as Python's `run_tasks` raises whenever a data item errored — and
+  removes everything it wrote **except** what the files it completed own, as
+  Python's rollback does (`Node.data_id.notin_(kept)`). Run-level rows no kept
+  file stands beside, such as a DLT schema node, go too. Before O5b the run
+  escalated to a whole-run sweep that deleted the completed files and their
+  markers too, and a run below the chunk failure ratio returned `Ok`; the
+  ratio threshold no longer decides anything. Select `WholeRun` for the
+  whole-run end state.
 
 A file is completed only once its save returned: a file whose save failed, or
 was cut off because the run was stopped mid-save, is not, and is removed with
 the rest. Without `incremental_loading` nothing is marked, so the kept files
 are processed again by the next run.
 
-An item-scoped removal also takes the rows a type, a structural edge or an
+The removal also takes the rows a type, a structural edge or an
 ontology-first entity keeps with a nil `data_id` (the guard the per-document
-delete reads), when every document row beside them is removed too: a type only
-a removed file declared goes with it.
+delete reads) when no kept or outside document row stands beside them: a type
+only a removed file declared goes with it. It binds no list of files, so it
+works whatever the number of kept or removed files: the kept files' rows are
+set aside under a holding run id, the run is removed whole, and they are moved
+back.
 
 The edge evidence of the files an errored run kept is detached from the run
 (Python `keep_completed_items_evidence`), so `include_references` still cites
@@ -1270,16 +1274,16 @@ and the complete files waiting behind the stop are discarded.
 | Combination | End state |
 |---|---|
 | `FailFast` + `WholeRun` *(default without `incremental_loading`)* | Stops dispatching at the first failure, removes everything the run created, marks the run `ERRORED`, returns `Err`. Everything earlier runs completed is untouched. Python's end state without `incremental_loading` |
-| `FailFast` + `FailedItems` *(default)* | Stops dispatching at the first failure; the files that completed — before or after it, while their calls were in flight — are kept, indexed and marked as they complete; the failed and never-reached ones are removed and left unmarked. *Below the ratio* the run completes and returns `Ok`; *above it, or with no survivor,* it is `ERRORED` and returns `Err`, the completed files kept. Python's default end state |
+| `FailFast` + `FailedItems` *(default)* | Stops dispatching at the first failure; the files that completed — before or after it, while their calls were in flight — are kept, indexed and marked as they complete; the failed and never-reached ones are removed and left unmarked. The run is `ERRORED` and returns `Err`, the completed files kept. Python's default end state |
 | `RunToEnd` + `WholeRun` | Pays for the whole run to produce the complete failure list, then removes everything the run created |
-| `RunToEnd` + `FailedItems` | Every good file is cognified and marked as it completes; only the failed files are removed, and they come back to the caller in the report. *Above the ratio* the call returns `Err`, the good files kept |
+| `RunToEnd` + `FailedItems` | Every good file is cognified and marked as it completes; only the failed files are removed, and they come back to the caller in the report of the `Err` the call returns, the good files kept |
 | _either_ + `Nothing` *(code only)* | Nothing is removed. Knowingly leaves partially-cognified files in place, permanently — see above |
 
 **What the SDK call returns.** Any combination that sweeps and ends with the
 run `ERRORED` returns `Err`, matching Python, which re-raises after rolling
-back. A `FailedItems` combination that completes below the ratio returns `Ok`
-carrying the failed-file list in `CognifyResult.failures` — the run genuinely
-completed. `Nothing` propagates whatever the pipeline produced.
+back — every combination, `FailedItems` included, whenever an item failed.
+`CognifyResult.failures` of an `Ok` run lists only tolerated summarization
+failures. `Nothing` propagates whatever the pipeline produced.
 
 **What a sweep keeps.** An artifact is removed only when nothing outside the
 swept scope still claims it — another run, another dataset, a row predating
@@ -1298,22 +1302,22 @@ choice — with one exception.
 | Stage | Failure unit | Behaviour |
 |---|---|---|
 | Chunking | data item | Collected; the item fails and contributes neither chunks nor a `Document` |
-| Graph extraction | chunk | Collected; the item fails. Ratio-checked under `FailedItems` |
-| Summarization | chunk | **Configurable.** Default: the item fails (Python parity). With tolerance on: recorded separately, never fails the item or the run, never counts toward the ratio |
-| Persistence of one file — its graph, vector, ledger and evidence writes, and embeddings | data item under `FailedItems`, else run | Under `FailedItems` the file fails (`FailureStage::Persistence`), is removed, and the run goes on (under `FailFast` it stops dispatching); not counted in the ratio. Under the other scopes the run fails |
+| Graph extraction | chunk | Collected; the item fails |
+| Summarization | chunk | **Configurable.** Default: the item fails (Python parity). With tolerance on: recorded separately, never fails the item or the run |
+| Persistence of one file — its graph, vector, ledger and evidence writes, and embeddings | data item under `FailedItems`, else run | Under `FailedItems` the file fails (`FailureStage::Persistence`), is removed, and the run goes on (under `FailFast` it stops dispatching) and errors at the end. Under the other scopes the run fails at once |
 | Persistence after the pipeline — the DLT foreign-key step | run | Always fatal; under `FailedItems` the files completed before it are kept |
 
 `tolerate_summarization_failures` governs **fatality only**. Either way the
 summarization stage collects rather than propagates: the whole stream is drained
 so already-completed summaries are kept and the reported list is complete.
 
-**The failure ratio** is counted in chunks, evaluated per run, excludes
-summarization failures, and applies only under `FailedItems`. It is backstopped
-by an explicit rule: if no item survived, the run failed regardless of the
-ratio — a file that failed at the chunk stage produced no chunks, so it
-contributes to neither side of the ratio. Crossing the ratio (or tripping the
-backstop) is what turns a `FailedItems` run fatal: it then errors, and keeps
-only the files it completed, as described above.
+**The failure ratio** (`FailureReport::chunk_failure_ratio`, failed chunks
+over the run's chunks) is still reported but no longer decides anything: since
+the SDK-1694 O5b review every scope fails the run on any failed item, as
+Python does, so a re-run that stops at the same bad file never reports success.
+`COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO` is still read and validated so
+existing configuration loads. Items left unreached only because no document
+type matches their extension fail nothing.
 
 **The report cap** bounds the individual entries the report lists (and therefore
 the error message); the total count, the failed-file set and every counter are
@@ -1345,8 +1349,8 @@ Three consequences worth stating plainly:
 - **A failed run keeps only the marks of the items it completed** (none under
   `WholeRun` or `Nothing`), and a sweep clears the markers of every item it
   rolled back, so the next run redoes exactly the work that was lost.
-- **A run that completed with failures outstanding leaves those files
-  unmarked**, so the next run has exactly the failed files to redo.
+- **A run with failed files leaves them unmarked** (and errors), so the next
+  run has exactly the failed files to redo.
 
 **The run trail.** A fully skipped Rust run still writes a `STARTED` /
 `COMPLETED` pair (`{}` on both, a fresh `pipeline_run_id`), as Python does:

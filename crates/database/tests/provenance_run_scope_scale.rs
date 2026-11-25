@@ -205,6 +205,81 @@ mod scale {
         assert!(survivors.is_empty(), "wrong run in the other dataset");
     }
 
+    /// A failed `failed_items` run keeps the items it completed and sweeps the
+    /// rest (SDK-1694 O5b). With more kept items than SQLite's bind cap, the
+    /// sweep must not bind them into one statement: the kept rows are moved to
+    /// a holding run in batches, the run is swept whole, and they are moved
+    /// back. Each data item owns one row here, so the item counts are the row
+    /// counts.
+    #[tokio::test]
+    async fn a_sweep_keeping_more_items_than_the_bind_cap_works() {
+        use cognee_database::ops::graph_storage::{retag_guarded_nil_rows, retag_run_rows};
+
+        let items = row_count();
+        assert!(items > SQLITE_BIND_CAP);
+        let swept_items = 1_000;
+        let db = connect("sqlite::memory:").await.expect("connect");
+        initialize(&db).await.expect("migrate");
+        let user = Uuid::new_v4();
+        let dataset = Uuid::new_v4();
+        create_dataset(&db, Dataset::new("keep".into(), user, None, dataset))
+            .await
+            .expect("dataset");
+        let run = Uuid::new_v4();
+        let data: Vec<Uuid> = (0..items).map(|_| Uuid::new_v4()).collect();
+        let rows: Vec<GraphNode> = data
+            .iter()
+            .map(|data_id| GraphNode {
+                id: Uuid::new_v4(),
+                slug: Uuid::new_v4(),
+                user_id: user,
+                data_id: *data_id,
+                dataset_id: dataset,
+                pipeline_run_id: Some(run),
+                label: Some("n".into()),
+                node_type: "Entity".into(),
+                indexed_fields: json!({ "index_fields": ["name"] }),
+                attributes: None,
+                created_at: Utc::now(),
+            })
+            .collect();
+        for chunk in rows.chunks(2_000) {
+            upsert_nodes(&db, chunk).await.expect("seed");
+        }
+        let (swept, kept) = data.split_at(swept_items);
+        assert!(kept.len() > SQLITE_BIND_CAP);
+
+        let holding = Uuid::new_v4();
+        let t = Instant::now();
+        let moved = retag_run_rows(&db, run, dataset, Some(kept), holding)
+            .await
+            .expect("move the kept rows aside above the bind cap");
+        assert_eq!(moved as usize, kept.len());
+        retag_guarded_nil_rows(&db, run, dataset, holding)
+            .await
+            .expect("guarded nil rows");
+        let scope = RunScope::whole_run(run, dataset);
+        let touched: BTreeSet<Uuid> = get_data_ids_for_run(&db, &scope)
+            .await
+            .expect("data ids")
+            .into_iter()
+            .collect();
+        assert_eq!(touched, swept.iter().copied().collect::<BTreeSet<_>>());
+        let deleted = delete_nodes_for_run(&db, &scope).await.expect("delete");
+        assert_eq!(deleted as usize, swept.len());
+        let back = retag_run_rows(&db, holding, dataset, None, run)
+            .await
+            .expect("move back");
+        assert_eq!(back as usize, kept.len());
+        println!("keeping sweep over {items} items in {:?}", t.elapsed());
+        let left = get_nodes_for_run(&db, &scope).await.expect("left");
+        assert_eq!(
+            left.len(),
+            kept.len(),
+            "every kept row is back under the run"
+        );
+    }
+
     // ---------------------------------------------------------------------------
     // KNOWN DEFECT, deliberately not asserted here — see the commit message.
     // ---------------------------------------------------------------------------

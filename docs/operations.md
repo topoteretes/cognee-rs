@@ -498,16 +498,13 @@ states are:
   returns `Err`. The store converges to its pre-run state — what earlier runs
   completed is untouched, because the sweep selects only rows naming *this*
   run. Python's end state without incremental loading.
-- **`FailedItems` below the failure ratio.** The run *completes*. Only the
-  failed files' contributions are removed; the files that finished are kept,
-  indexed and marked complete; and the call returns `Ok` with the failed-file
-  list in the report, so the next run knows exactly what to redo.
-- **`FailedItems` over the ratio** (or with no survivor, or after a failure
-  outside one file's work) errors the run — a large enough share of failed
-  chunks means something systemic, not one bad file — but still keeps the files
-  it completed, as Python's per-item rollback does. Each file is saved and
-  marked complete as soon as it is done (SDK-1694 O5b), so only the files it
-  did not complete are removed.
+- **`FailedItems` (the default with `incremental_loading`).** A run in which
+  any file failed errors and returns `Err` with the failed-file list in its
+  report, as Python's does — but keeps the files it completed, indexed and
+  marked, as Python's per-item rollback does. Each file is saved and marked
+  complete as soon as it is done (SDK-1694 O5b), so only what the run did not
+  complete is removed, and the next run redoes exactly the failed files. (The
+  chunk failure ratio no longer decides anything.)
 - **`Nothing`** removes nothing. The escape hatch: the files saved before a
   stop stay, unmarked, and nothing more is saved after it.
 

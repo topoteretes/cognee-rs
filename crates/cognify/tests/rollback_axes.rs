@@ -90,10 +90,11 @@ async fn a_failed_run_that_never_persisted_is_still_a_clean_no_op() {
     assert_eq!(harness.latest_status().await, PipelineRunStatus::Errored);
 }
 
-/// The headline of the tolerant combination: the run completes, the failed
-/// file's contributions go, the survivors' stay and are marked — and the
-/// entities *both* produced survive, because a surviving file still claims
-/// them.
+/// The headline of the tolerant combination: the failed file's contributions
+/// go, the survivors' stay and are marked — and the entities *both* produced
+/// survive, because a surviving file still claims them. The run errors, as
+/// Python's does whenever an item failed, even with the ratio threshold
+/// raised: since the SDK-1694 O5b review the threshold decides nothing.
 #[tokio::test]
 async fn a_tolerant_run_sweeps_only_the_failed_file_and_marks_the_rest() {
     let mut harness = Harness::new().await;
@@ -105,14 +106,12 @@ async fn a_tolerant_run_sweeps_only_the_failed_file_and_marks_the_rest() {
         .with_failure_stop(cognee_cognify::FailureStop::RunToEnd)
         .with_rollback_scope(RollbackScope::FailedItems)
         .with_chunk_failure_ratio_threshold(0.5);
-    let result = harness
-        .run(&config)
-        .await
-        .expect("a tolerated failure below the ratio completes the run, and returns Ok");
+    let report =
+        rollback_harness::failed_report(harness.run(&config).await, "a failed file errors the run");
 
-    // The SDK return contract: Ok, *carrying* the failed-file list.
-    assert_eq!(result.failures.failed_items().len(), 1);
-    assert!(result.failures.failed_items().contains(&bad));
+    // The SDK return contract: Err(RunFailed), *carrying* the failed-file list.
+    assert_eq!(report.failed_items().len(), 1);
+    assert!(report.failed_items().contains(&bad));
 
     let nodes = harness.graph_node_ids().await;
     assert!(
@@ -153,12 +152,11 @@ async fn a_tolerant_run_sweeps_only_the_failed_file_and_marks_the_rest() {
         !harness.is_marked(bad).await,
         "the failed file stays unmarked, so the next run redoes exactly it"
     );
-    assert_eq!(harness.latest_status().await, PipelineRunStatus::Completed);
-    // Python's `log_pipeline_run_complete` writes `{}` whatever the run
-    // tolerated; the failures are in the returned report, not in the row.
-    let infos = harness.completed_run_infos().await;
-    assert_eq!(infos.len(), 1, "exactly one COMPLETED row: {infos:?}");
-    assert_eq!(infos[0], Some(serde_json::json!({})));
+    assert_eq!(harness.latest_status().await, PipelineRunStatus::Errored);
+    assert!(
+        harness.completed_run_infos().await.is_empty(),
+        "no COMPLETED row: the run failed"
+    );
 }
 
 /// A `FailedItems` run at the **default** 5 % threshold escalates: one bad file
@@ -352,10 +350,11 @@ async fn a_run_that_shares_an_entity_with_an_earlier_run_keeps_it() {
     );
 }
 
-/// The case where an item-scoped sweep has real work to do: an untolerated
-/// summarization failure is judged *after* `add_data_points` has already
-/// persisted everything the item produced, vectors included. Both stores must
-/// give the failed item's contributions back.
+/// The case where the sweep has real work to do for the failed item: under
+/// `RunToEnd` an untolerated summarization failure is judged *after* its
+/// document was saved, vectors included. The run errors and sweeps everything
+/// but the completed documents, so both stores give the failed item's
+/// contributions back. (The test keeps its pre-O5b name.)
 #[tokio::test]
 async fn an_untolerated_summarization_failure_is_swept_item_scoped() {
     let mut harness = Harness::new().await;
@@ -371,17 +370,19 @@ async fn an_untolerated_summarization_failure_is_swept_item_scoped() {
         .with_failure_stop(cognee_cognify::FailureStop::RunToEnd)
         .with_rollback_scope(RollbackScope::FailedItems)
         .with_chunk_failure_ratio_threshold(0.5);
-    let result = harness
-        .run_over(
-            &config,
-            &[first, bad, last],
-            Arc::new(rollback_harness::SummarizationFailingLlm),
-        )
-        .await
-        .expect("one tolerated-by-ratio summarization failure still completes the run");
+    let report = rollback_harness::failed_report(
+        harness
+            .run_over(
+                &config,
+                &[first, bad, last],
+                Arc::new(rollback_harness::SummarizationFailingLlm),
+            )
+            .await,
+        "an untolerated summarization failure errors the run",
+    );
 
-    assert_eq!(result.failures.summarization_failures(), 1);
-    assert!(result.failures.failed_items().contains(&bad));
+    assert_eq!(report.summarization_failures(), 1);
+    assert!(report.failed_items().contains(&bad));
 
     let nodes = harness.graph_node_ids().await;
     assert!(

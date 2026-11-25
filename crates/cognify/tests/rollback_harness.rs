@@ -72,6 +72,19 @@ pub fn extraction_config() -> CognifyConfig {
         .with_summarization(false)
 }
 
+/// The report of a run that failed with `RunFailed`. A `FailedItems` run errors
+/// whenever an item failed, as Python's `run_tasks` does, and still keeps the
+/// documents it completed (SDK-1694 O5b review).
+pub fn failed_report(
+    outcome: Result<CognifyResult, CognifyError>,
+    what: &str,
+) -> cognee_cognify::FailureReport {
+    match outcome {
+        Err(CognifyError::RunFailed { report }) => *report,
+        other => panic!("{what}: expected RunFailed, got {other:?}"),
+    }
+}
+
 /// An LLM that answers graph extraction from the canned response, fails on
 /// [`FAIL_MARKER`], and counts how many extraction calls it saw.
 pub struct CountingLlm {

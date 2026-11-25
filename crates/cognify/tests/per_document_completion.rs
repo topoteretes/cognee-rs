@@ -79,7 +79,7 @@ async fn assert_kept_and_swept(harness: &Harness, kept: &[Uuid], swept: &[Uuid])
 /// Ticket test 7, the LLM failure: a chunk of document 2 of 3 fails. Under
 /// `FailFast` at the shipped in-flight cap every call is in flight at once,
 /// so documents 1 and 3 complete, are saved and marked; one failed chunk in
-/// three is over the 5 % threshold, so the run errors — and keeps them. The
+/// three fails the run, as in Python — and the run keeps them. The
 /// second run sends only document 2 to the LLM.
 #[tokio::test]
 async fn test_7_an_llm_failure_keeps_the_other_documents_and_the_retry_redoes_only_it() {
@@ -112,8 +112,9 @@ async fn test_7_an_llm_failure_keeps_the_other_documents_and_the_retry_redoes_on
 
 /// Ticket test 7, the indexing failure: the vector store fails while
 /// indexing document 3. Only document 3 fails, at the persistence stage;
-/// documents 1 and 2 stay, marked, and the run completes with the failure
-/// reported. Before O5b the save failure failed the whole run.
+/// documents 1 and 2 stay, marked. The run errors, as Python's does when an
+/// item errored, carrying the failure. Before O5b the save failure swept the
+/// whole run.
 #[tokio::test]
 async fn test_7_an_indexing_failure_fails_only_its_document() {
     let mut harness = Harness::new().await;
@@ -126,21 +127,18 @@ async fn test_7_an_indexing_failure_fails_only_its_document() {
         .vector_db
         .set_index_error_for_point(third, "the vector store is down for document 3");
 
-    let result = harness
-        .run(&failed_items(default_batch_extraction_config()))
-        .await
-        .expect("a failed save fails its document only; no chunk failed");
-
-    assert_eq!(
-        result.failures.failed_items(),
-        &BTreeSet::from([third]),
-        "{}",
-        result.failures
+    let report = rollback_harness::failed_report(
+        harness
+            .run(&failed_items(default_batch_extraction_config()))
+            .await,
+        "a failed save fails its document, and the run",
     );
-    let entry = &result.failures.entries()[0];
+
+    assert_eq!(report.failed_items(), &BTreeSet::from([third]), "{report}");
+    let entry = &report.entries()[0];
     assert_eq!(entry.stage, FailureStage::Persistence);
     assert!(entry.error.contains("document 3"), "{}", entry.error);
-    assert_eq!(harness.latest_status().await, PipelineRunStatus::Completed);
+    assert_eq!(harness.latest_status().await, PipelineRunStatus::Errored);
     assert_kept_and_swept(&harness, &[first, second], &[third]).await;
 }
 
@@ -177,7 +175,7 @@ async fn test_13_a_failed_summary_keeps_the_documents_saved_before_it() {
 
 /// Ticket test 13, one failed chunk in a ten-chunk run: one call at a time,
 /// so the five documents before it are saved and the four after it are
-/// never reached. 10 % is over the threshold; the run errors and keeps the
+/// never reached. The failed chunk errors the run, which keeps the
 /// five.
 #[tokio::test]
 async fn test_13_one_failed_chunk_in_ten_keeps_the_documents_saved_before_it() {
@@ -284,6 +282,25 @@ async fn a_dlt_document_is_marked_only_after_its_foreign_key_edges() {
                 "and it is swept with what the run did not complete"
             );
             assert_kept_and_swept(&harness, &[text], &[row]).await;
+            // The schema node is a run-level row no kept document stands
+            // beside: it goes with the run, ledger row and graph node, as
+            // Python's rollback deletes every row of the run but the kept
+            // items' (review finding 3).
+            assert!(
+                harness
+                    .ledger_nodes()
+                    .await
+                    .iter()
+                    .all(|node| node.slug != table_node),
+                "the schema node's ledger row is gone"
+            );
+            assert!(
+                !harness
+                    .graph_node_id_set()
+                    .await
+                    .contains(&table_node.to_string()),
+                "and so is its graph node"
+            );
         } else {
             result.expect("the run completes");
             assert!(row_of, "the row's `is_row_of` edge exists");
@@ -447,12 +464,11 @@ async fn assert_no_orphaned_rows(harness: &Harness, swept: Uuid) {
 /// No ledger row is orphaned after a partial failure. The middle document is
 /// saved in full — its summary failure is judged once its results are in,
 /// and under `RunToEnd` an incomplete document is still saved — and then
-/// swept, both when the run completes (below the threshold) and when it
-/// errors (above it). It alone declares the `Robot` and `Alien` types, so
+/// swept by the failed run's rollback, which keeps the other two. It alone declares the `Robot` and `Alien` types, so
 /// their nil rows must go with it.
 #[tokio::test]
 async fn no_ledger_row_is_orphaned_after_a_partial_failure() {
-    for threshold in [0.5, 0.05] {
+    {
         let mut harness = Harness::new().await;
         let first = harness.add_file("Alice:Person Acme:Company").await;
         let bad = harness.add_file("Bob:Robot Zed:Alien FAILSUM").await;
@@ -460,8 +476,7 @@ async fn no_ledger_row_is_orphaned_after_a_partial_failure() {
         let config = failed_items(
             CognifyConfig::default()
                 .with_chunk_size(1500)
-                .with_failure_stop(FailureStop::RunToEnd)
-                .with_chunk_failure_ratio_threshold(threshold),
+                .with_failure_stop(FailureStop::RunToEnd),
         );
 
         let result = harness
@@ -473,12 +488,15 @@ async fn no_ledger_row_is_orphaned_after_a_partial_failure() {
                 }),
             )
             .await;
-        assert_eq!(result.is_ok(), threshold > 0.4, "{result:?}");
+        assert!(
+            matches!(result, Err(CognifyError::RunFailed { .. })),
+            "{result:?}"
+        );
         assert_kept_and_swept(&harness, &[first, last], &[bad]).await;
         let robot = cognee_models::EntityType::id_for("robot").to_string();
         assert!(
             !harness.graph_node_id_set().await.contains(&robot),
-            "threshold {threshold}: the type only the swept document declared is gone"
+            "the type only the swept document declared is gone"
         );
         assert_no_orphaned_rows(&harness, bad).await;
     }
@@ -522,4 +540,32 @@ async fn under_nothing_a_failed_save_keeps_what_was_saved_and_marks_nothing() {
             "a failed run marks nothing under Nothing"
         );
     }
+}
+
+// ── Review fixes ────────────────────────────────────────────────────────────
+
+/// A save fails mid-run under `FailedItems` + `FailFast` with documents
+/// behind it: only that document fails (`Persistence`), the stop it raises
+/// leaves the documents behind it unreached, the document saved before it is
+/// kept and marked, and the run errors.
+#[tokio::test]
+async fn a_failed_save_under_fail_fast_stops_the_documents_behind_it() {
+    let mut harness = Harness::new().await;
+    let first = harness.add_file("Alice works at Acme.").await;
+    let second = harness.add_file("Bob works at Acme.").await;
+    let third = harness.add_file("Carol works at Acme.").await;
+    let fourth = harness.add_file("Dan works at Acme.").await;
+    harness
+        .vector_db
+        .set_index_error_for_point(second, "the vector store is down for document 2");
+    // One call and one unsaved document at a time: the third document is
+    // admitted only once the second is released, after its stop.
+    let config = failed_items(extraction_config().with_max_unsaved_documents(1));
+
+    let report =
+        rollback_harness::failed_report(harness.run(&config).await, "a failed save errors the run");
+    assert_eq!(report.failed_items(), &BTreeSet::from([second]));
+    assert_eq!(report.entries()[0].stage, FailureStage::Persistence);
+    assert_eq!(report.unreached_items(), &BTreeSet::from([third, fourth]));
+    assert_kept_and_swept(&harness, &[first], &[second, third, fourth]).await;
 }

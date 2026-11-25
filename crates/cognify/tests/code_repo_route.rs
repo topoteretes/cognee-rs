@@ -236,6 +236,19 @@ impl Stack {
     }
 }
 
+/// The report of a run that failed with `RunFailed`: a `FailedItems` run
+/// errors whenever an item failed, as Python's does, and still keeps what it
+/// completed (SDK-1694 O5b review).
+fn failed_report(
+    outcome: Result<CognifyResult, CognifyError>,
+    label: &str,
+) -> cognee_cognify::FailureReport {
+    match outcome {
+        Err(CognifyError::RunFailed { report }) => *report,
+        other => panic!("{label}: expected RunFailed, got {other:?}"),
+    }
+}
+
 fn split(items: &[Data]) -> (Data, Vec<Data>) {
     let (repos, documents): (Vec<_>, Vec<_>) = items
         .iter()
@@ -671,20 +684,22 @@ async fn an_unreadable_code_file_is_a_per_item_failure() {
     bad.raw_data_location = format!("{}.missing", bad.raw_data_location);
     let bad_id = bad.id;
 
-    let result = stack
-        .cognify(
-            items.clone(),
-            &policy(
-                config(false),
-                FailureStop::RunToEnd,
-                RollbackScope::FailedItems,
-            ),
-        )
-        .await
-        .expect("the good file survives");
-    let failed: Vec<Uuid> = result.failures.failed_items().iter().copied().collect();
+    let report = failed_report(
+        stack
+            .cognify(
+                items.clone(),
+                &policy(
+                    config(false),
+                    FailureStop::RunToEnd,
+                    RollbackScope::FailedItems,
+                ),
+            )
+            .await,
+        "the run errors and the good file survives",
+    );
+    let failed: Vec<Uuid> = report.failed_items().iter().copied().collect();
     assert_eq!(failed, vec![bad_id]);
-    assert_eq!(result.failures.total_items(), 2);
+    assert_eq!(report.total_items(), 2);
     let good_id = items.iter().find(|item| item.id != bad_id).unwrap().id;
     assert_eq!(stack.completed(&items).await, HashSet::from([good_id]));
     assert_eq!(stack.nodes_of_type("CodeModule").await.len(), 1);
@@ -810,7 +825,7 @@ impl Stack {
 
 /// The repo loads and the README fails. Under `WholeRun` the run errors and
 /// the code graph is swept with it; under `FailedItems` the loaded repo item
-/// is a survivor — the run completes, the code graph stays and the repo item
+/// is a survivor — the run errors, as Python's does, but the code graph stays and the repo item
 /// keeps its completion marker, as Python's per-item rollback keeps a
 /// completed item (`modules/cognify/rollback.py`).
 #[tokio::test]
@@ -848,11 +863,10 @@ async fn a_failing_document_beside_a_loaded_repo_follows_the_policy() {
                     );
                 }
                 _ => {
-                    let result = outcome.expect(&label);
-                    let failed: Vec<Uuid> =
-                        result.failures.failed_items().iter().copied().collect();
+                    let report = failed_report(outcome, &label);
+                    let failed: Vec<Uuid> = report.failed_items().iter().copied().collect();
                     assert_eq!(failed, vec![documents[0].id], "{label}");
-                    assert_eq!(result.failures.total_items(), 2, "{label}");
+                    assert_eq!(report.total_items(), 2, "{label}");
                     assert!(
                         !stack.code_node_ids().await.is_empty(),
                         "{label}: the loaded code graph is kept"
@@ -864,7 +878,7 @@ async fn a_failing_document_beside_a_loaded_repo_follows_the_policy() {
                     );
                     assert_eq!(
                         stack.cognify_runs().await,
-                        vec![PipelineRunStatus::Completed],
+                        vec![PipelineRunStatus::Errored],
                         "{label}"
                     );
                 }
@@ -935,7 +949,7 @@ async fn a_loaded_repo_is_kept_when_the_run_fails_after_it() {
 /// - `RunToEnd` + `WholeRun`: the README is cognified, then swept with the
 ///   failed run.
 /// - `RunToEnd` + `FailedItems`: the README survives and is marked complete;
-///   the repo item is reported failed and left unmarked.
+///   the repo item is reported failed and left unmarked, and the run errors.
 #[tokio::test]
 async fn a_failing_repo_beside_good_documents_follows_the_policy() {
     for (stop, scope) in [
@@ -956,11 +970,10 @@ async fn a_failing_repo_beside_good_documents_follows_the_policy() {
             .await;
 
         if (stop, scope) == (FailureStop::RunToEnd, RollbackScope::FailedItems) {
-            let result = outcome.expect(&label);
-            assert!(!result.chunks.is_empty(), "{label}: the README was chunked");
-            let failed: Vec<Uuid> = result.failures.failed_items().iter().copied().collect();
+            let report = failed_report(outcome, &label);
+            let failed: Vec<Uuid> = report.failed_items().iter().copied().collect();
             assert_eq!(failed, vec![manifest.id], "{label}");
-            let entry = &result.failures.entries()[0];
+            let entry = &report.entries()[0];
             assert_eq!(entry.stage, FailureStage::CodeGraph, "{label}");
             assert!(entry.error.contains("no longer exists"), "{label}: {entry}");
             assert_eq!(
@@ -970,7 +983,7 @@ async fn a_failing_repo_beside_good_documents_follows_the_policy() {
             );
             assert_eq!(
                 stack.cognify_runs().await,
-                vec![PipelineRunStatus::Completed],
+                vec![PipelineRunStatus::Errored],
                 "{label}"
             );
             continue;

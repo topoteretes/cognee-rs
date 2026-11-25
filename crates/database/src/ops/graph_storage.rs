@@ -1861,6 +1861,163 @@ pub async fn delete_edges_for_run(
     Ok(deleted)
 }
 
+/// Ids per `IN (…)` list of a retag. Each statement binds the list once plus
+/// three scalars, far below SQLite's and Postgres' bound-variable caps.
+const RETAG_BATCH: usize = 500;
+
+/// Move the ledger rows run `from` wrote in `dataset_id` to run `to`: every
+/// row, or only the rows naming one of `data_ids`. Returns the rows moved.
+///
+/// The building block of a sweep that keeps some of a run's data items
+/// (SDK-1694 O5b): the kept items' rows are moved aside under a holding run
+/// id, the run is swept whole — so the moved rows are claimants *outside* the
+/// run and keep every artifact they name — and the rows are moved back. A
+/// whole-run sweep binds no id list, so the number of kept or swept items is
+/// unbounded; only this update binds them, [`RETAG_BATCH`] at a time, which
+/// is exact because moving a row is the same whichever batch moves it.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.retag_run_rows",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn retag_run_rows(
+    db: &DatabaseConnection,
+    from: Uuid,
+    dataset_id: Uuid,
+    data_ids: Option<&[Uuid]>,
+    to: Uuid,
+) -> Result<u64, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let (from_hex, to_hex, dataset_hex) = (
+        uuid_hex::to_hex(from),
+        uuid_hex::to_hex(to),
+        uuid_hex::to_hex(dataset_id),
+    );
+    let batches: Vec<Option<Vec<String>>> = match data_ids {
+        None => vec![None],
+        Some(ids) => ids
+            .chunks(RETAG_BATCH)
+            .map(|batch| Some(batch.iter().copied().map(uuid_hex::to_hex).collect()))
+            .collect(),
+    };
+    let mut moved = 0;
+    for batch in batches {
+        let mut nodes = Condition::all()
+            .add(node::Column::PipelineRunId.eq(from_hex.clone()))
+            .add(node::Column::DatasetId.eq(dataset_hex.clone()));
+        let mut edges = Condition::all()
+            .add(edge::Column::PipelineRunId.eq(from_hex.clone()))
+            .add(edge::Column::DatasetId.eq(dataset_hex.clone()));
+        if let Some(hexes) = batch {
+            nodes = nodes.add(node::Column::DataId.is_in(hexes.clone()));
+            edges = edges.add(edge::Column::DataId.is_in(hexes));
+        }
+        moved += node::Entity::update_many()
+            .col_expr(node::Column::PipelineRunId, Expr::value(to_hex.clone()))
+            .filter(nodes)
+            .exec(db)
+            .await
+            .map_err(map_sea_err)?
+            .rows_affected;
+        moved += edge::Entity::update_many()
+            .col_expr(edge::Column::PipelineRunId, Expr::value(to_hex.clone()))
+            .filter(edges)
+            .exec(db)
+            .await
+            .map_err(map_sea_err)?
+            .rows_affected;
+    }
+    Span::current().record(COGNEE_DB_ROW_COUNT, moved as i64);
+    Ok(moved)
+}
+
+/// Move run `from`'s nil-`data_id` rows in `dataset_id` that a non-nil row of
+/// the same artifact still stands beside — a row of another run, a `NULL`
+/// run, or one already moved to `to` — to run `to`. Returns the rows moved.
+///
+/// The nil row is the guard the data-scoped delete reads for an EntityType, a
+/// structural edge or an ontology-first entity (SDK-1694 O5a). A sweep that
+/// keeps some documents keeps it while a kept or outside document still
+/// produces the artifact, and takes it otherwise: a nil row nothing else
+/// stands beside (a DLT schema node, a type only swept documents declared)
+/// goes with the run, as Python's rollback deletes every row of the run but
+/// the kept items'. Nodes match on the slug, edges on (source, target,
+/// relationship). The sibling is looked for in this dataset only, like the
+/// guard it is. No id list is bound.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.retag_guarded_nil_rows",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn retag_guarded_nil_rows(
+    db: &DatabaseConnection,
+    from: Uuid,
+    dataset_id: Uuid,
+    to: Uuid,
+) -> Result<u64, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let (from_hex, to_hex, dataset_hex, nil) = (
+        uuid_hex::to_hex(from),
+        uuid_hex::to_hex(to),
+        uuid_hex::to_hex(dataset_id),
+        uuid_hex::to_hex(Uuid::nil()),
+    );
+    let guarded = |ledger: Ledger| {
+        let outer = ledger.table();
+        let same_artifact = ledger.key().iter().fold(Condition::all(), |cond, column| {
+            cond.add(
+                ledger_col("standing", column).equals((Alias::new(outer), Alias::new(*column))),
+            )
+        });
+        // `IS NULL` is not redundant with `<> :run`; see `get_unique_nodes_for_run`.
+        let standing = Query::select()
+            .expr(Expr::val(1))
+            .from_as(Alias::new(outer), Alias::new("standing"))
+            .cond_where(
+                same_artifact
+                    .add(ledger_col("standing", "dataset_id").eq(dataset_hex.clone()))
+                    .add(ledger_col("standing", "data_id").ne(nil.clone()))
+                    .add(
+                        Condition::any()
+                            .add(ledger_col("standing", "pipeline_run_id").is_null())
+                            .add(ledger_col("standing", "pipeline_run_id").ne(from_hex.clone())),
+                    ),
+            )
+            .to_owned();
+        Condition::all()
+            .add(ledger_col(outer, "pipeline_run_id").eq(from_hex.clone()))
+            .add(ledger_col(outer, "dataset_id").eq(dataset_hex.clone()))
+            .add(ledger_col(outer, "data_id").eq(nil.clone()))
+            .add(Expr::exists(standing))
+    };
+    let mut moved = node::Entity::update_many()
+        .col_expr(node::Column::PipelineRunId, Expr::value(to_hex.clone()))
+        .filter(guarded(Ledger::Nodes))
+        .exec(db)
+        .await
+        .map_err(map_sea_err)?
+        .rows_affected;
+    moved += edge::Entity::update_many()
+        .col_expr(edge::Column::PipelineRunId, Expr::value(to_hex))
+        .filter(guarded(Ledger::Edges))
+        .exec(db)
+        .await
+        .map_err(map_sea_err)?
+        .rows_affected;
+    Span::current().record(COGNEE_DB_ROW_COUNT, moved as i64);
+    Ok(moved)
+}
+
 /// The distinct data items the run touched within `scope` — the set whose
 /// completion markers a sweep has to clear.
 ///

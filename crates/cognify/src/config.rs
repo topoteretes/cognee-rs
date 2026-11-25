@@ -461,11 +461,12 @@ pub struct CognifyConfig {
     #[serde(skip)]
     pub evidence_pipeline_run_id: Option<Uuid>,
 
-    /// The share of chunks that may fail before a
-    /// [`RollbackScope::FailedItems`] run is called failed.
-    ///
-    /// Counted in chunks, evaluated per run, summarization excluded. Default
-    /// 0.05. Ignored under the other two scopes, which fail on any failed item.
+    /// **Deprecated: decides nothing.** It was the share of chunks that could
+    /// fail before a [`RollbackScope::FailedItems`] run was called failed.
+    /// Since the SDK-1694 O5b review every scope fails the run on any failed
+    /// item, as Python does (a `FailedItems` run still keeps the documents it
+    /// completed). Kept, and still validated (`0.0..=1.0`, default 0.05), so
+    /// existing configuration (`cognify.max_chunk_failure_ratio`) still loads.
     #[serde(default = "default_chunk_failure_ratio_threshold")]
     pub chunk_failure_ratio_threshold: f64,
 
@@ -1064,7 +1065,8 @@ impl CognifyConfig {
         self
     }
 
-    /// Set the share of chunks a [`RollbackScope::FailedItems`] run tolerates.
+    /// Set [`Self::chunk_failure_ratio_threshold`], which no longer decides
+    /// anything (kept for compatibility).
     pub fn with_chunk_failure_ratio_threshold(mut self, threshold: f64) -> Self {
         self.chunk_failure_ratio_threshold = threshold;
         self
