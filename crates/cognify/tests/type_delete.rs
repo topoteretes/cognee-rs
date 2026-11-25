@@ -630,30 +630,47 @@ async fn a_typeless_document_does_not_claim_another_documents_type() {
 #[tokio::test]
 async fn a_type_a_failed_document_declared_never_outlives_every_row() {
     use cognee_cognify::RollbackScope;
-    let mut harness = Harness::new().await;
-    let a = harness.add_file("Apple:Company").await;
-    let b = harness.add_file("Apple:Fruit").await;
-    harness
-        .vector_db
-        .set_index_error_for_point(a, "the vector store is down for document A");
-    let config = extraction_config().with_rollback_scope(RollbackScope::FailedItems);
-    let outcome = harness.run_over(&config, &[a, b], Arc::new(TypesLlm)).await;
-    assert!(outcome.is_err(), "A's failure errors the run");
-    let company = type_id("company");
-    let owners = node_owners(&harness, company).await;
-    println!(
-        "company in graph {} owners {owners:?} (a={a}, b={b})",
-        has_node(&harness, company).await
-    );
-    assert!(
-        !has_node(&harness, company).await || owners.iter().any(|data| !data.is_nil()),
-        "company is in the graph with no row: {owners:?}"
-    );
+    for before_its_rows in [true, false] {
+        let mut harness = Harness::new().await;
+        let a = harness.add_file("Apple:Company").await;
+        let b = harness.add_file("Apple:Fruit").await;
+        if before_its_rows {
+            // A's ledger write fails, so its save stops before any row or graph
+            // node is written, and B's group is the first to write `company`.
+            harness
+                .db
+                .execute_unprepared(&format!(
+                    "CREATE TRIGGER fail_a BEFORE INSERT ON nodes \
+                 WHEN NEW.data_id = '{}' BEGIN SELECT RAISE(ABORT, 'ledger down for A'); END",
+                    a.simple()
+                ))
+                .await
+                .unwrap();
+        } else {
+            // A's save fails after its rows and graph nodes, while indexing.
+            harness
+                .vector_db
+                .set_index_error_for_point(a, "the vector store is down for document A");
+        }
+        let config = extraction_config().with_rollback_scope(RollbackScope::FailedItems);
+        let outcome = harness.run_over(&config, &[a, b], Arc::new(TypesLlm)).await;
+        assert!(outcome.is_err(), "A's failure errors the run");
+        let company = type_id("company");
+        let owners = node_owners(&harness, company).await;
+        println!(
+            "company in graph {} owners {owners:?} (a={a}, b={b})",
+            has_node(&harness, company).await
+        );
+        assert!(
+            !has_node(&harness, company).await || owners.iter().any(|data| !data.is_nil()),
+            "company is in the graph with no row: {owners:?}"
+        );
 
-    delete(&harness, b, DeleteMode::Soft).await;
-    let (nodes, _) = harness.graph_db.get_graph_data().await.unwrap();
-    assert!(
-        nodes.is_empty(),
-        "nothing outlives both documents: {nodes:?}"
-    );
+        delete(&harness, b, DeleteMode::Soft).await;
+        let (nodes, _) = harness.graph_db.get_graph_data().await.unwrap();
+        assert!(
+            nodes.is_empty(),
+            "before_its_rows {before_its_rows}: nothing outlives both documents: {nodes:?}"
+        );
+    }
 }
