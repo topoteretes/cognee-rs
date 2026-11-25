@@ -588,8 +588,14 @@ fn a_negative_zero_integer_reads_as_python_reads_it() {
         r#"{"kind": "symbol", "line": 0, "name": "zero", "props": {"e": -0.0, "f": -0.0, "list": [0, "-0"], "n": 0, "nested": {"m": 0}}, "repo": "r"}"#
     );
     assert_eq!(
-        cognee_code_graph::pyjson::dumps_sorted(&Value::Object(receipt.unwrap())),
+        cognee_code_graph::pyjson::dumps_sorted(&Value::Object(receipt.clone().unwrap())),
         r#"{"fact_count": 0, "format_version": 1}"#
+    );
+    // The rewrite is a parse step only: the facts.jsonl digest is over the
+    // bytes as written (Python's `snapshot_identity` for this snapshot).
+    assert_eq!(
+        snapshot_identity(dir.path(), receipt.as_ref()).as_deref(),
+        Some("sha256:11f8fae6414d4f8cc1b5114f07cd13ada01e851987fbb102f3b49c05964f99f7")
     );
 
     let nodes = map_facts_to_data_points(&facts, Some("/tmp/r"), None, None);
@@ -603,4 +609,68 @@ fn a_negative_zero_integer_reads_as_python_reads_it() {
         Some("symbol: e=-0.0, f=-0.0, n=0")
     );
     assert_eq!(zero.line, Some(0));
+}
+
+/// SDK-1703 review: `insights.json` and `flows.json` read a bare `-0` as
+/// Python does too, so the facts synthesized from them hash and describe as
+/// Python's. The facts, hashes and descriptions are what Python a59433e6b
+/// computed for these files (`parse_enola_snapshot` +
+/// `map_facts_to_data_points(facts, repo_path="/tmp/r")`).
+#[test]
+fn a_negative_zero_integer_in_insights_and_flows_reads_as_python_reads_it() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("facts.jsonl"),
+        "{\"kind\": \"symbol\", \"name\": \"app.main\", \"repo\": \"r\", \"id\": \"7005efd41c3df03d785196bc41a50700\"}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("receipt.json"),
+        r#"{"format_version": 1, "renderers": ["flows"]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("insights.json"),
+        r#"[{"title": "Zero", "source": "hotspots", "confidence": -0, "metrics": {"n": -0, "f": -0.0}, "evidence": [{"symbol": "app.main"}]}]"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("flows.json"),
+        r#"{"flows": [{"id": "19fff23f7659d1e32f5ff8a83f1abda9", "name": "main", "rank": -0, "repo": "r", "mechanism": "main", "entry": {"name": "app.main", "id": "7005efd41c3df03d785196bc41a50700", "line": -0}}]}"#,
+    )
+    .unwrap();
+
+    let (facts, _receipt) = parse_enola_snapshot(dir.path()).unwrap();
+    let dumped: Vec<String> = facts
+        .iter()
+        .map(|fact| cognee_code_graph::pyjson::dumps_sorted(&Value::Object(fact.clone())))
+        .collect();
+    assert_eq!(
+        dumped,
+        [
+            r#"{"id": "7005efd41c3df03d785196bc41a50700", "kind": "symbol", "name": "app.main", "repo": "r"}"#,
+            r#"{"kind": "insight", "name": "Zero", "props": {"confidence": 0, "metrics": {"f": -0.0, "n": 0}, "source": "hotspots"}, "relations": [{"kind": "evidences", "target": "app.main"}]}"#,
+            r#"{"id": "19fff23f7659d1e32f5ff8a83f1abda9", "kind": "flow", "line": 0, "name": "main", "props": {"entry": {"id": "7005efd41c3df03d785196bc41a50700", "line": 0, "name": "app.main"}, "mechanism": "main", "rank": 0}, "relations": [{"kind": "flow_entry", "target": "app.main", "target_id": "7005efd41c3df03d785196bc41a50700"}], "repo": "r"}"#,
+        ]
+    );
+
+    let nodes = map_facts_to_data_points(&facts, Some("/tmp/r"), None, None);
+    let insight = entity(by_name(&nodes, "Zero"));
+    assert_eq!(
+        insight.fact_hash.as_deref(),
+        Some("sha256:ea9bdc24ede4ad5f316af3016fc2b1b09868d1c9009350e2662beb3473b7054f")
+    );
+    assert_eq!(
+        insight.description.as_deref(),
+        Some("insight: confidence=0, source=hotspots")
+    );
+    let flow = entity(by_name(&nodes, "main"));
+    assert_eq!(
+        flow.fact_hash.as_deref(),
+        Some("sha256:951ac74d8ff643592258e3bfbc600d8e251f33698cc83d2659e3e8fac2d0be04")
+    );
+    assert_eq!(
+        flow.description.as_deref(),
+        Some("flow: mechanism=main, rank=0")
+    );
 }

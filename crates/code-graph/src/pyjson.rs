@@ -528,6 +528,16 @@ mod tests {
         ));
     }
 
+    /// A known difference (README, Known differences): Python's `json.loads`
+    /// reads a lone surrogate escape into a `str` (`repr` `'\ud800'`);
+    /// serde_json rejects the text, so such a facts line is skipped as
+    /// corrupt.
+    #[test]
+    fn a_lone_surrogate_escape_is_not_read() {
+        assert!(loads(r#""\ud800""#).is_err());
+        assert!(loads(r#"{"name": "x\udc00y"}"#).is_err());
+    }
+
     #[test]
     fn python_iteration_and_truthiness() {
         assert_eq!(py_iter(Some(&json!("ab"))), vec![json!("a"), json!("b")]);

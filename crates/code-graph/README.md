@@ -285,6 +285,9 @@ Known differences from Python, all on input enola does not write:
 - **Non-standard JSON numbers.** `facts.jsonl` lines holding `NaN`/`Infinity`
   are skipped as corrupt; Python reads them. Integers beyond 64 bits are read
   as floats, so their hash differs.
+- **Lone surrogate escapes.** A JSON string holding an unpaired `\ud800`-style
+  escape is rejected (its `facts.jsonl` line is skipped as corrupt); Python
+  reads it into a `str`.
 - **Non-UTF-8 files.** A non-UTF-8 `receipt.json` or `insights.json` is
   ignored with a warning; Python raises. A non-UTF-8 `facts.jsonl` is an
   `EnolaSnapshot` error here; Python raises a bare `UnicodeDecodeError`.
