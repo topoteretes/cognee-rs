@@ -795,8 +795,9 @@ config_section! {
             env: ["RAISE_INCREMENTAL_LOADING_ERRORS", "COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS"],
             alias: ["raise_incremental_loading_errors"], secret: false,
         },
-        /// What a failed run rolls back: `whole_run` (default) or
-        /// `failed_items`.
+        /// What a failed run rolls back: `whole_run`, `failed_items` or
+        /// `nothing`. Unset, it follows `incremental_loading`: `failed_items`
+        /// with it on (the default), `whole_run` with it off (SDK-1694 D4).
         pub rollback_scope: String = String::new() => {
             env: ["COGNEE_COGNIFY_ROLLBACK_SCOPE"], alias: [], secret: false,
         },
@@ -811,7 +812,9 @@ config_section! {
         pub edge_evidence_enabled: bool = true => {
             env: ["EDGE_EVIDENCE_ENABLED"], alias: [], secret: false,
         },
-        /// Share of failed chunks (0, 1] above which a data item fails.
+        /// Share of failed chunks, in (0, 1]. Still read and validated, but it
+        /// no longer decides anything: since SDK-1694 O5b any failed chunk
+        /// fails its data item, as in Python.
         pub max_chunk_failure_ratio: f64 = 0.05 => {
             env: ["COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO"], alias: [], secret: false,
         },

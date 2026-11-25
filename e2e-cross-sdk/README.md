@@ -75,22 +75,24 @@ Two things about the current Python that the harness accounts for:
 
 Read this before citing a green run as evidence of parity.
 
-**Most of these test files are run by nothing.** Of the 20 `test_*.py` files
-in `harness/`, only **nine** are selected by any workflow step:
+**Most of these test files are run by nothing.** Of the 22 `test_*.py` files
+in `harness/`, only **eleven** are selected by any workflow step:
 
 - every PR, no secrets: `test_telemetry_parity`, `test_cogx_import_contract`,
-  and the relational delete pair `test_cross_delete` and
-  `test_readd_after_delete` (SDK-1166);
+  the relational delete pair `test_cross_delete` and
+  `test_readd_after_delete` (SDK-1166), and `test_cognify_type_parity`
+  (SDK-1694 O7, against the scripted LLM below);
 - only when `OPENAI_KEY` is set: `test_cogx_roundtrip`,
-  `test_provenance_parity`, `test_logging_parity`, and the delete parity pair
-  `test_delete_parity` and `test_delete_shared_entity_parity` (SDK-1166).
+  `test_provenance_parity`, `test_logging_parity`, and the delete parity
+  family `test_delete_parity`, `test_delete_shared_entity_parity` (SDK-1166)
+  and `test_delete_type_parity` (SDK-1694 O6).
 
 `test_add_parity`, `test_cross_read`, `test_search_parity` and the other eight
 are collected by no CI lane at all. This is a pre-existing gap, not something
 the HTTP move caused, but it is the single most important caveat on this
 directory: "the cross-SDK parity lane is green" does not mean these files
-passed, it means those nine did. The two delete steps fail on any skipped
-test, so their green does mean the tests ran. The provenance step sets
+passed, it means those eleven did. The two delete steps and the type-parity
+step fail on any skipped test, so their green does mean the tests ran. The provenance step sets
 `OPENAI_TOKEN` on the runner but does not pass it into the container with
 `-e`, so check its log for skips (see the note on `e2e-tests` in
 `docker-compose.yml`).
@@ -116,10 +118,17 @@ weaker shape is gone from this repo along with it.)
 - **"Both absent" scores as agreement.** Tests that accept a missing result on
   both sides convert *neither side implements this* into a pass. Prefer
   `xfail(strict=True)` keyed to a tracked gap.
-- **LLM determinism is unwired.** Rust has `MOCK_LLM`, `crates/llm/src/mock/`
-  and cassette replay (`COGNEE_RECORD_LLM` / `COGNEE_TEST_REPLAY`); nothing
-  under `e2e-cross-sdk/` uses any of it. Python has no general LLM mock, and a
-  shared fake cannot key on prompt text because the two SDKs' prompts differ.
+- **LLM determinism is mostly unwired.** Rust has `MOCK_LLM`,
+  `crates/llm/src/mock/` and cassette replay (`COGNEE_RECORD_LLM` /
+  `COGNEE_TEST_REPLAY`); Python has no general LLM mock, and a shared fake
+  cannot key on prompt text because the two SDKs' prompts differ. The one
+  exception is `harness/scripted_llm.py`, an OpenAI-compatible endpoint a test
+  starts in-process: it keys on a **marker** the test writes into each
+  document (which reaches the extraction call through the chunk text, whatever
+  the prompt), answers the `response_format: json_schema`, `tools` and
+  `functions` shapes (both SDKs send `json_schema`; Rust's cascade also sends
+  `tools`), and serves both SDKs' embeddings. Only `test_cognify_type_parity` uses it; the
+  other LLM tests still compare invariants of real extractions.
 
 A fuller accounting, with the divergences these limits were hiding, is in
 [`docs/roadmap/python-parity-audit.md`](../docs/roadmap/python-parity-audit.md).
@@ -153,6 +162,7 @@ PR to `main`/`master`.
 | COGX roundtrip (Rust export → Python import) | push + PR when `OPENAI_KEY` set | yes | recommended |
 | Provenance parity | push + PR when `OPENAI_KEY` set | yes | recommended |
 | Logging parity | push + PR (when `OPENAI_KEY` present) | no | recommended |
+| Cognify type parity (scripted LLM) | push + PR | no (scripted) | recommended |
 
 Telemetry parity and the COGX import contract run unconditionally on every
 push/PR (no OpenAI key required) and are the release gate. LLM-gated suites use

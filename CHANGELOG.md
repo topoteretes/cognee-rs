@@ -18,6 +18,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **cognify works one document at a time, as Python does (SDK-1694,
+  overview).** The stage entries below and under Added / Changed / Fixed
+  give the detail; together they change cognify as follows. The pipeline is
+  described in [docs/operations.md](docs/operations.md#one-document-at-a-time-sdk-1694).
+  - **Graph per block, several types per entity** (O1, O2): each document's
+    blocks of at most `chunks_per_batch` chunks are expanded with fresh maps,
+    the first type per block wins and the blocks' types are combined, so an
+    entity two documents type differently has both types. Edge endpoints
+    resolve within the block (`cognify.cross_chunk_endpoints`), and labels
+    are normalised as Python's `generate_edge_name`.
+  - **No batch barrier** (O3): every chunk's call goes through one stream of
+    at most `max_parallel_extractions`; `chunks_per_batch` no longer limits
+    concurrency.
+  - **One streaming stage and one ordered writer** (O4a, O4b): extraction,
+    summarization and `add_data_points` are one stage; each document is
+    saved as soon as its results are in, in input order, with at most
+    `cognify.max_unsaved_documents` (default 32) waiting.
+  - **Per-document ledger rows, completion and rollback** (O5a, O5b, D4):
+    types and structural edges get a row per producing document; each
+    document is completed right after it is saved, and the default
+    `rollback_scope` keeps the completed documents of a failed run
+    (`failed_items` with `incremental_loading`, `whole_run` without).
+  - **Per-document delete** (O6): deleting a document removes the types,
+    `is_a` edges and semantic edges only it produced.
+
+  Cross-SDK: `e2e-cross-sdk/harness/test_cognify_type_parity.py` drives both
+  SDKs through a scripted OpenAI-compatible endpoint and checks that they
+  store the same entity types and normalised edges, on a first and a second
+  run (SDK-1694 O7). Existing graphs are not migrated: an entity gains
+  further types only when its data is cognified again (with
+  `incremental_loading` off, or re-added), and raw-label edges stay, with a
+  normalised copy added beside them.
+
 - **Deleting a document removes the entity types and `is_a` edges only it
   declared (SDK-1694, stage O6).** Python removes an EntityType with the last
   document whose walk reached it (`get_data_related_nodes`). Rust wrote a
@@ -175,8 +208,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `chunks_per_batch` chunks of admitted documents, each chunk's result sent
     to the assembler as its block returns.
 
-  Completion markers and the rollback decision still happen at the end of the
-  run, and a persistence failure is still run-fatal (SDK-1694 O5b).
+  Stage O5b (above) since moved the completion markers into the writer and
+  made a failed save fail only its own document under `failed_items`.
   `SummaryExtractor::summarize_chunks` runs on the same dispatch helper: a
   chunk's text is cloned when its call starts (not every chunk up front), and
   each call runs on its own task.
@@ -307,10 +340,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     first file keeps none, so the run is fatal (`is_fatal`'s no-survivor rule)
     and is rolled back whole. This is Python's behaviour too (the first failure
     cancels the items still running and starts no more), and the plan for
-    SDK-1694. Until per-document saving lands (stage O5b), a server that wants
-    to keep finished files should run `RunToEnd` + `FailedItems`
-    (`cognify.raise_incremental_loading_errors=false`,
-    `COGNEE_COGNIFY_ROLLBACK_SCOPE=failed_items`).
+    SDK-1694. Stage O5b (above) since saves and keeps every file whose calls
+    all came back before the stop, so `FailFast` + `FailedItems` (the default
+    with `incremental_loading`) no longer loses finished files.
   - **Log lines.** The per-batch `Processed graph extraction batch i/n` line is
     gone. Extraction logs `graph extraction: N of M chunks returned` at most
     every 30 seconds, and one `Extracted graphs from N of M chunks (K never
@@ -585,7 +617,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ontology_edge_chunks`, `produces_edge`, `mark_ontology_first`,
   `is_ontology_first`); `entity_chunks` / `edge_chunks` still name only
   extracting chunks, so a chunk's `contains` links are unchanged.
-  - **Deletion is unchanged, with two intended exceptions.** Each of those
+  - **Deletion is unchanged by this stage, with two intended exceptions**
+    (stage O6, above, then dropped the nil rows and made delete count the
+    per-document ones). Each of those
     artifacts keeps the nil-`data_id` row it always had, and the
     per-document rows share its slug, so data-scoped deletes (both claimant
     scopes), dataset deletes and run sweeps select the same artifacts
@@ -636,12 +670,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   switching to "every declared type, with counts" means keeping every type
   with a count inside a unit as well as summing counts in the merge.
 
-  Deletes do not catch up until SDK-1694 stage O6: deleting a document does
-  not remove by ownership the extra `is_a` edges or EntityTypes it
-  contributed. Like the primary type's today, their ledger rows carry a nil
-  `data_id`, so a data item's delete never selects them (only hard delete's
-  sweep of entity types left with a single edge can), which can leave behind
-  an `is_a` edge that did not exist before this change.
+  Deletes caught up in stage O6 (above): deleting a document removes the
+  `is_a` edges and EntityTypes only it contributed. Data cognified between
+  O1 and O6 has nil-`data_id` rows for them, which still claim them until
+  their dataset is deleted.
 
   Across data items the first one in input order decides an entity's
   description, importance weight and metadata (an ontology individual known
@@ -658,8 +690,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   name; the new key `cognify.cross_chunk_endpoints`
   (`COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS`, default `true`) turns that off,
   which resolves endpoints only within their own chunk and only by node id,
-  as Python does. Existing graphs keep one type per entity until their data is
-  cognified again. The visualization payload still names one
+  as Python does. Existing graphs are not migrated: an entity gains further
+  types only when its data is cognified again. The visualization payload still names one
   type per entity: the last `is_a` link, as Python's does. COGX export writes
   every `is_a` edge as its own fact.
 
@@ -843,8 +875,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Breaking changes
 
 - **Several types per entity (SDK-1694).** `cognee_models::Entity` gains
-  `extra_types: Vec<Uuid>` (the types after `is_a`; left out of the
-  serialised form when empty) and `GraphNodePair` gains
+  `extra_types: Vec<Uuid>` (the types after `is_a`; since stage O6 never
+  serialised, the `is_a` edges are the stored type set) and `GraphNodePair` gains
   `extra_entity_types: Vec<EntityType>`. A struct literal of either must add
   the field; `GraphNodePair::new(entity, entity_type)` builds a single-typed
   one. `GraphNodePair::entity_types()` iterates every type. `CognifyConfig`
