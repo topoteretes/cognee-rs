@@ -1831,8 +1831,12 @@ pub(crate) fn web_page_graph(pages: &[WebPage]) -> (Vec<serde_json::Value>, Vec<
 /// them reaches the graph (I1), the WebPage / WebSite nodes and the chunk
 /// nodes the `SOURCED_FROM` edges start at are written before any edge, and an
 /// edge the graph already holds is not written again. The chunks need not be
-/// stored beforehand; a chunk that is gets an idempotent upsert. The cognify pipeline does not call this: its extraction
-/// stage carries the artifacts to the persistence step instead.
+/// stored beforehand. A chunk the graph already holds is left as stored, not
+/// overwritten with the copy passed here, which may lack what an earlier write
+/// stored (such as the `contains` list on the chunks
+/// [`extract_graph_from_data`] returns). The cognify pipeline does not call
+/// this: its extraction stage carries the artifacts to the persistence step
+/// instead.
 pub async fn create_web_page_nodes(
     documents: &[Document],
     chunks: &[DocumentChunk],
@@ -12446,6 +12450,47 @@ mod tests {
 
         assert_eq!(graph.node_count(), 3, "WebPage, WebSite and the chunk");
         assert_eq!(graph.edge_count(), 2);
+    }
+
+    /// A chunk the graph already holds keeps its stored version: a caller that
+    /// passes an older copy (the chunks it handed to `extract_graph_from_data`,
+    /// without the `contains` list the stored ones carry) must not overwrite
+    /// it, because both graph backends replace a node's whole property set on
+    /// conflict. The edge to it is still written.
+    #[tokio::test]
+    async fn create_web_page_nodes_leaves_a_stored_chunk_as_stored() {
+        use cognee_graph::GraphDBTraitExt;
+        let graph = Arc::new(cognee_graph::MockGraphDB::new());
+        let doc_id = Uuid::new_v4();
+        let documents = vec![test_document_with_metadata(
+            doc_id,
+            Some(url_metadata("https://example.com/stored-chunk")),
+        )];
+        let chunk_id = Uuid::new_v4();
+        let entity_id = Uuid::new_v4().to_string();
+        let mut stored = test_chunk(chunk_id, doc_id, "content");
+        stored.contains = vec![json!(entity_id)];
+        graph.add_nodes(&[&stored]).await.unwrap();
+
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let id = LedgerIdentity::new(None, None, dataset_id, None);
+        let stale = test_chunk(chunk_id, doc_id, "content");
+        create_web_page_nodes(&documents, &[stale], graph.clone(), &db, id)
+            .await
+            .unwrap();
+
+        let node = graph
+            .get_node(&chunk_id.to_string())
+            .await
+            .unwrap()
+            .expect("the chunk is still stored");
+        assert!(
+            serde_json::to_string(&node).unwrap().contains(&entity_id),
+            "the stored `contains` list survives: {node:?}"
+        );
+        assert_eq!(graph.node_count(), 3, "WebPage, WebSite and the chunk");
+        assert_eq!(graph.edge_count(), 2, "both edges written");
     }
 
     /// The extraction stage builds the WebPage / WebSite artifacts (and nothing

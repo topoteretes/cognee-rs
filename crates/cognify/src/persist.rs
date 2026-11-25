@@ -1010,11 +1010,18 @@ pub(crate) async fn persist_extraction(
 /// ownership rows, then the WebPage / WebSite nodes and the sourced chunks'
 /// nodes, then the edges the graph does not hold yet.
 ///
-/// The `SOURCED_FROM` edges start at the chunks, so the chunk nodes (and their
-/// ownership rows) are written here too, before any edge, as [`persist_group`]
-/// writes them in the same group as the web nodes. A caller that already
-/// stored the chunks gets an idempotent upsert; one that had not no longer
-/// loses the edges (Ladybug) or the call (Postgres, `graph_edge` foreign key).
+/// The `SOURCED_FROM` edges start at the chunks, so a sourced chunk the graph
+/// does not hold yet is written here too (node and ownership row), before any
+/// edge, as [`persist_group`] writes chunks in the same group as the web
+/// nodes. A caller that had not stored the chunks no longer loses the edges
+/// (Ladybug) or the call (Postgres, `graph_edge` foreign key).
+///
+/// A chunk the graph already holds is left as stored. Both graph backends
+/// replace a node's whole property set on conflict, and the caller's copy may
+/// be older than the stored one: the chunks handed to
+/// [`crate::tasks::extract_graph_from_data`] lack the `contains` list and
+/// stamps its returned chunks carry, so upserting them again would silently
+/// strip what an earlier write stored.
 pub(crate) async fn persist_web_pages(
     db: &dyn RelationalDb,
     graph_db: &dyn GraphDBTrait,
@@ -1029,9 +1036,27 @@ pub(crate) async fn persist_web_pages(
         .iter()
         .flat_map(|page| page.chunk_ids.iter().copied())
         .collect();
-    let sourced_chunks: Vec<&DocumentChunk> = chunks
+    let sourced_ids: Vec<String> = chunks
         .iter()
         .filter(|chunk| sourced.contains(&chunk.base.id))
+        .map(|chunk| chunk.base.id.to_string())
+        .collect();
+    // `get_nodes` is a set lookup: key on each row's own `id`, not position.
+    let stored: HashSet<String> = if sourced_ids.is_empty() {
+        HashSet::new()
+    } else {
+        graph_db
+            .get_nodes(&sourced_ids)
+            .await?
+            .iter()
+            .filter_map(|row| row.get("id").and_then(|id| id.as_str()).map(str::to_owned))
+            .collect()
+    };
+    let sourced_chunks: Vec<&DocumentChunk> = chunks
+        .iter()
+        .filter(|chunk| {
+            sourced.contains(&chunk.base.id) && !stored.contains(&chunk.base.id.to_string())
+        })
         .collect();
     let (mut nodes, edges) = crate::tasks::web_page_ownership_rows(ledger, pages);
     nodes.extend(crate::tasks::chunk_provenance_rows(

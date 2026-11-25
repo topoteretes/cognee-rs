@@ -2389,10 +2389,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pipeline's persistence layer does: `extract_graph_from_data` the EntityType
   nodes of its entities (the same rows and nodes Python's `add_data_points`
   writes for them), `create_web_page_nodes` the chunks a page sources (only
-  those; an already stored chunk is an idempotent upsert). Regression tests:
+  only those the graph does not hold yet; a stored chunk is left as stored, so
+  passing the extraction's input chunks cannot strip the `contains` list its
+  returned chunks carry). Regression tests:
   `standalone_extraction_edges_reach_a_*_graph` and
   `standalone_web_page_edges_reach_a_*_graph` in `nodes_before_edges_ladybug`
-  and `nodes_before_edges_pggraph`.
+  and `nodes_before_edges_pggraph`, plus
+  `create_web_page_nodes_leaves_a_stored_chunk_as_stored` in `tasks.rs`.
 - **Code graph correctness (SDK-1702).**
   - The stale sweep and the node-set detag read every code node and node set
     by type (`get_filtered_graph_data`), as Python reads the whole graph,
