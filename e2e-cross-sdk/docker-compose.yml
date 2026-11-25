@@ -25,12 +25,14 @@ services:
       # See the COGX steps in .github/workflows/http-parity.yml.
       #
       # EMBEDDING_* must NOT be forwarded to this service at all: it drives
-      # the CLIs, and the Rust CLI embeds locally through the ONNX model
-      # baked into the image at /opt/models
-      # (write_rust_config's embedding_model_path). Overriding it sends the
-      # litellm-style `openai/text-embedding-3-small` — correct for Python,
-      # which strips the provider prefix — straight to the OpenAI API, which
-      # rejects it with `HTTP 400 invalid model ID` and fails cognify.
+      # the CLIs, and the Rust CLI embeds with its own default — the
+      # `openai` provider and `text-embedding-3-small` (non-Android), through
+      # the LLM endpoint and key; write_rust_config's ONNX model paths under
+      # /opt/models are only used if the provider is switched to `onnx`.
+      # Forwarding EMBEDDING_MODEL sends the litellm-style
+      # `openai/text-embedding-3-small` — correct for Python, which strips the
+      # provider prefix — straight to the OpenAI API, which rejects it with
+      # `HTTP 400 invalid model ID` and fails cognify.
     tmpfs:
       - /workspace                                # ephemeral workspace per run
     command: ["pytest", "-vs", "/harness/"]

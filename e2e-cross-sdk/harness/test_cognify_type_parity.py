@@ -21,8 +21,9 @@ Each SDK gets its own workspace and runs:
 2. ``add`` + ``cognify`` of a third document that repeats one edge under a
    differently spelled label (the "second run" check from the O2 review).
 
-After each run, each SDK's graph must hold exactly the expected entity types
-and semantic edges, and the two SDKs' graphs must agree.
+After each run, each SDK's graph must hold exactly the expected entities (one
+node each), entity types and semantic edges, and the two SDKs' graphs must
+agree, entity ids included (both derive an entity's id from its name).
 """
 
 from helpers import (
@@ -105,16 +106,27 @@ EXPECTED_EDGES = {
 
 
 def _summary(nodes, edges):
-    """(entity name -> type names, semantic (source, label, target) list,
-    EntityType names), all names lower-cased."""
+    """What the checks compare, by stored name (both SDKs store the
+    ``generate_node_name`` / ``generate_edge_name`` forms, so no case folding):
+
+    * ``entities``: entity name -> sorted node ids (one id each, and the same
+      name-derived id in both SDKs);
+    * ``types``: entity name -> type names reached by ``is_a``;
+    * ``semantic``: sorted (source, label, target) entity-to-entity edges;
+    * ``entity_types``: sorted EntityType names.
+    """
     by_id = {n["id"]: n for n in nodes}
 
     def name(node_id):
-        return str(by_id[node_id].get("name") or "").lower()
+        return str(by_id[node_id].get("name") or "")
 
     def kind(node_id):
         return by_id.get(node_id, {}).get("type")
 
+    entities: dict[str, list] = {}
+    for n in nodes:
+        if n.get("type") == "Entity":
+            entities.setdefault(name(n["id"]), []).append(n["id"])
     types: dict[str, set] = {}
     semantic = []
     for e in edges:
@@ -126,7 +138,12 @@ def _summary(nodes, edges):
         elif kind(d) == "Entity":
             semantic.append((name(s), label, name(d)))
     entity_types = sorted(name(n["id"]) for n in nodes if n.get("type") == "EntityType")
-    return types, sorted(semantic), entity_types
+    return {
+        "entities": {k: sorted(v) for k, v in entities.items()},
+        "types": types,
+        "semantic": sorted(semantic),
+        "entity_types": entity_types,
+    }
 
 
 def _run(sdk, ws, llm, markers):
@@ -147,7 +164,15 @@ def _run(sdk, ws, llm, markers):
         }
     else:
         run = run_rust_cli
-        env = None
+        # The Rust CLI's environment beats its config.json, and docker compose
+        # forwards a developer's `.env` (OPENAI_URL / OPENAI_TOKEN), so every
+        # alias is pointed at the scripted endpoint.
+        env = {
+            "LLM_ENDPOINT": llm.url,
+            "OPENAI_URL": llm.url,
+            "LLM_API_KEY": "scripted",
+            "OPENAI_TOKEN": "scripted",
+        }
     llm.reset()
     for args in (["add", *paths, "-d", DATASET], ["cognify", "-d", DATASET]):
         result = run(ws, args, env=env, check=False)
@@ -160,6 +185,7 @@ def _run(sdk, ws, llm, markers):
         f"calls: {llm.calls}"
     )
     assert not llm.unscripted(), f"{sdk}: unscripted requests: {llm.unscripted()}"
+    print(f"{sdk} {markers}: scripted calls {llm.call_counts()}")
 
 
 def _graph(sdk, ws):
@@ -168,17 +194,23 @@ def _graph(sdk, ws):
 
 
 def _check(sdk, summary, stage):
-    types, semantic, entity_types = summary
-    assert types == EXPECTED_TYPES, (
-        f"{sdk} ({stage}): entity types {types}, expected {EXPECTED_TYPES}"
+    entities = summary["entities"]
+    assert sorted(entities) == sorted(EXPECTED_TYPES), (
+        f"{sdk} ({stage}): entity names {sorted(entities)}, "
+        f"expected {sorted(EXPECTED_TYPES)}"
     )
-    assert sorted(semantic) == sorted(EXPECTED_EDGES), (
-        f"{sdk} ({stage}): semantic edges {semantic}, expected one each of "
+    split = {k: v for k, v in entities.items() if len(v) != 1}
+    assert not split, f"{sdk} ({stage}): an entity is stored as several nodes: {split}"
+    assert summary["types"] == EXPECTED_TYPES, (
+        f"{sdk} ({stage}): entity types {summary['types']}, expected {EXPECTED_TYPES}"
+    )
+    assert summary["semantic"] == sorted(EXPECTED_EDGES), (
+        f"{sdk} ({stage}): semantic edges {summary['semantic']}, expected one each of "
         f"{sorted(EXPECTED_EDGES)}"
     )
-    assert "company" not in entity_types, (
+    assert "company" not in summary["entity_types"], (
         f"{sdk} ({stage}): the type that lost within its document was stored: "
-        f"{entity_types}"
+        f"{summary['entity_types']}"
     )
 
 

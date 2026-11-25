@@ -11,11 +11,13 @@ exact type set or edge count cannot use one. This server answers every
   from its own JSON schema;
 * ``embeddings`` returns a deterministic vector per input text.
 
-It speaks the three shapes the SDKs send: Rust's ``response_format:
-json_schema`` (answered in ``content``), and Python instructor's ``tools`` /
-legacy ``functions`` calls (answered as a tool / function call). Both SDKs see
-the same graphs, so any difference in what they store comes from the
-pipelines, not the model.
+It answers every structured-output shape an OpenAI-compatible client sends:
+``response_format: json_schema`` (answered in ``content``; what Python's
+instructor sends for OpenAI at the harness pin, and what Rust sends for most
+calls), ``tools`` (answered as a tool call; Rust's cascade uses it for some)
+and legacy ``functions``. Both SDKs see the same graphs, so any difference in
+what they store comes from the pipelines, not the model. ``call_counts()``
+reports which shapes each run actually used.
 
 Every request is recorded (``calls``) so a test can assert the scripted
 graphs were actually served and the SDK did not take some other path.
@@ -146,6 +148,15 @@ class ScriptedLlm:
         with self._lock:
             return [c["marker"] for c in self.calls if c["kind"] == "graph" and c["marker"]]
 
+    def call_counts(self) -> dict[str, int]:
+        """Requests served so far, by ``kind/shape`` (e.g. ``graph/json_schema``)."""
+        counts: dict[str, int] = {}
+        with self._lock:
+            for c in self.calls:
+                key = f"{c['kind']}/{c.get('shape') or '-'}"
+                counts[key] = counts.get(key, 0) + 1
+        return counts
+
     def unscripted(self) -> list[dict]:
         """Requests this server could not answer (unknown path)."""
         with self._lock:
@@ -165,32 +176,33 @@ class ScriptedLlm:
 
     def _chat(self, body: dict) -> dict:
         text = _message_text(body)
-        name, schema = "Response", None
+        name, schema, shape = "Response", None, "text"
         tools = body.get("tools") or []
         functions = body.get("functions") or []
         response_format = body.get("response_format") or {}
         if tools:
             fn = tools[0].get("function", {})
-            name, schema = fn.get("name", name), fn.get("parameters")
+            name, schema, shape = fn.get("name", name), fn.get("parameters"), "tools"
         elif functions:
             name, schema = functions[0].get("name", name), functions[0].get("parameters")
+            shape = "functions"
         elif response_format.get("type") == "json_schema":
             js = response_format.get("json_schema", {})
-            name, schema = js.get("name", name), js.get("schema")
+            name, schema, shape = js.get("name", name), js.get("schema"), "json_schema"
 
         if schema is None:
             # Plain-text completion (no schema): nothing in cognify should ask
             # for one, but answer rather than hang the SDK.
-            self._record(kind="text", marker=None, name=None)
+            self._record(kind="text", marker=None, name=None, shape=shape)
             payload = "scripted"
         elif _is_graph_schema(schema, schema):
             marker, graph = self._graph_for(text)
-            self._record(kind="graph", marker=marker, name=name)
+            self._record(kind="graph", marker=marker, name=name, shape=shape)
             filled = _fill(schema, schema)
             filled.update(graph)
             payload = json.dumps(filled)
         else:
-            self._record(kind="structured", marker=None, name=name)
+            self._record(kind="structured", marker=None, name=name, shape=shape)
             payload = json.dumps(_fill(schema, schema))
 
         message: dict = {"role": "assistant", "content": None}

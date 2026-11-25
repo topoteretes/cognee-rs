@@ -125,8 +125,9 @@ weaker shape is gone from this repo along with it.)
   exception is `harness/scripted_llm.py`, an OpenAI-compatible endpoint a test
   starts in-process: it keys on a **marker** the test writes into each
   document (which reaches the extraction call through the chunk text, whatever
-  the prompt), answers Rust's `json_schema` and Python instructor's `tools`
-  shapes, and serves embeddings. Only `test_cognify_type_parity` uses it; the
+  the prompt), answers the `response_format: json_schema`, `tools` and
+  `functions` shapes (both SDKs send `json_schema`; Rust's cascade also sends
+  `tools`), and serves both SDKs' embeddings. Only `test_cognify_type_parity` uses it; the
   other LLM tests still compare invariants of real extractions.
 
 A fuller accounting, with the divergences these limits were hiding, is in
