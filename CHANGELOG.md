@@ -2376,6 +2376,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   persistence layer now writes every node of a run before any edge. Regression tests: `nodes_before_edges_ladybug` and, in the Postgres
   graph CI lane, `nodes_before_edges_pggraph` (new `pggraph` test feature of
   `cognee-cognify`).
+- **The standalone `extract_graph_from_data` and `create_web_page_nodes` store
+  every edge they claim (O4a review, follow-up).** The two public writers
+  outside the pipeline still wrote edges before their endpoints. With an
+  ontology, `extract_graph_from_data` wrote the ontology's entity → class and
+  class → class `is_a` edges but no EntityType node; `create_web_page_nodes`
+  wrote the `SOURCED_FROM` chunk → WebPage edges and left it to the caller to
+  have stored the chunks first. On Ladybug those edges were dropped while their
+  ledger rows stayed; on the Postgres graph the call failed on
+  `graph_edge_source_id_fkey` after the ledger rows were committed. Each now
+  writes the missing nodes, with their ownership rows, before any edge, as the
+  pipeline's persistence layer does: `extract_graph_from_data` the EntityType
+  nodes of its entities (the same rows and nodes Python's `add_data_points`
+  writes for them), `create_web_page_nodes` the chunks a page sources (only
+  only those the graph does not hold yet; a stored chunk is left as stored, so
+  passing the extraction's input chunks cannot strip the `contains` list its
+  returned chunks carry). Regression tests:
+  `standalone_extraction_edges_reach_a_*_graph` and
+  `standalone_web_page_edges_reach_a_*_graph` in `nodes_before_edges_ladybug`
+  and `nodes_before_edges_pggraph`, plus
+  `create_web_page_nodes_leaves_a_stored_chunk_as_stored` in `tasks.rs`.
 - **Code graph correctness (SDK-1702).**
   - The stale sweep and the node-set detag read every code node and node set
     by type (`get_filtered_graph_data`), as Python reads the whole graph,
