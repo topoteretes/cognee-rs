@@ -172,6 +172,13 @@ stamped as code fails with `CodeGraphError::InvalidCodeItem` (Python's
 `ValueError`), a staging failure with `CodeGraphError::Staging`. Each file is
 its own enola run, never part of the dataset's repository cluster.
 
+cognify runs both code routes in one task. It is named after the route that
+ran, so telemetry tells them apart as Python's two tasks do:
+`extract_code_files_graph` when every code-routed item of the run is a code
+file, `extract_code_repo_graph` when a repository is among them (a mixed run
+included). `build_cognify_pipeline`, built before the items are known, always
+names it `extract_code_repo_graph`.
+
 ## Datasets of several repositories: one enola cluster
 
 A repository extracted on its own cannot see the others: a frontend's HTTP
@@ -236,12 +243,24 @@ node carries them:
 Node ids, `fact_hash` values, descriptions and edges are byte-identical to
 Python's. `fact_hash` is a SHA-256 over Python's `json.dumps(..., sort_keys=True)`,
 so `pyjson` reproduces Python's JSON text: separators, `ensure_ascii` escapes
-and `float.__repr__`.
+and `float.__repr__`. It also reads numbers as Python's `json.loads` does: a
+bare `-0` in `facts.jsonl`, `receipt.json`, `insights.json` or `flows.json` is
+the integer `0` (serde_json alone reads the float `-0.0`), while `-0.0` stays
+a float; the `facts.jsonl` digest is taken over the bytes as written. Messages
+that quote a value use Python's `repr` (`pyjson::py_repr`: quote choice,
+escapes, lists and dicts) or, where Python formats with `%s`, its `str`.
 
 `tests/golden.rs` compares the whole output with what Python produced for the
 snapshots under `tests/fixtures/snapshots/`, untagged and tagged
-(`node_set=["team-a", "shared"]`). To regenerate the goldens, run this with an
-interpreter that has Python cognee installed at the pin:
+(`node_set=["team-a", "shared"]`): `basic` and `docs_and_flows` are Python's
+fixtures, `insights`, `all_kinds` and `cluster` are written here (insight
+evidence by `fact_id`, name and bare file, every remaining fact kind, odd
+props, two repositories with relations that do not resolve). Each node is
+compared field for field, None fields included, with its `part_of` repository
+and `belongs_to_set` points, in the order Python returns the nodes; a
+difference the port makes on purpose is listed in the test's
+`ALLOWED_DIFFERENCES`, with its entry below. To regenerate the goldens, run
+this with an interpreter that has Python cognee installed at the pin:
 
 ```bash
 python3 scripts/generate_code_graph_goldens.py \
@@ -266,10 +285,30 @@ Known differences from Python, all on input enola does not write:
 - **Non-standard JSON numbers.** `facts.jsonl` lines holding `NaN`/`Infinity`
   are skipped as corrupt; Python reads them. Integers beyond 64 bits are read
   as floats, so their hash differs.
-- **Non-UTF-8 side files.** A non-UTF-8 `receipt.json` or `insights.json` is
+- **Non-UTF-8 files.** A non-UTF-8 `receipt.json` or `insights.json` is
   ignored with a warning; Python raises. A non-UTF-8 `facts.jsonl` is an
-  `EnolaSnapshot` error in both.
+  `EnolaSnapshot` error here; Python raises a bare `UnicodeDecodeError`.
 - **Non-iterable `relations`.** A numeric `relations` value counts as no
   relations; Python raises `TypeError`.
 - **`symbol_kind: null` on a symbol.** It is not serialised; Python's node
   stores it as `null`.
+- **Unset `DataPoint` fields are not serialised.** A node's unset
+  `source_pipeline`, `source_task`, `source_node_set`, `source_user` and
+  `source_content_hash` are left out, and Rust's `DataPoint` has no
+  `ontology_uri`; Python's node holds `null` for each.
+- **`updated_at` at a whole second.** An edge's `updated_at` always carries
+  six fractional digits; Python's `isoformat()` drops the fraction when the
+  microseconds are 0 (one write in a million).
+- **`repr` of characters newer than Python's Unicode.** `str.isprintable` is
+  read from Unicode 17 tables; Python 3.12 has Unicode 15.0, so a character
+  assigned since is escaped by Python and printed here.
+
+### Tests that need a POSIX shell
+
+The fake-enola suites (`tests/load.rs`, `tests/cluster.rs` and
+`cognee-cognify`'s `tests/code_repo_route.rs`) are `#![cfg(unix)]` on
+purpose: the stand-in enola is a shell script, and CI has no Windows test
+runner. So Windows' temporary-file path for the cluster config (it has no
+`/dev/stdin`) is not covered by a test. `run_enola` itself is unit-tested in
+`runner.rs` without enola or `PATH`: a program that cannot exist is
+`EnolaNotInstalled`, a removed working directory `EnolaSnapshot`.

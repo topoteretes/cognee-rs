@@ -23,6 +23,14 @@ before any work, as does a legacy `dlt` row.
 `routing::routes_need_llm` tells callers whether a run's items need the graph
 extractor at all.
 
+One Rust task runs both code routes, where Python runs one task per route, so
+the task (and its telemetry) is named after the route that ran
+(`tasks::code_routes_task_name`): `extract_code_files_graph` when every
+code-routed item of the run is a per-file code item, `extract_code_repo_graph`
+when a repo item is among them (a mixed run included). `build_cognify_pipeline`
+is built before the items are known and always names it
+`extract_code_repo_graph`.
+
 `run_code_graph_pipeline` builds code-repo items alone in a
 `code_graph_pipeline` run (Python's `remember(content_type="code")` run): the
 same CODE_REPO adapter, not incremental, and on success each item is stamped
