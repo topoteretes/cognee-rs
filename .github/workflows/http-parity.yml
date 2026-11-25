@@ -7,9 +7,11 @@ name: Cross-SDK Parity
 # of this repository, taking the 28 `test_http_*.py` files, their fixtures and
 # the dual-server entrypoint with it. What is left here is the CLI/DB lane: the COGX
 # import + roundtrip contracts, telemetry parity, provenance parity, logging
-# parity and the cross-SDK delete family (SDK-1166).
+# parity, the cross-SDK delete family (SDK-1166) and the scripted-LLM cognify
+# type parity (SDK-1694 O7).
 #
-# The telemetry-parity, COGX-import and relational-delete steps need no secrets
+# The telemetry-parity, COGX-import, relational-delete and cognify-type-parity
+# steps need no secrets
 # and are the unconditional release gate. LLM-gated steps use
 # secrets.OPENAI_KEY (same as ci.yml) and skip cleanly when absent (fork-safe).
 # Both delete steps set HARNESS_FAIL_ON_SKIP=1, so a delete test that skips
@@ -307,6 +309,27 @@ jobs:
             pytest -vs -rs \
             /harness/test_cross_delete.py \
             /harness/test_readd_after_delete.py \
+            --tb=short
+
+      # ── Cross-SDK cognify type parity, scripted LLM (no key) ────────────
+      # Both SDKs cognify the same documents against a scripted
+      # OpenAI-compatible endpoint the test starts (harness/scripted_llm.py),
+      # so their graphs can be compared exactly: an entity two documents type
+      # differently keeps both types, the type that loses within a document
+      # is dropped, relationship labels are normalised, and a second run that
+      # repeats an edge under another spelling adds none (SDK-1694 O7). No
+      # credentials, so it runs on every PR; HARNESS_FAIL_ON_SKIP=1 turns a
+      # skip into a failure.
+      - name: Cross-SDK cognify type parity (scripted LLM, no key)
+        if: ${{ !cancelled() }}
+        run: |
+          docker compose \
+            -f cognee-rust/e2e-cross-sdk/docker-compose.yml \
+            run --rm \
+            -e HARNESS_FAIL_ON_SKIP=1 \
+            e2e-tests \
+            pytest -vs -rs \
+            /harness/test_cognify_type_parity.py \
             --tb=short
 
       # ── COGX roundtrip: Rust exports, Python imports (LLM-gated) ─────────
