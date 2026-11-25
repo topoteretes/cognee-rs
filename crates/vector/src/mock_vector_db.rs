@@ -37,6 +37,13 @@ pub struct MockVectorDB {
     index_error: Arc<Mutex<Option<String>>>,
     /// Optional injected error returned from `retrieve` calls.
     retrieve_error: Arc<Mutex<Option<String>>>,
+    /// Injected errors returned from any `index_points` call carrying one of
+    /// these point ids.
+    point_index_errors: Arc<Mutex<HashMap<Uuid, String>>>,
+    /// Bulk-load scopes closed by `end_bulk_load` (finished, maintenance run).
+    bulk_loads_finished: Arc<std::sync::atomic::AtomicUsize>,
+    /// Bulk-load scopes closed by `abandon_bulk_load` (a dropped guard).
+    bulk_loads_abandoned: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[derive(Clone)]
@@ -55,7 +62,21 @@ impl MockVectorDB {
             indexed_points: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             index_error: Arc::new(Mutex::new(None)),
             retrieve_error: Arc::new(Mutex::new(None)),
+            point_index_errors: Arc::new(Mutex::new(HashMap::new())),
+            bulk_loads_finished: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            bulk_loads_abandoned: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
+    }
+
+    /// How many bulk-load scopes were closed by `end_bulk_load` (finished)
+    /// and by `abandon_bulk_load` (a dropped guard), in that order.
+    pub fn bulk_load_closes(&self) -> (usize, usize) {
+        (
+            self.bulk_loads_finished
+                .load(std::sync::atomic::Ordering::SeqCst),
+            self.bulk_loads_abandoned
+                .load(std::sync::atomic::Ordering::SeqCst),
+        )
     }
 
     /// Generate collection key from data_type and field_name
@@ -104,6 +125,14 @@ impl MockVectorDB {
     pub fn set_index_error(&self, msg: impl Into<String>) {
         let mut slot = self.index_error.lock().unwrap(); // lock poison is unrecoverable
         *slot = Some(msg.into());
+    }
+
+    /// Inject an error that will be returned from every `index_points` call
+    /// carrying a point with id `point_id`, as `VectorDBError::StorageError`
+    /// — a failure that hits one data item's write and no other.
+    pub fn set_index_error_for_point(&self, point_id: Uuid, msg: impl Into<String>) {
+        let mut errors = self.point_index_errors.lock().unwrap(); // lock poison is unrecoverable
+        errors.insert(point_id, msg.into());
     }
 
     /// Inject an error that will be returned from subsequent `retrieve` calls
@@ -157,6 +186,17 @@ impl Default for MockVectorDB {
 
 #[async_trait]
 impl VectorDB for MockVectorDB {
+    async fn end_bulk_load(&self) -> VectorDBResult<()> {
+        self.bulk_loads_finished
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn abandon_bulk_load(&self) {
+        self.bulk_loads_abandoned
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
     async fn create_collection(
         &self,
         data_type: &str,
@@ -203,6 +243,10 @@ impl VectorDB for MockVectorDB {
         {
             let slot = self.index_error.lock().unwrap(); // lock poison is unrecoverable
             if let Some(msg) = slot.as_ref() {
+                return Err(VectorDBError::StorageError(msg.clone()));
+            }
+            let errors = self.point_index_errors.lock().unwrap(); // lock poison is unrecoverable
+            if let Some(msg) = points.iter().find_map(|point| errors.get(&point.id)) {
                 return Err(VectorDBError::StorageError(msg.clone()));
             }
         }

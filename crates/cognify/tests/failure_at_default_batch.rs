@@ -65,7 +65,8 @@ fn the_fixture_runs_at_the_shipped_default_in_flight_cap() {
     );
 }
 
-/// The default pair — `FailFast` + `WholeRun` — at the default in-flight cap.
+/// The `FailFast` + `WholeRun` pair (the default without `incremental_loading`)
+/// at the default in-flight cap.
 ///
 /// End state is the same as the one-call-at-a-time fixture's: nothing persisted,
 /// nothing marked, `ERRORED`, `Err`. What differs is the report and the bill:
@@ -87,7 +88,7 @@ async fn the_default_pair_in_one_window_reaches_every_file_and_still_converges()
     let counting = Arc::new(CountingLlm::new(8));
     let result = harness
         .run_over(
-            &default_batch_extraction_config(),
+            &default_batch_extraction_config().with_rollback_scope(RollbackScope::WholeRun),
             &[first, bad, last],
             counting.clone(),
         )
@@ -138,7 +139,8 @@ async fn the_default_pair_in_one_window_reaches_every_file_and_still_converges()
 
 /// `FailFast` + `FailedItems` at the default in-flight cap: the whole dataset
 /// is in flight at once, so *every* file except the failed one is complete —
-/// including the one after it. The run returns `Ok` carrying the failed file.
+/// including the one after it. The run errors, as Python's does, carrying the
+/// failed file, and keeps the others (SDK-1694 O5b).
 #[tokio::test]
 async fn fail_fast_with_failed_items_in_one_window_keeps_every_file_but_the_failed_one() {
     let mut harness = Harness::new().await;
@@ -146,23 +148,22 @@ async fn fail_fast_with_failed_items_in_one_window_keeps_every_file_but_the_fail
 
     let config = default_batch_extraction_config()
         .with_failure_stop(FailureStop::FailFast)
-        .with_rollback_scope(RollbackScope::FailedItems)
-        // One failed chunk in three is 33 %, over the 5 % default; this fixture
-        // is about the partition, not about the escalation ratio.
-        .with_chunk_failure_ratio_threshold(0.5);
+        .with_rollback_scope(RollbackScope::FailedItems);
 
     let counting = Arc::new(CountingLlm::new(8));
-    let result = harness
-        .run_over(&config, &[first, bad, last], counting.clone())
-        .await
-        .expect("a tolerated failure below the ratio completes the run, and returns Ok");
+    let result = rollback_harness::failed_report(
+        harness
+            .run_over(&config, &[first, bad, last], counting.clone())
+            .await,
+        "a failed file errors the run",
+    );
 
-    assert_eq!(result.failures.failed_items().len(), 1);
-    assert!(result.failures.failed_items().contains(&bad));
+    assert_eq!(result.failed_items().len(), 1);
+    assert!(result.failed_items().contains(&bad));
     assert!(
-        result.failures.unreached_items().is_empty(),
+        result.unreached_items().is_empty(),
         "nothing is unreached in a single window: {:?}",
-        result.failures.unreached_items()
+        result.unreached_items()
     );
     assert_eq!(counting.call_count(), 3);
 
@@ -198,7 +199,7 @@ async fn fail_fast_with_failed_items_in_one_window_keeps_every_file_but_the_fail
     assert!(harness.is_marked(first).await);
     assert!(harness.is_marked(last).await);
     assert!(!harness.is_marked(bad).await);
-    assert_eq!(harness.latest_status().await, PipelineRunStatus::Completed);
+    assert_eq!(harness.latest_status().await, PipelineRunStatus::Errored);
 }
 
 /// The two fixtures side by side, on the same three files: the in-flight cap,
@@ -213,7 +214,6 @@ async fn the_in_flight_cap_alone_decides_whether_the_later_file_survives() {
         config
             .with_failure_stop(FailureStop::FailFast)
             .with_rollback_scope(RollbackScope::FailedItems)
-            .with_chunk_failure_ratio_threshold(0.5)
     };
 
     // One call in flight: the abort lands between files, so the third one is
@@ -221,17 +221,19 @@ async fn the_in_flight_cap_alone_decides_whether_the_later_file_survives() {
     let mut narrow = Harness::new().await;
     let (n_first, n_bad, n_last) = three_files_with_a_failing_middle(&mut narrow).await;
     let narrow_llm = Arc::new(CountingLlm::new(8));
-    let narrow_result = narrow
-        .run_over(
-            &tolerant(extraction_config()),
-            &[n_first, n_bad, n_last],
-            narrow_llm.clone(),
-        )
-        .await
-        .expect("below the ratio, the narrow run completes too");
+    let narrow_result = rollback_harness::failed_report(
+        narrow
+            .run_over(
+                &tolerant(extraction_config()),
+                &[n_first, n_bad, n_last],
+                narrow_llm.clone(),
+            )
+            .await,
+        "the narrow run errors",
+    );
 
     assert_eq!(
-        narrow_result.failures.unreached_items(),
+        narrow_result.unreached_items(),
         &std::iter::once(n_last).collect(),
         "the file after the failing call was never dispatched"
     );
@@ -254,16 +256,17 @@ async fn the_in_flight_cap_alone_decides_whether_the_later_file_survives() {
     let mut wide = Harness::new().await;
     let (w_first, w_bad, w_last) = three_files_with_a_failing_middle(&mut wide).await;
     let wide_llm = Arc::new(CountingLlm::new(8));
-    let wide_result = wide
-        .run_over(
+    let wide_result = rollback_harness::failed_report(
+        wide.run_over(
             &tolerant(default_batch_extraction_config()),
             &[w_first, w_bad, w_last],
             wide_llm.clone(),
         )
-        .await
-        .expect("the default-cap run completes too");
+        .await,
+        "the default-cap run errors too",
+    );
 
-    assert!(wide_result.failures.unreached_items().is_empty());
+    assert!(wide_result.unreached_items().is_empty());
     assert_eq!(wide_llm.call_count(), 3);
     assert!(
         wide.is_marked(w_last).await,

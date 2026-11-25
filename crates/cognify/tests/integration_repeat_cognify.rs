@@ -896,6 +896,10 @@ async fn a_dataset_locked_in_this_process_is_skipped_by_recovery() {
 /// is still rolled back and closed (Python `get_unterminated_pipeline_runs`
 /// partitions by `pipeline_run_id`; `recovery.py:102` re-reads the run's own
 /// latest row). With no gate left, that newer run is the normal case.
+///
+/// Python's recovery has no run results, so the completion stamps decide
+/// alone what it keeps (`_kept_data_ids`, SDK-1694 O5b): the dead run's rows
+/// for an item now stamped complete stay; its rows for an unstamped item go.
 #[tokio::test]
 async fn a_run_abandoned_before_a_newer_completed_run_is_still_recovered() {
     let h = Harness::new().await;
@@ -907,7 +911,10 @@ async fn a_run_abandoned_before_a_newer_completed_run_is_still_recovered() {
     let token = marker.token().expect("marker created");
     drop(marker);
     let dead_run = h.seed_started_row(dataset_id, Some(token)).await;
-    let slug = h.seed_run_artifact(dataset_id, items[0].id, dead_run).await;
+    let stamped_slug = h.seed_run_artifact(dataset_id, items[0].id, dead_run).await;
+    let slug = h
+        .seed_run_artifact(dataset_id, Uuid::new_v4(), dead_run)
+        .await;
 
     // The next cognify is not refused by the stale row, and completes.
     let result = h.cognify(dataset_id, items, &config).await;
@@ -926,7 +933,15 @@ async fn a_run_abandoned_before_a_newer_completed_run_is_still_recovered() {
         .expect("get_pipeline_run")
         .expect("rows exist");
     assert_eq!(dead.status, PipelineRunStatus::Errored);
-    assert!(!h.graph_has(slug).await, "the dead run is rolled back");
+    assert!(
+        !h.graph_has(slug).await,
+        "the dead run is rolled back for the item nothing stamped"
+    );
+    assert!(
+        h.graph_has(stamped_slug).await,
+        "…and keeps what it wrote for the item now stamped complete, as Python's \
+         recovery does"
+    );
     assert!(
         !h.ownership_dir.join(token.to_string()).exists(),
         "and its marker removed"

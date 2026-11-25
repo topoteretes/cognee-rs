@@ -3449,7 +3449,7 @@ mod tests {
             cognee_chunking::TokenCountMode::PerWord
         );
         assert_eq!(cognify.failure_stop, FailureStop::RunToEnd);
-        assert_eq!(cognify.rollback_scope, RollbackScope::FailedItems);
+        assert_eq!(cognify.rollback_scope, Some(RollbackScope::FailedItems));
         assert!(cognify.tolerate_summarization_failures);
         assert_eq!(cognify.chunk_failure_ratio_threshold, 0.5);
         assert_eq!(cognify.failure_report_cap, 7);
@@ -3477,6 +3477,19 @@ mod tests {
         let default = cognee_cognify::CognifyConfig::default();
         assert_eq!(cognify.failure_stop, default.failure_stop);
         assert_eq!(cognify.rollback_scope, default.rollback_scope);
+        // SDK-1694 D4: unset, the scope follows `incremental_loading` (on by
+        // default), as Python's rollback does.
+        assert_eq!(
+            cognify.effective_rollback_scope(),
+            cognee_cognify::RollbackScope::FailedItems
+        );
+        assert_eq!(
+            cognify
+                .clone()
+                .with_incremental_loading(false)
+                .effective_rollback_scope(),
+            cognee_cognify::RollbackScope::WholeRun
+        );
         assert_eq!(
             cognify.chunk_failure_ratio_threshold,
             default.chunk_failure_ratio_threshold

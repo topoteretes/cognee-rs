@@ -157,7 +157,7 @@ async fn incremental_loading_off_reprocesses_everything() {
     );
 }
 
-/// A failed run marks nothing, so the next run redoes everything it was
+/// A failed `WholeRun` run marks nothing, so the next run redoes everything it was
 /// responsible for. Without this, invariant I2 would be violated in the worst
 /// possible direction: a swept item that still looks complete is skipped
 /// forever.
@@ -168,9 +168,9 @@ async fn markers_are_not_written_for_a_failed_run() {
     let bad = harness.add_file("Bob FAILMARKER breaks here.").await;
 
     harness
-        .run(&extraction_config())
+        .run(&extraction_config().with_rollback_scope(cognee_cognify::RollbackScope::WholeRun))
         .await
-        .expect_err("the default pair errors on the first failure");
+        .expect_err("`FailFast` + `WholeRun` errors on the first failure");
 
     assert!(!harness.is_marked(good).await);
     assert!(!harness.is_marked(bad).await);
@@ -238,8 +238,9 @@ async fn an_earlier_runs_marker_survives_a_later_runs_failure() {
     );
 }
 
-/// A run that completed with files still outstanding leaves them unmarked, so
-/// the next run redoes exactly those files and skips the rest.
+/// A run with failed files leaves them unmarked, so the next run redoes
+/// exactly those files and skips the rest. (It errors since the SDK-1694 O5b
+/// review, as Python's does, and keeps the files it completed.)
 #[tokio::test]
 async fn a_run_that_completed_with_outstanding_failures_is_redone_for_exactly_those_files() {
     let mut harness = Harness::new().await;
@@ -252,13 +253,13 @@ async fn a_run_that_completed_with_outstanding_failures_is_redone_for_exactly_th
         .with_failure_stop(FailureStop::RunToEnd)
         .with_rollback_scope(RollbackScope::FailedItems)
         .with_chunk_failure_ratio_threshold(0.5);
-    let first_run = harness
-        .run(&tolerant)
-        .await
-        .expect("the tolerant run completes below the ratio");
-    assert_eq!(first_run.failures.failed_items().len(), 1);
+    let first_run = rollback_harness::failed_report(
+        harness.run(&tolerant).await,
+        "a failed file errors the run",
+    );
+    assert_eq!(first_run.failed_items().len(), 1);
 
-    // Same items. The dataset's latest run says COMPLETED, but a file is
+    // Same items. A file is
     // outstanding — so this must run, and must process exactly the file that
     // failed.
     let second_run = harness

@@ -20,7 +20,7 @@ pub use authorized::AuthorizedDeleteService;
 pub use startup_recovery::{
     ABANDONED_RUN_ERROR, DEFAULT_STALE_RUN_MIN_AGE, RecoveryReport, recover_stale_pipeline_runs,
 };
-pub use sweep::{RunSweeper, SweepOutcome, SweepScope};
+pub use sweep::{RunSweeper, SweepOutcome, SweepScope, holding_run_id};
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;

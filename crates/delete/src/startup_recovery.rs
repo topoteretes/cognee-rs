@@ -8,10 +8,16 @@
 //! never watched failing by anybody: the code that would have swept it
 //! (`cognee_cognify::rollback::on_run_failed`) dies with it. What survives is
 //! a `pipeline_runs` row still at `STARTED`, whatever the run had already
-//! written into the graph and vector stores, and — because a cognify
-//! completion marker is written only on success — *no* marker for any of the
-//! items it processed. The next run would extract the same entities again on
-//! top of the ones the corpse left behind.
+//! written into the graph and vector stores, and — under `whole_run` — *no*
+//! completion marker for any of the items it processed. The next run would
+//! extract the same entities again on top of the ones the corpse left behind.
+//!
+//! A `failed_items` run marks each document as it saves it (SDK-1694 O5b),
+//! so a killed one leaves markers on the documents it finished. Recovery
+//! keeps what the items the run touched that now carry a marker own, and
+//! sweeps the rest ([`RunSweeper::sweep_run_keeping`]), as Python's recovery
+//! keeps the stamped items (`rollback.py` `_kept_data_ids` with no run
+//! results: the stamp decides alone).
 //!
 //! # Proving a run abandoned
 //!
@@ -50,7 +56,7 @@ use cognee_graph::GraphDBTrait;
 use cognee_vector::VectorDB;
 use tracing::{debug, info, warn};
 
-use crate::{RunSweeper, SweepScope};
+use crate::RunSweeper;
 
 /// The pipeline whose failed runs have artifacts to roll back. Any other
 /// pipeline's abandoned run is only closed, as in Python's `ROLLBACK_HANDLERS`.
@@ -205,8 +211,25 @@ pub async fn recover_stale_pipeline_runs(
         );
 
         if current.pipeline_name == COGNIFY_PIPELINE_NAME {
+            // Python's recovery has no run results, so the stamps decide
+            // alone which items it keeps (`_kept_data_ids`): an item the dead
+            // run marked complete was fully saved before it died.
+            let kept = match stamped_items_of_run(
+                database.as_ref(),
+                current.pipeline_run_id,
+                dataset_id,
+            )
+            .await
+            {
+                Ok(kept) => kept,
+                Err(e) => {
+                    warn!(pipeline_run_id = %current.pipeline_run_id, "recovery failed, will retry: {e}");
+                    report.failed += 1;
+                    continue;
+                }
+            };
             let outcome = sweeper
-                .sweep_logging_failure(&SweepScope::whole_run(current.pipeline_run_id, dataset_id))
+                .sweep_run_keeping_logging_failure(current.pipeline_run_id, dataset_id, &kept)
                 .await;
             report.graph_nodes_deleted += outcome.graph_nodes_deleted;
             report.vector_points_deleted += outcome.vector_points_deleted;
@@ -257,4 +280,24 @@ pub async fn recover_stale_pipeline_runs(
         "startup recovery of pipeline runs finished"
     );
     report
+}
+
+/// The data items `pipeline_run_id` wrote rows for in `dataset_id` that carry
+/// the dataset's cognify completion marker: the items a dead `failed_items`
+/// run saved and marked before it died (SDK-1694 O5b).
+async fn stamped_items_of_run(
+    database: &dyn RelationalDb,
+    pipeline_run_id: uuid::Uuid,
+    dataset_id: uuid::Uuid,
+) -> Result<Vec<uuid::Uuid>, cognee_database::DatabaseError> {
+    let scope = cognee_database::RunScope::whole_run(pipeline_run_id, dataset_id);
+    let touched = cognee_database::ProvenanceDb::get_data_ids_for_run(database, &scope).await?;
+    if touched.is_empty() {
+        return Ok(Vec::new());
+    }
+    let stamped = cognee_database::ProvenanceDb::get_cognify_completed_data_ids(
+        database, dataset_id, &touched,
+    )
+    .await?;
+    Ok(stamped.into_iter().collect())
 }

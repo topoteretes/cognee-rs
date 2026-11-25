@@ -1284,7 +1284,9 @@ pub struct RunScope<'a> {
     pub pipeline_run_id: Uuid,
     pub dataset_id: Uuid,
     /// `None` selects every data item the run touched in this dataset;
-    /// `Some(ids)` narrows to those items, and `Some(&[])` selects nothing.
+    /// `Some(ids)` narrows to those items — and to the run's nil-`data_id`
+    /// rows of the artifacts only they produced (SDK-1694 O5b) — and
+    /// `Some(&[])` selects nothing.
     pub data_ids: Option<&'a [Uuid]>,
 }
 
@@ -1327,31 +1329,158 @@ impl<'a> RunScope<'a> {
     }
 }
 
-/// The selection predicate over `nodes`: `pipeline_run_id = :run AND
-/// dataset_id = :dataset [AND data_id IN (:data…)]`.
+/// Which ledger table a run-scoped query reads, and the columns that make two
+/// of its rows name the same artifact.
+#[derive(Clone, Copy)]
+enum Ledger {
+    /// `nodes`: one artifact per `slug` (the graph node id).
+    Nodes,
+    /// `edges`: one artifact per `(source, target, relationship)`. Not the
+    /// slug, which every `is_a` row (every row of one relationship) shares.
+    Edges,
+}
+
+impl Ledger {
+    fn table(self) -> &'static str {
+        match self {
+            Self::Nodes => "nodes",
+            Self::Edges => "edges",
+        }
+    }
+
+    fn key(self) -> &'static [&'static str] {
+        match self {
+            Self::Nodes => &["slug"],
+            Self::Edges => &["source_node_id", "destination_node_id", "relationship_name"],
+        }
+    }
+}
+
+fn ledger_col(table: &str, column: &str) -> Expr {
+    Expr::col((Alias::new(table), Alias::new(column)))
+}
+
+/// Whether the row of `ledger` referred to as `outer` is a **nil row an
+/// item-scoped sweep takes with it** (SDK-1694 O5b).
+///
+/// Since O5a an EntityType, a structural edge and an ontology-first entity
+/// carry one ledger row per producing document **and** a row with the nil
+/// `data_id`, the guard the data-scoped delete reads. A `data_id IN (…)`
+/// selection never selects the nil row, so without this an item-scoped sweep
+/// removed the failed document's rows while the run's nil row went on
+/// claiming the artifact: a type only the failed document declared outlived
+/// it.
+///
+/// A nil row goes with the sweep when both hold (the caller adds that it is
+/// this run's and this dataset's):
+///
+/// - a row of the same artifact (the [`Ledger::key`]) is **swept**: this
+///   run's, in this dataset, naming one of the swept items. A nil row no
+///   swept document shares — a DLT schema node, a legacy row — is a run-level
+///   artifact the item scope says nothing about, so it stays;
+/// - **no row with a non-nil `data_id` survives the sweep** for the same
+///   artifact in this dataset: another run's, a `NULL`-run row, or one naming
+///   an item outside the swept set. Such a row means a document still holds
+///   the artifact, and the nil row goes on guarding it.
+///
+/// Correlated `EXISTS` subqueries over the predicate, never an `IN` list of
+/// row ids, for the reason [`get_unique_nodes_for_run`] gives.
+fn swept_nil_row(
+    scope: &RunScope<'_>,
+    data_hexes: &[String],
+    ledger: Ledger,
+    outer: &str,
+) -> Condition {
+    let nil = uuid_hex::to_hex(Uuid::nil());
+    let same_artifact = |inner: &str| {
+        ledger.key().iter().fold(Condition::all(), |cond, column| {
+            cond.add(ledger_col(inner, column).equals((Alias::new(outer), Alias::new(*column))))
+        })
+    };
+    let swept_sibling = Query::select()
+        .expr(Expr::val(1))
+        .from_as(Alias::new(ledger.table()), Alias::new("swept_sibling"))
+        .cond_where(
+            same_artifact("swept_sibling")
+                .add(ledger_col("swept_sibling", "pipeline_run_id").eq(scope.run_hex()))
+                .add(ledger_col("swept_sibling", "dataset_id").eq(scope.dataset_hex()))
+                .add(ledger_col("swept_sibling", "data_id").is_in(data_hexes.to_vec())),
+        )
+        .to_owned();
+    // `IS NULL` is not redundant with `<> :run`; see `get_unique_nodes_for_run`.
+    let kept_sibling = Query::select()
+        .expr(Expr::val(1))
+        .from_as(Alias::new(ledger.table()), Alias::new("kept_sibling"))
+        .cond_where(
+            same_artifact("kept_sibling")
+                .add(ledger_col("kept_sibling", "dataset_id").eq(scope.dataset_hex()))
+                .add(ledger_col("kept_sibling", "data_id").ne(nil.clone()))
+                .add(
+                    Condition::any()
+                        .add(ledger_col("kept_sibling", "pipeline_run_id").is_null())
+                        .add(ledger_col("kept_sibling", "pipeline_run_id").ne(scope.run_hex()))
+                        .add(ledger_col("kept_sibling", "data_id").is_not_in(data_hexes.to_vec())),
+                ),
+        )
+        .to_owned();
+    Condition::all()
+        .add(ledger_col(outer, "data_id").eq(nil))
+        .add(Expr::exists(swept_sibling))
+        .add(Expr::exists(kept_sibling).not())
+}
+
+/// The selection predicate over `ledger`, its rows referred to as `outer`:
+/// `pipeline_run_id = :run AND dataset_id = :dataset [AND (data_id IN
+/// (:data…) OR the row is a swept nil row)]` — see [`swept_nil_row`].
 ///
 /// `pipeline_run_id = :run` is NULL-safe by construction — a `NULL` column
 /// never equals anything — so rows written before run ownership existed drop
 /// out of every select and every delete without a special case.
-fn node_selection(scope: &RunScope<'_>) -> Condition {
+fn run_selection(scope: &RunScope<'_>, ledger: Ledger, outer: &str) -> Condition {
     let mut cond = Condition::all()
-        .add(node::Column::PipelineRunId.eq(scope.run_hex()))
-        .add(node::Column::DatasetId.eq(scope.dataset_hex()));
+        .add(ledger_col(outer, "pipeline_run_id").eq(scope.run_hex()))
+        .add(ledger_col(outer, "dataset_id").eq(scope.dataset_hex()));
     if let Some(data_hexes) = scope.data_hexes() {
-        cond = cond.add(node::Column::DataId.is_in(data_hexes));
+        cond = cond.add(
+            Condition::any()
+                .add(ledger_col(outer, "data_id").is_in(data_hexes.clone()))
+                .add(swept_nil_row(scope, &data_hexes, ledger, outer)),
+        );
     }
     cond
 }
 
-/// The selection predicate over `edges`; see [`node_selection`].
-fn edge_selection(scope: &RunScope<'_>) -> Condition {
-    let mut cond = Condition::all()
-        .add(edge::Column::PipelineRunId.eq(scope.run_hex()))
-        .add(edge::Column::DatasetId.eq(scope.dataset_hex()));
+/// The negation of [`run_selection`] for the row referred to as `alias`: a
+/// row **outside** the scope — another run, a `NULL` run, another dataset,
+/// or (when narrowed) a row naming no swept item that is not one of the nil
+/// rows the sweep takes.
+///
+/// `IS NULL` is NOT redundant with `<> :run`: `NULL <> :run` evaluates to
+/// NULL, not TRUE, so without it an artifact also claimed by a pre-ownership
+/// row would look unclaimed and a sweep would delete what predates every run.
+fn outside_run(scope: &RunScope<'_>, ledger: Ledger, alias: &str) -> Condition {
+    let mut outside = Condition::any()
+        .add(ledger_col(alias, "pipeline_run_id").is_null())
+        .add(ledger_col(alias, "pipeline_run_id").ne(scope.run_hex()))
+        .add(ledger_col(alias, "dataset_id").ne(scope.dataset_hex()));
     if let Some(data_hexes) = scope.data_hexes() {
-        cond = cond.add(edge::Column::DataId.is_in(data_hexes));
+        outside = outside.add(
+            Condition::all()
+                .add(ledger_col(alias, "data_id").is_not_in(data_hexes.clone()))
+                .add(swept_nil_row(scope, &data_hexes, ledger, alias).not()),
+        );
     }
-    cond
+    outside
+}
+
+/// The selection predicate over `nodes`; see [`run_selection`].
+fn node_selection(scope: &RunScope<'_>) -> Condition {
+    run_selection(scope, Ledger::Nodes, Ledger::Nodes.table())
+}
+
+/// The selection predicate over `edges`; see [`run_selection`].
+fn edge_selection(scope: &RunScope<'_>) -> Condition {
+    run_selection(scope, Ledger::Edges, Ledger::Edges.table())
 }
 
 /// Return the provenance nodes the run owns within `scope`.
@@ -1462,18 +1591,7 @@ pub async fn get_unique_nodes_for_run(
         return Ok(Vec::new());
     }
     let n2 = Alias::new("n2");
-
-    // `IS NULL` is NOT redundant with `<> :run`: `NULL <> :run` evaluates to
-    // NULL, not TRUE, so without it a slug also claimed by a pre-ownership row
-    // would look unclaimed and the sweep would delete an artifact that
-    // predates every run.
-    let mut outside = Condition::any()
-        .add(Expr::col((n2.clone(), node::Column::PipelineRunId)).is_null())
-        .add(Expr::col((n2.clone(), node::Column::PipelineRunId)).ne(scope.run_hex()))
-        .add(Expr::col((n2.clone(), node::Column::DatasetId)).ne(scope.dataset_hex()));
-    if let Some(data_hexes) = scope.data_hexes() {
-        outside = outside.add(Expr::col((n2.clone(), node::Column::DataId)).is_not_in(data_hexes));
-    }
+    let outside = outside_run(scope, Ledger::Nodes, "n2");
 
     let claimed = Query::select()
         .expr(Expr::val(1))
@@ -1524,14 +1642,7 @@ pub async fn get_unique_edges_for_run(
         return Ok(Vec::new());
     }
     let e2 = Alias::new("e2");
-
-    let mut outside = Condition::any()
-        .add(Expr::col((e2.clone(), edge::Column::PipelineRunId)).is_null())
-        .add(Expr::col((e2.clone(), edge::Column::PipelineRunId)).ne(scope.run_hex()))
-        .add(Expr::col((e2.clone(), edge::Column::DatasetId)).ne(scope.dataset_hex()));
-    if let Some(data_hexes) = scope.data_hexes() {
-        outside = outside.add(Expr::col((e2.clone(), edge::Column::DataId)).is_not_in(data_hexes));
-    }
+    let outside = outside_run(scope, Ledger::Edges, "e2");
 
     let claimed = Query::select()
         .expr(Expr::val(1))
@@ -1609,14 +1720,7 @@ pub async fn get_edge_retrieval_texts_claimed_outside_run(
 ) -> Result<Vec<String>, DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
 
-    // `IS NULL` is not redundant with `<> :run`; see `get_unique_nodes_for_run`.
-    let mut outside = Condition::any()
-        .add(edge::Column::PipelineRunId.is_null())
-        .add(edge::Column::PipelineRunId.ne(scope.run_hex()))
-        .add(edge::Column::DatasetId.ne(scope.dataset_hex()));
-    if let Some(data_hexes) = scope.data_hexes() {
-        outside = outside.add(edge::Column::DataId.is_not_in(data_hexes));
-    }
+    let outside = outside_run(scope, Ledger::Edges, Ledger::Edges.table());
 
     let texts = retrieval_texts_where(db, outside).await?;
     Span::current().record(COGNEE_DB_ROW_COUNT, texts.len() as i64);
@@ -1757,6 +1861,163 @@ pub async fn delete_edges_for_run(
     Ok(deleted)
 }
 
+/// Ids per `IN (…)` list of a retag. Each statement binds the list once plus
+/// three scalars, far below SQLite's and Postgres' bound-variable caps.
+const RETAG_BATCH: usize = 500;
+
+/// Move the ledger rows run `from` wrote in `dataset_id` to run `to`: every
+/// row, or only the rows naming one of `data_ids`. Returns the rows moved.
+///
+/// The building block of a sweep that keeps some of a run's data items
+/// (SDK-1694 O5b): the kept items' rows are moved aside under a holding run
+/// id, the run is swept whole — so the moved rows are claimants *outside* the
+/// run and keep every artifact they name — and the rows are moved back. A
+/// whole-run sweep binds no id list, so the number of kept or swept items is
+/// unbounded; only this update binds them, [`RETAG_BATCH`] at a time, which
+/// is exact because moving a row is the same whichever batch moves it.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.retag_run_rows",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn retag_run_rows(
+    db: &DatabaseConnection,
+    from: Uuid,
+    dataset_id: Uuid,
+    data_ids: Option<&[Uuid]>,
+    to: Uuid,
+) -> Result<u64, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let (from_hex, to_hex, dataset_hex) = (
+        uuid_hex::to_hex(from),
+        uuid_hex::to_hex(to),
+        uuid_hex::to_hex(dataset_id),
+    );
+    let batches: Vec<Option<Vec<String>>> = match data_ids {
+        None => vec![None],
+        Some(ids) => ids
+            .chunks(RETAG_BATCH)
+            .map(|batch| Some(batch.iter().copied().map(uuid_hex::to_hex).collect()))
+            .collect(),
+    };
+    let mut moved = 0;
+    for batch in batches {
+        let mut nodes = Condition::all()
+            .add(node::Column::PipelineRunId.eq(from_hex.clone()))
+            .add(node::Column::DatasetId.eq(dataset_hex.clone()));
+        let mut edges = Condition::all()
+            .add(edge::Column::PipelineRunId.eq(from_hex.clone()))
+            .add(edge::Column::DatasetId.eq(dataset_hex.clone()));
+        if let Some(hexes) = batch {
+            nodes = nodes.add(node::Column::DataId.is_in(hexes.clone()));
+            edges = edges.add(edge::Column::DataId.is_in(hexes));
+        }
+        moved += node::Entity::update_many()
+            .col_expr(node::Column::PipelineRunId, Expr::value(to_hex.clone()))
+            .filter(nodes)
+            .exec(db)
+            .await
+            .map_err(map_sea_err)?
+            .rows_affected;
+        moved += edge::Entity::update_many()
+            .col_expr(edge::Column::PipelineRunId, Expr::value(to_hex.clone()))
+            .filter(edges)
+            .exec(db)
+            .await
+            .map_err(map_sea_err)?
+            .rows_affected;
+    }
+    Span::current().record(COGNEE_DB_ROW_COUNT, moved as i64);
+    Ok(moved)
+}
+
+/// Move run `from`'s nil-`data_id` rows in `dataset_id` that a non-nil row of
+/// the same artifact still stands beside — a row of another run, a `NULL`
+/// run, or one already moved to `to` — to run `to`. Returns the rows moved.
+///
+/// The nil row is the guard the data-scoped delete reads for an EntityType, a
+/// structural edge or an ontology-first entity (SDK-1694 O5a). A sweep that
+/// keeps some documents keeps it while a kept or outside document still
+/// produces the artifact, and takes it otherwise: a nil row nothing else
+/// stands beside (a DLT schema node, a type only swept documents declared)
+/// goes with the run, as Python's rollback deletes every row of the run but
+/// the kept items'. Nodes match on the slug, edges on (source, target,
+/// relationship). The sibling is looked for in this dataset only, like the
+/// guard it is. No id list is bound.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.retag_guarded_nil_rows",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn retag_guarded_nil_rows(
+    db: &DatabaseConnection,
+    from: Uuid,
+    dataset_id: Uuid,
+    to: Uuid,
+) -> Result<u64, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let (from_hex, to_hex, dataset_hex, nil) = (
+        uuid_hex::to_hex(from),
+        uuid_hex::to_hex(to),
+        uuid_hex::to_hex(dataset_id),
+        uuid_hex::to_hex(Uuid::nil()),
+    );
+    let guarded = |ledger: Ledger| {
+        let outer = ledger.table();
+        let same_artifact = ledger.key().iter().fold(Condition::all(), |cond, column| {
+            cond.add(
+                ledger_col("standing", column).equals((Alias::new(outer), Alias::new(*column))),
+            )
+        });
+        // `IS NULL` is not redundant with `<> :run`; see `get_unique_nodes_for_run`.
+        let standing = Query::select()
+            .expr(Expr::val(1))
+            .from_as(Alias::new(outer), Alias::new("standing"))
+            .cond_where(
+                same_artifact
+                    .add(ledger_col("standing", "dataset_id").eq(dataset_hex.clone()))
+                    .add(ledger_col("standing", "data_id").ne(nil.clone()))
+                    .add(
+                        Condition::any()
+                            .add(ledger_col("standing", "pipeline_run_id").is_null())
+                            .add(ledger_col("standing", "pipeline_run_id").ne(from_hex.clone())),
+                    ),
+            )
+            .to_owned();
+        Condition::all()
+            .add(ledger_col(outer, "pipeline_run_id").eq(from_hex.clone()))
+            .add(ledger_col(outer, "dataset_id").eq(dataset_hex.clone()))
+            .add(ledger_col(outer, "data_id").eq(nil.clone()))
+            .add(Expr::exists(standing))
+    };
+    let mut moved = node::Entity::update_many()
+        .col_expr(node::Column::PipelineRunId, Expr::value(to_hex.clone()))
+        .filter(guarded(Ledger::Nodes))
+        .exec(db)
+        .await
+        .map_err(map_sea_err)?
+        .rows_affected;
+    moved += edge::Entity::update_many()
+        .col_expr(edge::Column::PipelineRunId, Expr::value(to_hex))
+        .filter(guarded(Ledger::Edges))
+        .exec(db)
+        .await
+        .map_err(map_sea_err)?
+        .rows_affected;
+    Span::current().record(COGNEE_DB_ROW_COUNT, moved as i64);
+    Ok(moved)
+}
+
 /// The distinct data items the run touched within `scope` — the set whose
 /// completion markers a sweep has to clear.
 ///
@@ -1820,6 +2081,8 @@ pub async fn get_data_ids_for_run(
     let mut data_ids = BTreeSet::new();
     for hex in node_hexes.into_iter().chain(edge_hexes) {
         match uuid_hex::from_hex(&hex) {
+            // A nil row names no data item, so there is no marker to clear.
+            Ok(id) if id.is_nil() => {}
             Ok(id) => {
                 data_ids.insert(id);
             }

@@ -11,12 +11,17 @@
 //! * [`FailureStop`] — *when to stop*: [`FailureStop::FailFast`] (default) stops
 //!   scheduling further work at the first stage-level failure;
 //!   [`FailureStop::RunToEnd`] keeps going and decides at the end.
-//! * [`RollbackScope`] — *what to sweep*: [`RollbackScope::WholeRun`] (default),
+//! * [`RollbackScope`] — *what to sweep*: [`RollbackScope::WholeRun`],
 //!   [`RollbackScope::FailedItems`], or — in code only, never from the
-//!   environment — [`RollbackScope::Nothing`].
+//!   environment — [`RollbackScope::Nothing`]. Unset, a cognify config uses
+//!   `FailedItems` with `incremental_loading` and `WholeRun` without it
+//!   ([`crate::CognifyConfig::effective_rollback_scope`], SDK-1694 D4).
 //!
 //! The default pair is Python's default behaviour in both execution and end
-//! state: stop at the first failure, error the run.
+//! state: stop at the first failure, keep the documents the run completed
+//! before it stopped, as Python's per-item rollback keeps the items it
+//! stamped, and error the run, as Python's `run_tasks` does whenever a data
+//! item errored.
 //!
 //! Failure policy is a property of the stage, not a user choice — with one
 //! exception. Summarization failures are fatal by default (Python parity) and
@@ -35,13 +40,19 @@ use uuid::Uuid;
 /// Axis 1 — when a run stops scheduling further work.
 ///
 /// Python's counterpart is the `RAISE_INCREMENTAL_LOADING_ERRORS` environment
-/// variable (`run_tasks_data_item.py:200`, default `true`): with it set, the
-/// first failed item re-raises out of a bare `asyncio.gather` and the run
-/// stops; unset, every item runs and `run_tasks.py:174-179` raises afterwards
-/// because one errored. Either way Python sweeps the whole run — the flag
-/// chooses *when to stop*, never *what survives*, which is exactly this axis.
-/// The `cognify.raise_incremental_loading_errors` setting binds that
-/// variable, so one `.env` configures both SDKs identically.
+/// variable (`run_tasks_data_item.py`, default `true`). Python runs one
+/// per-item task chain per data item (`run_tasks.py`, at most
+/// `data_per_batch` at once). With the flag set, an item's error re-raises out
+/// of the `asyncio.gather` over the items: `run_tasks` cancels the items
+/// still running and rolls back. Unset, the item's handler records the error
+/// in its result, every item runs, and `run_tasks` raises afterwards because
+/// one errored. Either way the run errors, and with `incremental_loading` the
+/// rollback handler keeps the items the run had already stamped complete
+/// (`cognify/rollback.py` `_kept_data_ids`) — the flag chooses *when to
+/// stop*, and with it how many items finish first, never *what a finished
+/// item keeps*, which is exactly this axis. The
+/// `cognify.raise_incremental_loading_errors` setting binds that variable, so
+/// one `.env` configures both SDKs identically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum FailureStop {
     /// Stop scheduling further work in the failing stage once a failure has
@@ -89,34 +100,45 @@ impl FailureStop {
 /// which turns it into the scope handed to the sweep.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum RollbackScope {
-    /// Remove everything this run created.
+    /// Remove everything this run created. The enum's default (and
+    /// [`FailurePolicy::default`]'s); a cognify config left unset resolves
+    /// to it only without `incremental_loading`
+    /// ([`crate::CognifyConfig::effective_rollback_scope`]).
     #[default]
     WholeRun,
 
     /// Remove only the contributions of the files that failed; keep and mark
-    /// the rest.
+    /// the rest — Python's per-item rollback (`cognify/rollback.py`).
     ///
-    /// **Only while the run as a whole is still survivable.** The judgement is
-    /// [`FailureReport::is_fatal`]: a run whose chunk failure ratio exceeds
-    /// [`FailurePolicy::chunk_failure_ratio_threshold`], or in which no item
-    /// survived at all, is fatal — and a fatal run under this scope escalates
-    /// to [`Self::WholeRun`] when [`crate::rollback`] decides the sweep. The
-    /// escalation deletes the files that *completed* too, together with their
-    /// completion markers, so the next run redoes the whole dataset rather
-    /// than the failures alone. Selecting this scope is therefore not a
-    /// promise that good files are kept; it is a promise that they are kept
-    /// *below the threshold*.
+    /// Each document is saved as soon as all its results are in and, with
+    /// `incremental_loading`, marked complete right after (SDK-1694 O5b), so a
+    /// completed document survives whatever happens to the run afterwards:
     ///
-    /// That is deliberate. The threshold is how a caller says "above this
-    /// proportion, do not trust any of this run", and the honest end state for
-    /// a run nobody trusts is the pre-run one — which is also the only state a
-    /// retry converges from. A caller who would rather keep the partial result
-    /// raises the threshold
-    /// ([`crate::CognifyConfig::with_chunk_failure_ratio_threshold`]); nothing
-    /// keeps it once the run is fatal.
+    /// * **No item failed**: the run completes and returns `Ok`.
+    /// * **An item failed**, a save outside a document failed, or the run was
+    ///   cancelled: the run returns an error ([`FailureReport::is_fatal`]), as
+    ///   Python's `run_tasks` raises whenever a data item errored, and
+    ///   [`crate::rollback`] sweeps everything the run wrote *except* the
+    ///   documents it completed, as Python's rollback keeps the items its
+    ///   failed run stamped. Before O5b this swept the whole run whenever the
+    ///   run failed, and a run below
+    ///   [`FailurePolicy::chunk_failure_ratio_threshold`] returned `Ok`; the
+    ///   threshold no longer decides anything. A caller who wants the pre-run
+    ///   state back after a failure selects [`Self::WholeRun`].
+    ///
+    /// A failed save of one document fails that document only
+    /// ([`FailureStage::Persistence`]). Without `incremental_loading` nothing
+    /// is marked, so a completed document is still kept, but the next run
+    /// processes it again.
     FailedItems,
 
     /// Remove nothing: whatever the run wrote before it failed stays.
+    ///
+    /// After a stop (a `FailFast` failure, or a failed save) the document
+    /// stage saves nothing more: the documents saved before the stop keep
+    /// their artifacts and get no completion marker, and the complete
+    /// documents waiting behind the stop are discarded. A run that fails marks
+    /// nothing, so the next run processes every item again.
     ///
     /// A library-level escape hatch, and deliberately **not selectable from
     /// configuration** — the config parser has no spelling for it — because
@@ -142,9 +164,11 @@ impl RollbackScope {
     /// Parse the `cognify.rollback_scope` setting
     /// (`COGNEE_COGNIFY_ROLLBACK_SCOPE`).
     ///
-    /// Prefixed and namespaced because this axis has no Python counterpart at
-    /// all — Python always sweeps the whole run — so the name should read as a
-    /// Rust extension rather than a parity feature.
+    /// Prefixed and namespaced because this axis has no Python setting: Python
+    /// keeps the items its failed run stamped complete when
+    /// `incremental_loading` is on (`failed_items`) and rolls back the whole
+    /// run when it is off (`whole_run`), so the name should read as a Rust
+    /// extension rather than a parity feature.
     ///
     /// [`Self::Nothing`] has no spelling here on purpose: it is the one scope
     /// whose leftovers no retry can repair, so no deployment should be able to
@@ -179,6 +203,13 @@ pub enum FailureStage {
     /// Failure unit is the repo item, as in Python's per-item run
     /// (`run_tasks_data_item.py`).
     CodeGraph,
+    /// Saving one document — its ledger rows, graph writes, vector points or
+    /// edge evidence (SDK-1694 O5b). Failure unit is the document, as an
+    /// item's `add_data_points` fails its own item in Python. Recorded only
+    /// under [`RollbackScope::FailedItems`]; every other scope fails the run
+    /// on a failed save. Not charged to the chunk failure ratio, as a
+    /// chunking failure is not.
+    Persistence,
 }
 
 impl fmt::Display for FailureStage {
@@ -188,6 +219,7 @@ impl fmt::Display for FailureStage {
             FailureStage::GraphExtraction => "graph extraction",
             FailureStage::Summarization => "summarization",
             FailureStage::CodeGraph => "code graph",
+            FailureStage::Persistence => "persistence",
         };
         f.write_str(name)
     }
@@ -540,43 +572,28 @@ impl FailureReport {
         self.failed_chunks.len() as f64 / self.total_chunks as f64
     }
 
-    /// Whether this report makes the run fail, under `policy`.
+    /// Whether this report makes the run fail, under `policy`: whenever any
+    /// item failed, under every scope.
     ///
-    /// * No failed item — only tolerated summarization failures, or nothing at
-    ///   all — is never fatal.
-    /// * `WholeRun` and `Nothing` are fatal on any failed item: the first
-    ///   sweeps everything, and the second knowingly leaves an incomplete
-    ///   dataset in place, so neither can honestly report success.
-    /// * `FailedItems` tolerates failures below the ratio threshold, with one
-    ///   backstop: if no item survived, the run failed regardless of the ratio.
-    ///   Survival subtracts both failed and *unreached* items. That backstop
-    ///   matters twice over: a file that fails *at the chunk stage* produced no
-    ///   chunks so it contributes to neither side of the ratio, and an early
-    ///   `FailFast` abort leaves the rest undispatched — a run that
-    ///   completed nothing would otherwise score a tiny ratio and report `Ok`.
-    pub fn is_fatal(&self, policy: &FailurePolicy) -> bool {
-        if self.failed_items.is_empty() {
-            return false;
-        }
-        match policy.scope {
-            RollbackScope::WholeRun | RollbackScope::Nothing => true,
-            RollbackScope::FailedItems => {
-                // No item survived — fatal regardless of the ratio. Unreached
-                // items count here: an early `FailFast` abort leaves the rest
-                // of the dataset undispatched, and a run that completed
-                // *nothing* cannot honestly report success even though its
-                // chunk ratio is tiny. Files that did complete keep
-                // the run truthful, which is what makes FailFast + FailedItems
-                // useful rather than merely quiet.
-                let survived = self
-                    .total_items
-                    .saturating_sub(self.failed_items.len() + self.unreached_items.len());
-                if self.total_items > 0 && survived == 0 {
-                    return true;
-                }
-                self.chunk_failure_ratio() > policy.chunk_failure_ratio_threshold
-            }
-        }
+    /// * No failed item — only tolerated summarization failures, items left
+    ///   unreached because no document type matches their extension, or
+    ///   nothing at all — is never fatal. (A `FailFast` stop leaves items
+    ///   unreached only together with the failed item that stopped it.)
+    /// * `WholeRun` and `Nothing` sweep everything or knowingly leave an
+    ///   incomplete dataset, so neither can honestly report success.
+    /// * `FailedItems` errors too, as Python's `run_tasks` raises
+    ///   `PipelineRunFailedError` whenever a data item errored ("If any data
+    ///   item could not be processed propagate error") — and its rollback
+    ///   still keeps the items the run completed, which `crate::rollback`
+    ///   does here. Before the SDK-1694 O5b review a `FailedItems` run below
+    ///   [`FailurePolicy::chunk_failure_ratio_threshold`] returned `Ok`, so a
+    ///   re-run that stopped at the same bad document again reported success
+    ///   every time. The ratio is still reported ([`Self::chunk_failure_ratio`])
+    ///   but no longer decides anything; Python has no such threshold.
+    pub fn is_fatal(&self, _policy: &FailurePolicy) -> bool {
+        // Every scope is fatal on a failed item; the policy stays in the
+        // signature so callers keep judging a report under their policy.
+        !self.failed_items.is_empty()
     }
 }
 
@@ -617,8 +634,10 @@ pub struct FailurePolicy {
     /// is unconditional either way; this governs fatality only.
     pub tolerate_summarization_failures: bool,
 
-    /// The share of chunks that may fail before a `FailedItems` run is called
-    /// failed. Counted in chunks, evaluated per run, summarization excluded.
+    /// Kept for configuration compatibility; decides nothing since the
+    /// SDK-1694 O5b review ([`FailureReport::is_fatal`] fails a run on any
+    /// failed item, as Python does). It used to let a `FailedItems` run with
+    /// few failed chunks complete.
     pub chunk_failure_ratio_threshold: f64,
 
     /// How many individual failures the report lists before it starts counting
@@ -676,6 +695,7 @@ mod tests {
             (FailureStage::GraphExtraction, "graph extraction"),
             (FailureStage::Summarization, "summarization"),
             (FailureStage::CodeGraph, "code graph"),
+            (FailureStage::Persistence, "persistence"),
         ];
         for (stage, expected) in names {
             assert_eq!(stage.to_string(), expected);
@@ -841,7 +861,9 @@ mod tests {
     #[test]
     fn is_fatal_matrix() {
         // One failed chunk out of 60 — well under the 5 % default threshold —
-        // across four surviving items.
+        // across four surviving items. Every scope fails the run since the
+        // SDK-1694 O5b review: Python errors whenever a data item errored, and
+        // the ratio threshold decides nothing.
         let mut report = FailureReport::default();
         report.note_totals(4, 60);
         report.record(item_failure(
@@ -854,7 +876,7 @@ mod tests {
             for (scope, expected) in [
                 (RollbackScope::WholeRun, true),
                 (RollbackScope::Nothing, true),
-                (RollbackScope::FailedItems, false),
+                (RollbackScope::FailedItems, true),
             ] {
                 let policy = FailurePolicy {
                     stop,
@@ -869,20 +891,28 @@ mod tests {
             }
         }
 
-        // Over the threshold, `FailedItems` fails too.
-        let mut over = FailureReport::default();
-        over.note_totals(4, 10);
-        for _ in 0..2 {
-            over.record(item_failure(
-                FailureStage::GraphExtraction,
-                Uuid::new_v4(),
-                Some(Uuid::new_v4()),
-            ));
-        }
-        assert!(over.is_fatal(&FailurePolicy {
+        // Neither is a threshold of 100 % any different.
+        assert!(report.is_fatal(&FailurePolicy {
             scope: RollbackScope::FailedItems,
+            chunk_failure_ratio_threshold: 1.0,
             ..FailurePolicy::default()
         }));
+
+        // Items left unreached because no document type matched them, with
+        // no failed item, never fail a run.
+        let mut unsupported = FailureReport::default();
+        unsupported.note_totals(4, 10);
+        unsupported.mark_unreached(Uuid::new_v4());
+        for scope in [
+            RollbackScope::WholeRun,
+            RollbackScope::FailedItems,
+            RollbackScope::Nothing,
+        ] {
+            assert!(!unsupported.is_fatal(&FailurePolicy {
+                scope,
+                ..FailurePolicy::default()
+            }));
+        }
 
         // A report with nothing in it is never fatal, under any scope.
         let clean = FailureReport::default();
@@ -927,10 +957,12 @@ mod tests {
         );
     }
 
-    /// …but a run where some files DID complete stays tolerant. This is the
-    /// whole point of FailFast + FailedItems: stop spending, keep what is done.
+    /// …and so is a run where some files did complete: Python errors the run
+    /// whenever an item failed. What FailFast + FailedItems buys is that the
+    /// completed files are kept (by the rollback), not that the run reports
+    /// success (SDK-1694 O5b review).
     #[test]
-    fn a_failfast_abort_that_completed_some_files_is_not_fatal() {
+    fn a_failfast_abort_that_completed_some_files_is_still_fatal() {
         let mut report = FailureReport::default();
         report.note_totals(100, 100);
         report.record(item_failure(
@@ -943,12 +975,12 @@ mod tests {
         }
 
         assert!(
-            !report.is_fatal(&FailurePolicy {
+            report.is_fatal(&FailurePolicy {
                 stop: FailureStop::FailFast,
                 scope: RollbackScope::FailedItems,
                 ..FailurePolicy::default()
             }),
-            "49 files completed — the run is genuinely partial, not failed"
+            "49 files completed, but an item failed: the run errors and keeps them"
         );
     }
 

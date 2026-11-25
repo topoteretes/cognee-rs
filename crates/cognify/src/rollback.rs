@@ -12,6 +12,7 @@
 //! cases an error the caller never asked about must not replace the outcome
 //! they did.
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -149,6 +150,93 @@ impl PipelineWatcher for RunIdCapturingWatcher {
 }
 
 // ---------------------------------------------------------------------------
+// Per-document completion
+// ---------------------------------------------------------------------------
+
+/// The documents a [`RollbackScope::FailedItems`] run has **completed** so
+/// far, recorded the moment each one is (SDK-1694 O5b).
+///
+/// Python stamps a data item complete as soon as its own tasks have run
+/// (`run_tasks_data_item`), and its rollback keeps exactly the items stamped
+/// by the failed run (`rollback.py` `_kept_data_ids`). This is that stamp for
+/// Rust's one-pipeline run: the document stage's writer completes a document
+/// right after its group is saved, the code routes complete a code item right
+/// after its graph is loaded, and the post-run step completes nothing — a DLT
+/// document is completed at the end of the run, after its foreign-key edges.
+///
+/// "Completed" means saved, and — with `incremental_loading` — marked: the
+/// marker is written first and the document is recorded only once it is in,
+/// so a document whose save or marker write never finished (an error, or the
+/// stage dropped mid-save) is not completed and the rollback treats it as
+/// unsaved. A marker write that fails is a warning, as at the end of a run:
+/// the document is then not completed, and a failed run sweeps it, as Python
+/// does with an unstamped item.
+///
+/// Only a `FailedItems` run has one. A `WholeRun` run sweeps everything when
+/// it fails, completion or not, so it marks its items at the end; a `Nothing`
+/// run marks nothing it did not finish whole.
+pub(crate) struct CompletionLog {
+    database: Arc<dyn RelationalDb>,
+    dataset_id: Uuid,
+    write_markers: bool,
+    completed: Mutex<BTreeSet<Uuid>>,
+}
+
+impl CompletionLog {
+    /// A log for `dataset_id`'s run; `write_markers` is the run's
+    /// `incremental_loading`.
+    pub(crate) fn new(
+        database: Arc<dyn RelationalDb>,
+        dataset_id: Uuid,
+        write_markers: bool,
+    ) -> Self {
+        Self {
+            database,
+            dataset_id,
+            write_markers,
+            completed: Mutex::new(BTreeSet::new()),
+        }
+    }
+
+    #[allow(
+        clippy::unwrap_used,
+        reason = "lock poison is unrecoverable — the holder already panicked"
+    )]
+    fn guard(&self) -> std::sync::MutexGuard<'_, BTreeSet<Uuid>> {
+        self.completed.lock().unwrap()
+    }
+
+    /// Record `data_id` as completed: write its marker (with
+    /// `incremental_loading`), then remember it. `false` when the marker
+    /// write failed, in which case the document is not completed.
+    pub(crate) async fn complete(&self, data_id: Uuid) -> bool {
+        if self.write_markers
+            && let Err(e) = cognee_database::ProvenanceDb::mark_cognify_pipeline_status_complete(
+                &*self.database,
+                data_id,
+                self.dataset_id,
+            )
+            .await
+        {
+            warn!(
+                data_id = %data_id,
+                dataset_id = %self.dataset_id,
+                "cognify: failed to write the completion marker (the document is not kept if \
+                 the run fails, and the next run redoes it): {e}"
+            );
+            return false;
+        }
+        self.guard().insert(data_id);
+        true
+    }
+
+    /// Every document completed so far.
+    pub(crate) fn completed(&self) -> BTreeSet<Uuid> {
+        self.guard().clone()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The decision
 // ---------------------------------------------------------------------------
 
@@ -158,10 +246,13 @@ pub(crate) enum RunEnding<'a> {
     /// collected stage failures the policy judged fatal, persistence errors,
     /// and cancellation alike — all of them mean "this run did not finish".
     ///
+    /// `completed` are the documents the run completed before it failed
+    /// ([`CompletionLog`]); only a `FailedItems` run has any.
+    ///
     /// Cancellation being in this list is a deliberate divergence: Python's
     /// rollback handler catches `Exception`, which excludes `CancelledError`,
     /// so a cancelled Python run keeps its partial graph.
-    Failed,
+    Failed { completed: &'a BTreeSet<Uuid> },
 
     /// The executor returned `Ok`. The report may still carry failures the
     /// policy tolerated.
@@ -175,7 +266,10 @@ pub(crate) enum SweepDecision {
     Nothing,
     /// Everything this run created in the dataset.
     WholeRun,
-    /// The failed and unreached items only. Never empty.
+    /// Everything this run created in the dataset except what these items —
+    /// the ones it completed — own. Never empty.
+    WholeRunKeeping(Vec<Uuid>),
+    /// The given items only. Never empty.
     Items(Vec<Uuid>),
 }
 
@@ -184,36 +278,42 @@ pub(crate) enum SweepDecision {
 /// | scope \ ending | `Failed` | `Completed` |
 /// |---|---|---|
 /// | `WholeRun` | `WholeRun` | `Nothing` |
-/// | `FailedItems` | `WholeRun` — the escalation | `Items(failed ∪ unreached)` |
+/// | `FailedItems` | `WholeRunKeeping(completed)` (`WholeRun` when it completed nothing) | `Items(failed ∪ unreached)` |
 /// | `Nothing` | `Nothing` | `Nothing` |
 ///
-/// The escalation is the one entry worth spelling out. A `FailedItems` run
-/// that ended in failure did so because the chunk failure ratio was exceeded,
-/// because no item survived, or because the failure was run-fatal
-/// (persistence, cancellation). In every one of those the run as a whole did
-/// not finish, so the honest end state is the pre-run one.
+/// A `FailedItems` run fails whenever an item failed
+/// ([`FailureReport::is_fatal`]), when a save outside one document failed, or
+/// when it was cancelled. It reports the error — but the documents it
+/// **completed** are kept, markers and all, as Python's per-item rollback
+/// keeps the items its failed run stamped (`rollback.py` `_kept_data_ids`,
+/// `Node.data_id.notin_(kept)`). Everything else the run wrote is swept: the
+/// documents that failed, the ones it was still saving, and the run-level
+/// rows no kept document stands beside (a DLT schema node). It is expressed
+/// as "the whole run except", not as a list of the swept items, so the sweep
+/// binds no list whatever the run's size
+/// ([`cognee_delete::RunSweeper::sweep_run_keeping`]).
 ///
-/// Its cost is real and deliberate: the escalation deletes the files that
-/// *completed* — including the ones a `FailFast` abort-time partition just
-/// persisted, and their completion markers — so the next run redoes the whole
-/// dataset. The threshold is precisely how a caller says "above this
-/// proportion, do not trust any of this run", and converging on the pre-run
-/// state is the only answer to that which a retry can build on. A caller who
-/// would rather keep the partial result raises the threshold; below it the run
-/// is not fatal and this arm is never reached.
+/// Before SDK-1694 O5b this swept the whole run, the completed documents
+/// included, because documents were saved and marked only at the end. A
+/// caller who would rather converge on the pre-run state selects `WholeRun`.
 ///
-/// `unreached` is folded in with `failed` because neither is marked complete
-/// and neither should keep artifacts. Under `FailFast` an unreached item wrote
-/// no ownership rows, so the sweep is a no-op for it; under `RunToEnd` the set
-/// is empty. Including it costs nothing and cannot under-sweep.
+/// A completed `FailedItems` run failed no item; what it can leave behind are
+/// items no document type matched, recorded as unreached. They wrote no rows,
+/// so their item sweep is a no-op, kept so that it cannot under-sweep.
 pub(crate) fn decide_sweep(scope: RollbackScope, ending: &RunEnding<'_>) -> SweepDecision {
     match (scope, ending) {
         (RollbackScope::Nothing, _) => SweepDecision::Nothing,
-        (RollbackScope::WholeRun, RunEnding::Failed) => SweepDecision::WholeRun,
+        (RollbackScope::WholeRun, RunEnding::Failed { .. }) => SweepDecision::WholeRun,
         // A completed `WholeRun` run has no failed items — `is_fatal` is true
-        // for any of them under this scope — so there is nothing to remove.
+        // for any of them — so there is nothing to remove.
         (RollbackScope::WholeRun, RunEnding::Completed(_)) => SweepDecision::Nothing,
-        (RollbackScope::FailedItems, RunEnding::Failed) => SweepDecision::WholeRun,
+        (RollbackScope::FailedItems, RunEnding::Failed { completed }) => {
+            if completed.is_empty() {
+                SweepDecision::WholeRun
+            } else {
+                SweepDecision::WholeRunKeeping(completed.iter().copied().collect())
+            }
+        }
         (RollbackScope::FailedItems, RunEnding::Completed(report)) => {
             let items = outstanding_items(report);
             if items.is_empty() {
@@ -256,6 +356,10 @@ pub(crate) struct RunContext<'a> {
     /// The data items this run actually processed — the dataset's items minus
     /// the ones an earlier run had already marked complete.
     pub(crate) processed: Vec<Uuid>,
+    /// The documents the run completed as it went ([`CompletionLog`]): saved
+    /// and, with `incremental_loading`, already marked. Empty for a run that
+    /// has no log (every scope but `FailedItems`).
+    pub(crate) completed: BTreeSet<Uuid>,
     pub(crate) config: &'a CognifyConfig,
 }
 
@@ -263,15 +367,34 @@ impl RunContext<'_> {
     /// Run `scope` through a [`RunSweeper`], folding any failure of the sweep
     /// itself into a log line.
     async fn sweep(&self, scope: SweepScope) {
-        let sweeper = RunSweeper::new(
+        let sweeper = self.sweeper();
+        let outcome = sweeper.sweep_logging_failure(&scope).await;
+        self.log_sweep(scope.pipeline_run_id, &outcome);
+    }
+
+    /// Sweep the whole run except what `keep` owns
+    /// ([`RunSweeper::sweep_run_keeping`]), folding any failure into a log
+    /// line.
+    async fn sweep_keeping(&self, pipeline_run_id: Uuid, keep: &[Uuid]) {
+        let outcome = self
+            .sweeper()
+            .sweep_run_keeping_logging_failure(pipeline_run_id, self.dataset_id, keep)
+            .await;
+        self.log_sweep(pipeline_run_id, &outcome);
+    }
+
+    fn sweeper(&self) -> RunSweeper {
+        RunSweeper::new(
             Arc::clone(&self.database),
             Arc::clone(&self.graph_db),
             Arc::clone(&self.vector_db),
-        );
-        let outcome = sweeper.sweep_logging_failure(&scope).await;
+        )
+    }
+
+    fn log_sweep(&self, pipeline_run_id: Uuid, outcome: &cognee_delete::SweepOutcome) {
         info!(
             dataset_id = %self.dataset_id,
-            pipeline_run_id = %scope.pipeline_run_id,
+            pipeline_run_id = %pipeline_run_id,
             graph_nodes_deleted = outcome.graph_nodes_deleted,
             vector_points_deleted = outcome.vector_points_deleted,
             provenance_nodes_deleted = outcome.provenance_nodes_deleted,
@@ -280,7 +403,7 @@ impl RunContext<'_> {
             "cognify: run sweep finished"
         );
         for warning in &outcome.warnings {
-            warn!(pipeline_run_id = %scope.pipeline_run_id, "cognify: {warning}");
+            warn!(pipeline_run_id = %pipeline_run_id, "cognify: {warning}");
         }
     }
 
@@ -325,6 +448,47 @@ impl RunContext<'_> {
                      item): {e}"
                 );
             }
+        }
+    }
+
+    /// Keep the completed documents' edge evidence readable after the run
+    /// errored (Python `keep_completed_items_evidence`, called by its
+    /// rollback in the transaction that resets the statuses).
+    ///
+    /// The rows carry the evidence run id — the host's when it set
+    /// [`CognifyConfig::evidence_pipeline_run_id`], else the executor's.
+    /// A failure is a warning: the documents stay kept either way, and their
+    /// evidence is only hidden from `include_references` until they are
+    /// cognified again. Python fails its rollback instead, which leaves the
+    /// statuses unreset; Rust's sweep has already run by now.
+    async fn keep_completed_items_evidence(&self) {
+        let Some(run_id) = self
+            .config
+            .evidence_pipeline_run_id
+            .or(self.pipeline_run_id)
+        else {
+            return;
+        };
+        let data_ids: Vec<Uuid> = self.completed.iter().copied().collect();
+        match cognee_database::ProvenanceDb::keep_completed_items_evidence(
+            &*self.database,
+            self.dataset_id,
+            run_id,
+            &data_ids,
+        )
+        .await
+        {
+            Ok(rows) => info!(
+                dataset_id = %self.dataset_id,
+                pipeline_run_id = %run_id,
+                rows,
+                "cognify: kept the completed documents' edge evidence"
+            ),
+            Err(e) => warn!(
+                dataset_id = %self.dataset_id,
+                pipeline_run_id = %run_id,
+                "cognify: failed to keep the completed documents' edge evidence readable: {e}"
+            ),
         }
     }
 
@@ -373,18 +537,47 @@ pub(crate) async fn on_run_failed(
     error: &CognifyError,
     executor_recorded_the_error: bool,
 ) {
-    let scope = ctx.config.rollback_scope;
-    if decide_sweep(scope, &RunEnding::Failed) == SweepDecision::WholeRun
-        && let Some(run_id) = ctx.sweepable_run_id()
-    {
-        info!(
-            dataset_id = %ctx.dataset_id,
-            pipeline_run_id = %run_id,
-            ?scope,
-            "cognify: run failed; sweeping everything it created"
-        );
-        ctx.sweep(SweepScope::whole_run(run_id, ctx.dataset_id))
-            .await;
+    let scope = ctx.config.failure_policy().scope;
+    let ending = RunEnding::Failed {
+        completed: &ctx.completed,
+    };
+    match decide_sweep(scope, &ending) {
+        SweepDecision::Nothing => {}
+        SweepDecision::WholeRun => {
+            if let Some(run_id) = ctx.sweepable_run_id() {
+                info!(
+                    dataset_id = %ctx.dataset_id,
+                    pipeline_run_id = %run_id,
+                    ?scope,
+                    "cognify: run failed; sweeping everything it created"
+                );
+                ctx.sweep(SweepScope::whole_run(run_id, ctx.dataset_id))
+                    .await;
+            }
+        }
+        SweepDecision::WholeRunKeeping(keep) => {
+            if let Some(run_id) = ctx.sweepable_run_id() {
+                info!(
+                    dataset_id = %ctx.dataset_id,
+                    pipeline_run_id = %run_id,
+                    kept = keep.len(),
+                    "cognify: run failed; keeping the documents it completed and sweeping the rest"
+                );
+                ctx.sweep_keeping(run_id, &keep).await;
+            }
+        }
+        // A failed run's ending never selects items.
+        SweepDecision::Items(items) => {
+            if let Some(run_id) = ctx.sweepable_run_id() {
+                ctx.sweep(SweepScope::for_data(run_id, ctx.dataset_id, items))
+                    .await;
+            }
+        }
+    }
+    // The kept documents' edge evidence would be hidden with the errored run,
+    // and the next run skips them, so nothing would record it again.
+    if scope == RollbackScope::FailedItems && !ctx.completed.is_empty() {
+        ctx.keep_completed_items_evidence().await;
     }
 
     if !executor_recorded_the_error {
@@ -400,7 +593,7 @@ pub(crate) async fn on_run_failed(
 ///
 /// Never returns an error: the run completed.
 pub(crate) async fn on_run_completed(ctx: &RunContext<'_>, report: &FailureReport) {
-    let scope = ctx.config.rollback_scope;
+    let scope = ctx.config.failure_policy().scope;
     let outstanding = outstanding_items(report);
 
     if let SweepDecision::Items(items) = decide_sweep(scope, &RunEnding::Completed(report))
@@ -420,10 +613,13 @@ pub(crate) async fn on_run_completed(ctx: &RunContext<'_>, report: &FailureRepor
     // unreached. An item dropped at classification is recorded as unreached,
     // so it is excluded here: marking it would claim a file was cognified that
     // never reached a single stage, and the marker would then skip it forever.
+    // A document the run already completed as it went is marked already; what
+    // is left is a DLT document, completed only now that its foreign-key
+    // edges are written, or every survivor of a run without a log.
     let survivors: Vec<Uuid> = ctx
         .processed
         .iter()
-        .filter(|id| !outstanding.contains(id))
+        .filter(|id| !outstanding.contains(id) && !ctx.completed.contains(id))
         .copied()
         .collect();
     ctx.mark_complete(&survivors).await;
@@ -549,28 +745,40 @@ mod tests {
         let failed = Uuid::new_v4();
         let unreached = Uuid::new_v4();
         let report = report_with(&[failed], &[unreached]);
+        let saved = Uuid::new_v4();
+        let nothing_completed = BTreeSet::new();
+        let saved_completed = BTreeSet::from([saved]);
+        let failed_with = |completed| RunEnding::Failed { completed };
 
-        assert_eq!(
-            decide_sweep(RollbackScope::WholeRun, &RunEnding::Failed),
-            SweepDecision::WholeRun
-        );
+        for completed in [&nothing_completed, &saved_completed] {
+            assert_eq!(
+                decide_sweep(RollbackScope::WholeRun, &failed_with(completed)),
+                SweepDecision::WholeRun,
+                "WholeRun sweeps the whole run whatever it completed"
+            );
+            assert_eq!(
+                decide_sweep(RollbackScope::Nothing, &failed_with(completed)),
+                SweepDecision::Nothing
+            );
+        }
         assert_eq!(
             decide_sweep(RollbackScope::WholeRun, &RunEnding::Completed(&report)),
             SweepDecision::Nothing,
             "a completed WholeRun run has no failed items to sweep"
         );
         assert_eq!(
-            decide_sweep(RollbackScope::Nothing, &RunEnding::Failed),
-            SweepDecision::Nothing
-        );
-        assert_eq!(
             decide_sweep(RollbackScope::Nothing, &RunEnding::Completed(&report)),
             SweepDecision::Nothing
         );
         assert_eq!(
-            decide_sweep(RollbackScope::FailedItems, &RunEnding::Failed),
+            decide_sweep(RollbackScope::FailedItems, &failed_with(&nothing_completed)),
             SweepDecision::WholeRun,
-            "the escalation: a FailedItems run that errored sweeps everything"
+            "the escalation with nothing completed sweeps the whole run"
+        );
+        assert_eq!(
+            decide_sweep(RollbackScope::FailedItems, &failed_with(&saved_completed)),
+            SweepDecision::WholeRunKeeping(vec![saved]),
+            "the escalation keeps the document the run completed (SDK-1694 O5b)"
         );
 
         match decide_sweep(RollbackScope::FailedItems, &RunEnding::Completed(&report)) {
@@ -625,13 +833,23 @@ mod tests {
 
         for scope in [RollbackScope::WholeRun, RollbackScope::FailedItems] {
             assert_eq!(
-                decide_sweep(scope, &RunEnding::Failed),
+                decide_sweep(
+                    scope,
+                    &RunEnding::Failed {
+                        completed: &BTreeSet::new()
+                    }
+                ),
                 SweepDecision::WholeRun,
                 "scope={scope:?}"
             );
         }
         assert_eq!(
-            decide_sweep(RollbackScope::Nothing, &RunEnding::Failed),
+            decide_sweep(
+                RollbackScope::Nothing,
+                &RunEnding::Failed {
+                    completed: &BTreeSet::new()
+                }
+            ),
             SweepDecision::Nothing,
             "…except the escape hatch, which is the point of the escape hatch"
         );
@@ -685,6 +903,7 @@ mod tests {
             pipeline_id: Some(ctx_parts.4),
             pipeline_name: "cognify_pipeline",
             processed: processed.clone(),
+            completed: BTreeSet::new(),
             config: &config,
         };
 
@@ -742,6 +961,7 @@ mod tests {
             pipeline_id: Some(ctx_parts.4),
             pipeline_name: "cognify_pipeline",
             processed: Vec::new(),
+            completed: BTreeSet::new(),
             config: &config,
         };
 
@@ -763,21 +983,21 @@ mod tests {
         );
     }
 
-    /// The escalation, with its price tag attached: a `FailedItems` run that
-    /// crossed the ratio threshold sweeps the files that **completed**, not
-    /// only the ones that failed.
+    /// Since SDK-1694 O5b a `FailedItems` run with a failed file errors, and
+    /// keeps the file it **completed** while sweeping the one that failed —
+    /// Python's per-item rollback, which keeps the items its failed run
+    /// stamped.
     ///
-    /// Both halves of the path are pinned here, because either alone is
-    /// misleading. [`FailureReport::is_fatal`] turns the ratio into a `Failed`
-    /// ending — with a survivor present, so it is the ratio doing it and not
-    /// the no-survivor backstop — and [`decide_sweep`] turns that ending into
-    /// a whole-run sweep. The assertions are on the end state a caller
-    /// actually inherits: the survivor's graph node, its ownership row and its
-    /// completion marker are all gone, so the next run redoes it. Below the
-    /// threshold the same report keeps every one of them, which is what makes
-    /// the deletion an escalation rather than the scope's normal behaviour.
+    /// Both halves of the path are pinned here. [`FailureReport::is_fatal`]
+    /// turns the failed file into a `Failed` ending — with a survivor present
+    /// and whatever the ratio threshold — and [`decide_sweep`] turns that
+    /// ending into a sweep of the whole run except what it completed. The
+    /// assertions are on the end state a caller actually inherits: the
+    /// survivor's graph node, its ownership row and its completion marker
+    /// stay, so the next run skips it; the failed file's go. (Before O5b the
+    /// run swept the whole run, the survivor included.)
     #[tokio::test]
-    async fn the_ratio_escalation_sweeps_the_files_that_completed() {
+    async fn a_failed_run_keeps_the_files_it_completed() {
         use cognee_database::ops::graph_storage;
         use cognee_database::{GraphNode, RunScope};
 
@@ -805,10 +1025,11 @@ mod tests {
         // One file the run finished and marked complete, one it failed on.
         let survivor = seed_data_item(&db, owner, "survivor.txt").await;
         let failed = seed_data_item(&db, owner, "failed.txt").await;
+        let slug_of = |data_id: Uuid| Uuid::new_v5(&data_id, b"node");
 
         // The ownership row and the graph node each file's work produced.
         for data_id in [survivor, failed] {
-            let slug = Uuid::new_v4();
+            let slug = slug_of(data_id);
             graph_storage::upsert_nodes(
                 &db,
                 &[GraphNode {
@@ -833,9 +1054,8 @@ mod tests {
                 .expect("seed the graph node");
         }
 
-        // The survivor completed, so the abort-time partition persisted it and
-        // `on_run_completed` would have marked it. This is the state the
-        // escalation discards.
+        // The survivor completed, so the writer saved and marked it as it went
+        // (`CompletionLog::complete`). This is the state the escalation keeps.
         cognee_database::ProvenanceDb::mark_cognify_pipeline_status_complete(
             &*db, survivor, dataset_id,
         )
@@ -865,20 +1085,15 @@ mod tests {
         );
         assert!(
             report.is_fatal(&policy),
-            "0.2 > the default 0.05 threshold, so this FailedItems run failed"
+            "a file failed, so this FailedItems run failed"
         );
-
-        // The counterfactual, on the same report: tolerate the ratio and the
-        // survivor is not even in the sweep selection.
         let tolerant = FailurePolicy {
-            chunk_failure_ratio_threshold: 0.5,
+            chunk_failure_ratio_threshold: 1.0,
             ..policy
         };
-        assert!(!report.is_fatal(&tolerant));
-        assert_eq!(
-            decide_sweep(RollbackScope::FailedItems, &RunEnding::Completed(&report)),
-            SweepDecision::Items(vec![failed]),
-            "below the threshold the run completes and only the failed file goes"
+        assert!(
+            report.is_fatal(&tolerant),
+            "whatever the ratio threshold: Python errors whenever an item failed"
         );
 
         let ctx = RunContext {
@@ -891,6 +1106,7 @@ mod tests {
             pipeline_id: Some(Uuid::new_v4()),
             pipeline_name: "cognify_pipeline",
             processed: vec![survivor, failed],
+            completed: BTreeSet::from([survivor]),
             config: &config,
         };
         on_run_failed(
@@ -905,28 +1121,40 @@ mod tests {
             dataset_id,
             data_ids: None,
         };
-        assert!(
-            graph_storage::get_nodes_for_run(&db, &scope)
-                .await
-                .expect("read the ownership rows")
-                .is_empty(),
-            "the escalation sweeps the whole run, so the survivor's ownership row goes too"
+        let rows: Vec<Uuid> = graph_storage::get_nodes_for_run(&db, &scope)
+            .await
+            .expect("read the ownership rows")
+            .into_iter()
+            .map(|row| row.data_id)
+            .collect();
+        assert_eq!(
+            rows,
+            vec![survivor],
+            "the survivor's ownership row stays, the failed file's goes"
         );
         assert_eq!(
             graph.node_count(),
-            0,
-            "the survivor's graph node is deleted alongside the failed file's"
+            1,
+            "only the failed file's graph node is deleted"
         );
         assert!(
+            graph
+                .get_node(&slug_of(survivor).to_string())
+                .await
+                .expect("read the graph")
+                .is_some(),
+            "the node left is the survivor's"
+        );
+        assert_eq!(
             cognee_database::ProvenanceDb::get_cognify_completed_data_ids(
                 &*db,
                 dataset_id,
                 &[survivor, failed]
             )
             .await
-            .expect("read the completion markers")
-            .is_empty(),
-            "the survivor is unmarked, so the next run redoes the whole dataset"
+            .expect("read the completion markers"),
+            BTreeSet::from([survivor]),
+            "the survivor stays marked, so the next run redoes only the failed file"
         );
     }
 
@@ -972,6 +1200,7 @@ mod tests {
             pipeline_id: Some(ctx_parts.4),
             pipeline_name: "cognify_pipeline",
             processed: Vec::new(),
+            completed: BTreeSet::new(),
             config: &config,
         };
 
@@ -993,6 +1222,7 @@ mod tests {
             pipeline_id: None,
             pipeline_name: "cognify_pipeline",
             processed: Vec::new(),
+            completed: BTreeSet::new(),
             config: &config,
         };
 

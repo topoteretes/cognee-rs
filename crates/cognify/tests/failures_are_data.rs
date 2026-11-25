@@ -230,12 +230,13 @@ async fn default_policy_errors_with_a_report_and_marks_the_run_errored() {
 }
 
 /// `FailFast` + `FailedItems` keeps and indexes the file that fully completed,
-/// and nothing of the failed or the unreached one. The run genuinely completed.
+/// and nothing of the failed or the unreached one.
 ///
-/// The threshold is raised because this fixture is three chunks wide: one
-/// failed chunk out of three is a 33 % failure ratio, which the 5 % default
-/// rightly calls a failed run. The ratio exists to catch systemic mid-run LLM
-/// failure, and on a three-file dataset one bad file *is* systemic.
+/// The run errors (`RunFailed`, `ERRORED`), whatever the chunk failure ratio:
+/// Python's `run_tasks` raises whenever a data item errored, and its rollback
+/// still keeps the items it stamped. Before the SDK-1694 O5b review a ratio
+/// threshold raised to 0.5 let this run return `Ok`, so a re-run that stopped
+/// at the same bad file reported success every time.
 #[tokio::test]
 async fn fail_fast_failed_items_keeps_and_indexes_the_complete_files() {
     let outcome = run_cognify(
@@ -250,17 +251,9 @@ async fn fail_fast_failed_items_keeps_and_indexes_the_complete_files() {
     )
     .await;
 
-    let result = outcome
-        .result
-        .as_ref()
-        .expect("a tolerated failure below the ratio completes the run");
-    assert_eq!(
-        result.chunks.len(),
-        1,
-        "only the file that fully completed survives"
-    );
-    assert_eq!(result.failures.failed_items().len(), 1);
-    assert_eq!(result.failures.unreached_items().len(), 1);
+    let report = outcome.report();
+    assert_eq!(report.failed_items().len(), 1);
+    assert_eq!(report.unreached_items().len(), 1);
 
     // The complete file's chunk reached the vector store; the other two did not.
     assert_eq!(
@@ -269,10 +262,11 @@ async fn fail_fast_failed_items_keeps_and_indexes_the_complete_files() {
             .collection_size("DocumentChunk", "text")
             .await
             .expect("collection size"),
-        1
+        1,
+        "only the file that fully completed survives"
     );
 
-    assert_eq!(outcome.latest_status().await, PipelineRunStatus::Completed);
+    assert_eq!(outcome.latest_status().await, PipelineRunStatus::Errored);
 }
 
 /// `RunToEnd` pays for the whole run and reports every failure, rather than

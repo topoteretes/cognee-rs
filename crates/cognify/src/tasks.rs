@@ -3801,6 +3801,39 @@ pub async fn run_code_routes(
     mode: &CodeRepoLoadMode,
     vectors: Option<&cognee_code_graph::CodeGraphVectors>,
 ) -> Result<RoutedCognifyInput, CognifyError> {
+    run_code_routes_completing(
+        input,
+        storage,
+        graph_db,
+        db,
+        code_graph,
+        pipeline_run_id,
+        failure_policy,
+        mode,
+        vectors,
+        None,
+    )
+    .await
+}
+
+/// [`run_code_routes`], completing each code item the moment its graph is
+/// loaded (SDK-1694 O5b): a code item never reaches the document stage's
+/// writer, so this is where it is saved. Its ledger rows went in with its
+/// graph ([`code_graph_ledger`]), so a failed run sweeps what it did not
+/// complete and keeps what it did.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_code_routes_completing(
+    input: &CognifyInput,
+    storage: &dyn StorageTrait,
+    graph_db: &dyn GraphDBTrait,
+    db: &dyn RelationalDb,
+    code_graph: &cognee_code_graph::CodeGraphConfig,
+    pipeline_run_id: Option<Uuid>,
+    failure_policy: FailurePolicy,
+    mode: &CodeRepoLoadMode,
+    vectors: Option<&cognee_code_graph::CodeGraphVectors>,
+    completion: Option<&rollback::CompletionLog>,
+) -> Result<RoutedCognifyInput, CognifyError> {
     use crate::routing::{CognifyRoute, CognifyRouteError, cognify_route_for};
 
     let mut standard = Vec::with_capacity(input.data_items.len());
@@ -3853,6 +3886,9 @@ pub async fn run_code_routes(
             .await
         };
         let Err(error) = loaded else {
+            if let Some(log) = completion {
+                log.complete(item.id).await;
+            }
             continue;
         };
         warn!(data_id = %item.id, route = %route, "code item failed to load: {error}");
@@ -4051,6 +4087,31 @@ pub fn make_code_routes_task(
     mode: CodeRepoLoadMode,
     vectors: Option<cognee_code_graph::CodeGraphVectors>,
 ) -> TypedTask<CognifyInput, RoutedCognifyInput> {
+    code_routes_task(
+        storage,
+        graph_db,
+        db,
+        code_graph,
+        failure_policy,
+        mode,
+        vectors,
+        None,
+    )
+}
+
+/// [`make_code_routes_task`], completing each loaded code item through the
+/// run's log ([`run_code_routes_completing`]).
+#[allow(clippy::too_many_arguments)]
+fn code_routes_task(
+    storage: Arc<dyn StorageTrait>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    db: Arc<dyn RelationalDb>,
+    code_graph: cognee_code_graph::CodeGraphConfig,
+    failure_policy: FailurePolicy,
+    mode: CodeRepoLoadMode,
+    vectors: Option<cognee_code_graph::CodeGraphVectors>,
+    completion: Option<crate::config::CompletionHandle>,
+) -> TypedTask<CognifyInput, RoutedCognifyInput> {
     TypedTask::async_fn(move |input: &CognifyInput, ctx| {
         let input = input.clone();
         let storage = Arc::clone(&storage);
@@ -4059,9 +4120,10 @@ pub fn make_code_routes_task(
         let code_graph = code_graph.clone();
         let mode = mode.clone();
         let vectors = vectors.clone();
+        let completion = completion.clone();
         let pipeline_run_id = pipeline_run_id_from_ctx(&ctx);
         Box::pin(async move {
-            let routed = run_code_routes(
+            let routed = run_code_routes_completing(
                 &input,
                 &*storage,
                 &*graph_db,
@@ -4071,6 +4133,7 @@ pub fn make_code_routes_task(
                 failure_policy,
                 &mode,
                 vectors.as_ref(),
+                completion.as_ref().map(|handle| handle.0.as_ref()),
             )
             .await?;
             Ok(Box::new(routed))
@@ -4289,6 +4352,8 @@ async fn run_code_graph_pipeline_in_scope(
         pipeline_id: watcher.pipeline_id(),
         pipeline_name: CODE_GRAPH_PIPELINE_NAME,
         processed: processed.clone(),
+        // One repository per run, stamped only once the run succeeded.
+        completed: BTreeSet::new(),
         config,
     };
     if let Err(e) = executed {
@@ -4554,6 +4619,26 @@ async fn cognify_in_scope(
             // success, and what its run record names.
             let processed_ids: Vec<Uuid> = data_items.iter().map(|item| item.id).collect();
 
+            // ── Per-document completion (SDK-1694 O5b) ──────────────────────
+            // Under `FailedItems` each document is completed — saved and, with
+            // `incremental_loading`, marked — the moment it is done, and a run
+            // that fails later keeps it, as Python's rollback keeps the items
+            // its failed run stamped. The stages reach the log through the
+            // run's config.
+            let completion = (effective_config.failure_policy().scope
+                == RollbackScope::FailedItems)
+                .then(|| {
+                    Arc::new(rollback::CompletionLog::new(
+                        Arc::clone(&database),
+                        dataset_id,
+                        effective_config.incremental_loading,
+                    ))
+                });
+            let effective_config = CognifyConfig {
+                completion: completion.clone().map(crate::config::CompletionHandle),
+                ..effective_config.clone()
+            };
+
             // ── The pipeline ────────────────────────────────────────────────────
             // One pipeline, as in Python: the event-graph `temporal_cognify`
             // variant is gone (SDK-1039, Python SDK-1115). Default cognify writes
@@ -4701,6 +4786,11 @@ async fn cognify_in_scope(
                 pipeline_id: watcher.pipeline_id(),
                 pipeline_name,
                 processed: processed_ids,
+                // Read once the run is over: nothing completes after this.
+                completed: completion
+                    .as_ref()
+                    .map(|log| log.completed())
+                    .unwrap_or_default(),
                 config: &effective_config,
             };
 
@@ -4725,6 +4815,11 @@ async fn cognify_in_scope(
             // here needs a further `ERRORED` row of its own — `on_run_failed`
             // appends one. Without it a swept run would be left looking complete
             // although its artifacts are gone.
+            //
+            // The document stage did not complete the DLT documents: their
+            // foreign-key edges are written here, so `on_run_completed` marks
+            // them only after this succeeded, and a failure here sweeps them
+            // with everything else the run did not complete.
             let after_completion = async {
                 let result = extract_cognify_outputs(outputs)?;
                 extract_dlt_fk_edges(
@@ -7793,7 +7888,7 @@ fn add_code_routes(
     .task;
     pipeline.tasks.insert(
         0,
-        cognee_core::TaskInfo::from(make_code_routes_task(
+        cognee_core::TaskInfo::from(code_routes_task(
             storage,
             graph_db,
             db,
@@ -7803,6 +7898,7 @@ fn add_code_routes(
             // cognify builds code graphs graph-only, as Python's CODE_REPO
             // route does (`graph_only=True`).
             None,
+            config.completion.clone(),
         ))
         .with_name(task_name),
     );
@@ -9825,9 +9921,13 @@ mod tests {
         let storage = MockStorage::new();
         let (input, _a, b, c) = three_documents_with_a_bad_middle(&storage).await;
 
-        let err = run_chunking(&input, &storage, &CognifyConfig::default())
-            .await
-            .expect_err("the default policy still aborts");
+        let err = run_chunking(
+            &input,
+            &storage,
+            &CognifyConfig::default().with_rollback_scope(RollbackScope::WholeRun),
+        )
+        .await
+        .expect_err("the default policy still aborts");
 
         let CognifyError::RunFailed { report } = err else {
             panic!("expected RunFailed, got: {err:?}");
@@ -9949,9 +10049,13 @@ mod tests {
         assert_eq!(result.failures.total_items(), 3);
         assert_eq!(result.failures.total_chunks(), result.chunks.len());
 
-        let err = run_chunking(&input, &storage, &CognifyConfig::default())
-            .await
-            .expect_err("default aborts");
+        let err = run_chunking(
+            &input,
+            &storage,
+            &CognifyConfig::default().with_rollback_scope(RollbackScope::WholeRun),
+        )
+        .await
+        .expect_err("default aborts");
         let CognifyError::RunFailed { report } = err else {
             panic!("expected RunFailed");
         };
@@ -14439,7 +14543,9 @@ mod tests {
         let graph = Arc::new(cognee_graph::MockGraphDB::new());
         let (input, _a, b, c) = three_chunk_files(dataset_id);
 
-        let config = one_call_at_a_time(CognifyConfig::default());
+        let config = one_call_at_a_time(
+            CognifyConfig::default().with_rollback_scope(RollbackScope::WholeRun),
+        );
         let err = run_extraction_with_config(&input, graph.clone(), &db, &config)
             .await
             .expect_err("the default scope still aborts the run");
@@ -14494,7 +14600,7 @@ mod tests {
         };
 
         // All four chunks in flight at once (the default cap is far above 4).
-        let config = CognifyConfig::default();
+        let config = CognifyConfig::default().with_rollback_scope(RollbackScope::WholeRun);
         let err = run_extraction_with_config(&input, graph, &db, &config)
             .await
             .expect_err("default scope aborts");
@@ -15003,9 +15109,10 @@ mod tests {
         assert!(result.chunks.iter().any(|chunk| chunk.document_id == c));
     }
 
-    /// The end-of-run gate reads the policy, not the report alone: the same
-    /// failures error the run under `WholeRun` and complete it under
-    /// `FailedItems` below the threshold.
+    /// The end-of-run gate errors the run on a failed item under every scope,
+    /// `FailedItems` included and below the ratio threshold, as Python errors
+    /// whenever a data item errored (SDK-1694 O5b review); what `FailedItems`
+    /// changes is the rollback, which keeps the completed documents.
     #[tokio::test]
     async fn fatality_gate_defers_to_the_policy() {
         use cognee_core::TypedTask;
@@ -15048,10 +15155,13 @@ mod tests {
         };
 
         for (config, should_fail) in [
-            (CognifyConfig::default(), true),
+            (
+                CognifyConfig::default().with_rollback_scope(RollbackScope::WholeRun),
+                true,
+            ),
             (
                 CognifyConfig::default().with_rollback_scope(RollbackScope::FailedItems),
-                false,
+                true,
             ),
         ] {
             let task = make_add_data_points_task(

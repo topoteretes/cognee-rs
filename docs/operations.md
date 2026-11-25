@@ -485,31 +485,36 @@ went wrong. `CognifyResult.failures` carries it on success;
 
 What happens to what the run already wrote is decided at the end, from two
 independent settings — *when to stop* (`FailFast`, the default, or `RunToEnd`)
-and *what to sweep* (`WholeRun`, the default, `FailedItems`, or `Nothing`). The
+and *what to sweep* (`WholeRun`, `FailedItems`, or `Nothing`; unset, it is
+`FailedItems` with `incremental_loading` — the default — and `WholeRun`
+without, as Python keeps stamped items only with incremental loading). The
 full matrix is in
 [Cognify failure handling](configuration.md#cognify-failure-handling); the end
 states are:
 
-- **Default (`FailFast` + `WholeRun`).** The run stops at the first failed
-  *batch* — not the first failed file, see below — everything it created is
-  removed, the run is recorded `ERRORED` and the call returns `Err`. The store
-  converges to its pre-run state — what earlier runs completed is untouched,
-  because the sweep selects only rows naming *this* run. Python's default, in
-  execution and in end state.
-- **`FailedItems` below the failure ratio.** The run *completes*. Only the
-  failed files' contributions are removed; the files that finished are kept,
-  indexed and marked complete; and the call returns `Ok` with the failed-file
-  list in the report, so the next run knows exactly what to redo.
-- **`FailedItems` over the ratio** escalates to a whole-run sweep and an errored
-  run — a large enough share of failed chunks means something systemic, not one
-  bad file.
-- **`Nothing`** removes nothing. The escape hatch.
+- **`WholeRun` (the default with `incremental_loading` off).** The run stops
+  at the first failed *batch* — not the first failed file, see below —
+  everything it created is removed, the run is recorded `ERRORED` and the call
+  returns `Err`. The store converges to its pre-run state — what earlier runs
+  completed is untouched, because the sweep selects only rows naming *this*
+  run. Python's end state without incremental loading.
+- **`FailedItems` (the default with `incremental_loading`).** A run in which
+  any file failed errors and returns `Err` with the failed-file list in its
+  report, as Python's does — but keeps the files it completed, indexed and
+  marked, as Python's per-item rollback does. Each file is saved and marked
+  complete as soon as it is done (SDK-1694 O5b), so only what the run did not
+  complete is removed, and the next run redoes exactly the failed files. (The
+  chunk failure ratio no longer decides anything.)
+- **`Nothing`** removes nothing. The escape hatch: the files saved before a
+  stop stay, unmarked, and nothing more is saved after it.
 
 Under `FailFast` a run partitions its files three ways at the abort point:
-*complete* (every chunk extracted — persisted and marked), *failed* (at least
-one chunk failed) and *unreached* (never attempted). Only complete files are
-persisted, which is what keeps a data item all-or-nothing; failed and unreached
-files are indistinguishable to the next run and are simply redone.
+*complete* (every call back — persisted and marked), *failed* (at least one
+chunk failed, or its save failed) and *unreached* (never attempted). Only
+complete files are kept, which is what keeps a data item all-or-nothing;
+failed and unreached files are indistinguishable to the next run and are
+simply redone. A DLT row is complete only once the post-run step has written
+its foreign-key edges; a code item once its graph is loaded.
 
 The abort point is not a file boundary, and how much work `FailFast` actually
 saves depends on how many calls are in flight. Graph extraction and
@@ -544,17 +549,19 @@ runs no sweep at all.
 
 #### Re-cognifying is now incremental — a behaviour change
 
-`incremental_loading` is on by default and now does what it says. A successful
-run marks each data item it finished, in Python's own `pipeline_status` format,
-and the next run skips the marked items before it builds a pipeline — no
-classification, no chunking, no LLM calls.
+`incremental_loading` is on by default and now does what it says. A run marks
+each data item it finished, in Python's own `pipeline_status` format — under
+`FailedItems` the moment the item is saved, under `WholeRun` once the run
+succeeded — and the next run skips the marked items before it builds a
+pipeline — no classification, no chunking, no LLM calls.
 
 **Re-cognifying an already-complete dataset is therefore a no-op**, returning
 `Ok` with `already_completed = true`. Deployments that relied on cognify
 re-processing everything on every call will see it "stop doing anything"; set
 `with_incremental_loading(false)` to restore the previous behaviour. A failed
-run marks nothing, and a sweep clears the markers of whatever it rolled back, so
-the next run redoes exactly the work that was lost.
+run keeps the marks of the files it completed (none under `WholeRun`), and a
+sweep clears the markers of whatever it rolled back, so the next run redoes
+exactly the work that was lost.
 
 The markers live under Python's one `cognify_pipeline` key.
 

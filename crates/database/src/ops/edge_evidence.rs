@@ -267,6 +267,56 @@ pub async fn delete_edge_evidence<C: sea_orm::ConnectionTrait>(
     Ok(result.rows_affected)
 }
 
+/// Keep the evidence of the documents a failed run completed readable
+/// (Python `keep_completed_items_evidence`, `edge_evidence/cleanup.py`).
+/// Returns the number of rows changed.
+///
+/// Lookups count a row only when it has no run id or its run has a
+/// `COMPLETED` row ([`get_edge_evidence_records`]), so the rows of an errored
+/// run are hidden. The rollback keeps the documents that run completed, and
+/// the next cognify skips them, so nothing would ever write their evidence
+/// again. Their rows are detached from the run (`pipeline_run_id` cleared, the
+/// form a row written outside a run has) and observed now, as a completed
+/// run's rows are observed at its completion.
+#[instrument(
+    name = "cognee.db.relational.edge_evidence.keep_completed_items_evidence",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn keep_completed_items_evidence<C: sea_orm::ConnectionTrait>(
+    db: &C,
+    dataset_id: Uuid,
+    pipeline_run_id: Uuid,
+    data_ids: &[Uuid],
+) -> Result<u64, DatabaseError> {
+    use sea_orm::sea_query::Expr;
+    Span::current().record(COGNEE_DB_SYSTEM, crate::connection_system_label(db));
+    let mut changed = 0;
+    let now = Utc::now();
+    for batch in data_ids.chunks(IN_BATCH) {
+        let result = evidence::Entity::update_many()
+            .col_expr(
+                evidence::Column::PipelineRunId,
+                Expr::value(Option::<String>::None),
+            )
+            .col_expr(evidence::Column::CreatedAt, Expr::value(now))
+            .filter(evidence::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
+            .filter(evidence::Column::PipelineRunId.eq(uuid_hex::to_hex(pipeline_run_id)))
+            .filter(evidence::Column::DataId.is_in(batch.iter().map(|id| uuid_hex::to_hex(*id))))
+            .exec(db)
+            .await
+            .map_err(map_sea_err)?;
+        changed += result.rows_affected;
+    }
+    Span::current().record(COGNEE_DB_ROW_COUNT, changed as i64);
+    Ok(changed)
+}
+
 /// Remove the evidence rows of one `Data` row, whichever dataset the row's
 /// evidence names. Used by the data-row delete, which knows only the row id.
 pub(crate) async fn delete_edge_evidence_for_data<C: sea_orm::ConnectionTrait>(

@@ -320,7 +320,7 @@ async fn a_failed_run_is_rolled_back_in_its_dataset() {
         Arc::clone(&fx.repo),
         Arc::new(cognee_core::RayonThreadPool::with_default_threads().unwrap()),
         Arc::new(NoOpOntologyResolver::new()),
-        &config(),
+        &config().with_rollback_scope(cognee_cognify::RollbackScope::WholeRun),
     )
     .await;
 
