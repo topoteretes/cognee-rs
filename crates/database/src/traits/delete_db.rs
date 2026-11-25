@@ -225,6 +225,21 @@ pub trait DeleteDb: Send + Sync {
     /// rows were actually deleted.
     async fn delete_provenance_edges_by_ids(&self, ids: &[Uuid]) -> Result<u64, DatabaseError>;
 
+    /// The members of `slugs` a node row naming a data item (non-nil
+    /// `data_id`) still claims, in `dataset_id` when given and in any dataset
+    /// otherwise: what the hard delete's degree-one `EntityType` sweep keeps
+    /// (SDK-1694 O6).
+    ///
+    /// Required, with no default: an implementation that answered "nothing"
+    /// would let a hard delete sweep a type a surviving document still
+    /// declares. One without a provenance ledger has no document to keep a
+    /// type for and may return an empty list on purpose.
+    async fn get_node_slugs_owned_by_data(
+        &self,
+        slugs: &[Uuid],
+        dataset_id: Option<Uuid>,
+    ) -> Result<Vec<Uuid>, DatabaseError>;
+
     /// The subset of `candidates` (`EdgeType` retrieval texts) still claimed
     /// by edge rows that survive the deletion of `(data_id, dataset_id)`.
     async fn get_edge_retrieval_texts_claimed_outside_data(
@@ -507,6 +522,14 @@ impl DeleteDb for DatabaseConnection {
 
     async fn delete_provenance_edges_by_ids(&self, ids: &[Uuid]) -> Result<u64, DatabaseError> {
         graph_storage::delete_edges_by_ids(self, ids).await
+    }
+
+    async fn get_node_slugs_owned_by_data(
+        &self,
+        slugs: &[Uuid],
+        dataset_id: Option<Uuid>,
+    ) -> Result<Vec<Uuid>, DatabaseError> {
+        graph_storage::get_node_slugs_owned_by_data(self, slugs, dataset_id).await
     }
 
     async fn get_edge_retrieval_texts_claimed_outside_data(

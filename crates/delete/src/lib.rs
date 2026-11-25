@@ -1129,7 +1129,7 @@ impl DeleteService {
             };
             for scope in sweep_scopes {
                 let sweeps = async {
-                    let nodes = self.sweep_orphan_nodes().await?;
+                    let nodes = self.sweep_orphan_nodes(scope).await?;
                     let edge_types = self.sweep_orphan_edge_types().await?;
                     Ok::<_, DeleteError>((nodes, edge_types))
                 };
@@ -1642,17 +1642,22 @@ impl DeleteService {
             let edge_type_ids = self
                 .edge_type_ids_unclaimed_outside(&dataset_ids, &edges)
                 .await?;
+            let tenants = self.ledger_tenants_of(&dataset_ids).await;
+            let removed = removed_edges(&unique_edges, &unique_nodes, &tenants);
 
             // --- Graph cleanup ---
             let (gn, gw) = delete_graph_artifacts(self.graph_db.as_ref(), &unique_nodes).await?;
             graph_node_count += gn;
             warnings.extend(gw);
+            warnings.extend(
+                delete_unowned_edges(self.graph_db.as_ref(), &removed, &unique_nodes).await?,
+            );
 
             // --- Vector cleanup ---
             let (vp, vw) = delete_vector_artifacts(
                 self.vector_db.as_ref(),
                 &unique_nodes,
-                &triplet_edges(&edges, &unique_edges, &unique_nodes),
+                &triplet_edges(&edges, &removed, &unique_nodes),
                 &edge_type_ids,
             )
             .await?;
@@ -1738,13 +1743,13 @@ impl DeleteService {
                 ))
             })?;
 
-        // Structural edges (`is_part_of`, `contains`, ...) are recorded with a
-        // nil `data_id`, so the queries above never see them; find them through
-        // their endpoints instead. (Their per-document rows, written beside the
-        // nil row since SDK-1694 O5a, share its slug, so the slug-exclusive
-        // query above never selects them either; they leave with the item's
-        // other rows below. Reading them is per-document delete, O6.) Each has an endpoint in `nodes`, so its edge
-        // leaves the graph with it: its `EdgeType` text is weighed below and its
+        // Structural edges (`is_part_of`, `contains`, `is_a`, ...) have one
+        // row per producing document since SDK-1694 O5a, and since O6 no
+        // nil-`data_id` row beside them: the query above selects the item's own
+        // by triple, like any of its edges. A database written before then
+        // holds nil rows instead, which no `data_id` names; find those through
+        // their endpoints. Each has an endpoint in `nodes`, so its edge leaves
+        // the graph with it: its `EdgeType` text is weighed below and its
         // legacy `Triplet_text` point goes (Rust's cognify never wrote one for a
         // structural edge, but Python's did, for every graph edge).
         let structural_edges = self
@@ -1791,6 +1796,12 @@ impl DeleteService {
         let (gn, gw) = delete_graph_artifacts(self.graph_db.as_ref(), &nodes).await?;
         graph_node_count += gn;
         warnings.extend(gw);
+        // The item's edges no other owner claims, of those the ones that
+        // leave the graph: with an endpoint, or removed below because the item
+        // held their last per-document row.
+        let tenants = self.ledger_tenants_of(&[dataset_id]).await;
+        let edges = removed_edges(&edges, &nodes, &tenants);
+        warnings.extend(delete_unowned_edges(self.graph_db.as_ref(), &edges, &nodes).await?);
 
         // --- Vector cleanup ---
         let edge_type_ids = self
@@ -1867,6 +1878,19 @@ impl DeleteService {
     /// `is_part_of` edge in the store shares one point. Only the candidates
     /// are looked up, so the query reads the rows that could claim one of
     /// them rather than every edge row in the database.
+    /// [`ledger_tenants`] of these datasets, as the database has them. A
+    /// dataset it cannot read contributes nothing, which only makes fewer
+    /// rows count as per-document: fewer edges are removed directly.
+    async fn ledger_tenants_of(&self, dataset_ids: &[Uuid]) -> Vec<Option<Uuid>> {
+        let mut datasets = Vec::new();
+        for dataset_id in dataset_ids {
+            if let Ok(Some(dataset)) = self.database.get_dataset_by_id(*dataset_id).await {
+                datasets.push(dataset);
+            }
+        }
+        ledger_tenants(datasets.iter())
+    }
+
     async fn edge_type_ids_to_delete(
         &self,
         data_id: Uuid,
@@ -1928,8 +1952,20 @@ impl DeleteService {
     /// Hard-mode orphan sweep: find and delete degree-one Entity/EntityType
     /// nodes from the graph and their corresponding vector points.
     ///
+    /// An `EntityType` a document's ledger row still claims is kept (SDK-1694
+    /// O6): the data-scoped delete removes a type with its last declaring
+    /// document, so a degree-one type is one entity's type, not an orphan.
+    /// Python's degree sweep (`legacy_delete`) predates its per-document
+    /// ledger and runs only for a legacy document, which has no such row;
+    /// a legacy type, claimed by a nil-`data_id` row only, is still swept.
+    /// `dataset_id` narrows the claims to one dataset under per-dataset
+    /// storage, where the sweep reads that dataset's graph alone.
+    ///
     /// Returns `(orphan_entities, orphan_entity_types, warnings)`.
-    async fn sweep_orphan_nodes(&self) -> Result<(usize, usize, Vec<String>), DeleteError> {
+    async fn sweep_orphan_nodes(
+        &self,
+        dataset_id: Option<Uuid>,
+    ) -> Result<(usize, usize, Vec<String>), DeleteError> {
         let mut warnings = Vec::new();
 
         let graph_db = match &self.graph_db {
@@ -1945,7 +1981,7 @@ impl DeleteService {
             DeleteError::GraphCleanup(format!("Failed to query degree-one Entity nodes: {e}"))
         })?;
 
-        let orphan_types = graph_db
+        let mut orphan_types = graph_db
             .get_degree_one_nodes("EntityType")
             .await
             .map_err(|e| {
@@ -1953,6 +1989,25 @@ impl DeleteService {
                     "Failed to query degree-one EntityType nodes: {e}"
                 ))
             })?;
+        if !orphan_types.is_empty() {
+            let slugs: Vec<Uuid> = orphan_types
+                .iter()
+                .filter_map(|(id, _)| Uuid::parse_str(id).ok())
+                .collect();
+            let owned: HashSet<String> = self
+                .database
+                .get_node_slugs_owned_by_data(&slugs, dataset_id)
+                .await
+                .map_err(|e| {
+                    DeleteError::Runtime(format!(
+                        "Failed to read the ledger claims on degree-one EntityType nodes: {e}"
+                    ))
+                })?
+                .into_iter()
+                .map(|slug| slug.to_string())
+                .collect();
+            orphan_types.retain(|(id, _)| !owned.contains(id));
+        }
 
         let entity_count = orphan_entities.len();
         let type_count = orphan_types.len();
@@ -2165,7 +2220,15 @@ impl DeleteService {
             vector_points += edge_point_count(
                 self.vector_db.as_ref(),
                 &edge_type_ids,
-                &triplet_edges(&shared_edges, &unique_edges, &unique_nodes),
+                &triplet_edges(
+                    &shared_edges,
+                    &removed_edges(
+                        &unique_edges,
+                        &unique_nodes,
+                        &ledger_tenants(targets.datasets_to_delete.iter()),
+                    ),
+                    &unique_nodes,
+                ),
             )
             .await;
         }
@@ -2686,6 +2749,127 @@ pub(crate) async fn delete_graph_artifacts(
     }
 }
 
+/// The tenants a ledger row of `datasets` can have been written under: none,
+/// or a dataset's own. The tenant is folded into a row's id but not stored in
+/// the row, so [`written_per_document`] tries each.
+pub(crate) fn ledger_tenants<'a>(
+    datasets: impl IntoIterator<Item = &'a Dataset>,
+) -> Vec<Option<Uuid>> {
+    let mut tenants = vec![None];
+    for dataset in datasets {
+        if dataset.tenant_id.is_some() && !tenants.contains(&dataset.tenant_id) {
+            tenants.push(dataset.tenant_id);
+        }
+    }
+    tenants
+}
+
+/// Whether `edge` is a row cognify writes per producing document: a real
+/// `data_id`, folded into the row's id (`provenance_ids::provenance_edge_id`).
+///
+/// Only such a row says *who* still holds an edge: every document that
+/// produced the edge has one, so when the last of them goes, nothing else
+/// does. Other rows do not: Python's `upsert_edges` keys its row on the edge
+/// alone and keeps the first writer's (`on_conflict_do_nothing`), Rust before
+/// per-producer rows kept one row per edge too, and a nil row names no
+/// document. A delete removes such an edge only with an endpoint, never
+/// directly, and so never takes an edge another document still declares
+/// without a row of its own (SDK-1694 O6 review).
+pub(crate) fn written_per_document(edge: &GraphEdge, tenants: &[Option<Uuid>]) -> bool {
+    !edge.data_id.is_nil()
+        && tenants.iter().any(|tenant| {
+            cognee_database::provenance_ids::provenance_edge_id(
+                *tenant,
+                edge.user_id,
+                edge.dataset_id,
+                edge.data_id,
+                edge.source_node_id,
+                &edge.relationship_name,
+                edge.destination_node_id,
+            ) == edge.id
+        })
+}
+
+/// The rows among `edges` (rows no surviving owner claims) whose edge leaves
+/// the graph with the delete: those with an endpoint among `deleted_nodes`,
+/// and the per-document rows ([`written_per_document`]), whose edge
+/// [`delete_unowned_edges`] removes although both endpoints stay. Their
+/// `EdgeType` texts and legacy `Triplet_text` points are what the delete may
+/// free; an edge that stays in the graph keeps both.
+pub(crate) fn removed_edges(
+    edges: &[GraphEdge],
+    deleted_nodes: &[GraphNode],
+    tenants: &[Option<Uuid>],
+) -> Vec<GraphEdge> {
+    let deleted: HashSet<Uuid> = deleted_nodes.iter().map(|node| node.slug).collect();
+    edges
+        .iter()
+        .filter(|edge| {
+            deleted.contains(&edge.source_node_id)
+                || deleted.contains(&edge.destination_node_id)
+                || written_per_document(edge, tenants)
+        })
+        .cloned()
+        .collect()
+}
+
+/// Remove from the graph the edges among `removed` (see [`removed_edges`])
+/// whose endpoints both survive the delete, and return the warnings.
+///
+/// Port of the edge half of Python's graph-provenance delete
+/// (`provenance_delete_planner.execute_source_ref_removal`): an edge whose
+/// last source ref goes is deleted with `delete_edge_triples`, whether or not
+/// its endpoints stay. Rust's per-document ledger rows play the source refs'
+/// part (SDK-1694 O6): an entity's `is_a` edge to a type another document
+/// still declares goes with the last document that declared that pair, and a
+/// semantic edge between two entities other documents keep goes with the last
+/// document that produced it. An edge with a deleted endpoint is gone with
+/// it already.
+pub(crate) async fn delete_unowned_edges(
+    graph_db: Option<&Arc<dyn GraphDBTrait>>,
+    removed: &[GraphEdge],
+    deleted_nodes: &[GraphNode],
+) -> Result<Vec<String>, DeleteError> {
+    let deleted: HashSet<Uuid> = deleted_nodes.iter().map(|node| node.slug).collect();
+    let keys: Vec<cognee_graph::EdgeKey> = removed
+        .iter()
+        .filter(|edge| {
+            !deleted.contains(&edge.source_node_id) && !deleted.contains(&edge.destination_node_id)
+        })
+        .map(|edge| {
+            (
+                edge.source_node_id.to_string(),
+                edge.destination_node_id.to_string(),
+                // The graph keys an edge on its relationship name; a row keys
+                // a `contains` (and a semantic) edge on its text and keeps the
+                // name as the label.
+                edge.label
+                    .clone()
+                    .unwrap_or_else(|| edge.relationship_name.clone()),
+            )
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if keys.is_empty() {
+        return Ok(Vec::new());
+    }
+    match graph_db {
+        Some(graph_db) => {
+            graph_db.delete_edge_triples(&keys).await.map_err(|e| {
+                DeleteError::GraphCleanup(format!(
+                    "Failed to delete {} graph edges no document holds: {e}",
+                    keys.len()
+                ))
+            })?;
+            Ok(Vec::new())
+        }
+        None => Ok(vec![
+            "Graph DB not configured; edges no document holds were not removed.".to_string(),
+        ]),
+    }
+}
+
 /// The distinct non-empty `EdgeType` retrieval texts of `edges`, sorted: the
 /// candidates a delete weighs against the rows that survive it.
 fn retrieval_text_candidates<'a>(edges: impl IntoIterator<Item = &'a GraphEdge>) -> Vec<String> {
@@ -3070,6 +3254,24 @@ mod tests {
     use cognee_models::{Data, Dataset};
     use cognee_storage::MockStorage;
 
+    /// `edge` keyed as cognify keys a per-document row (its id folds its
+    /// `data_id`): only such a row lets a delete free an edge whose endpoints
+    /// both stay (SDK-1694 O6 review). A nil row is left as it is.
+    fn per_document_row(mut edge: GraphEdge) -> GraphEdge {
+        if !edge.data_id.is_nil() {
+            edge.id = cognee_database::provenance_ids::provenance_edge_id(
+                None,
+                edge.user_id,
+                edge.dataset_id,
+                edge.data_id,
+                edge.source_node_id,
+                &edge.relationship_name,
+                edge.destination_node_id,
+            );
+        }
+        edge
+    }
+
     #[test]
     fn a_forget_row_is_a_change_record() {
         assert!(CHANGE_RECORD_PIPELINE_NAMES.contains(&FORGET_PIPELINE_NAME));
@@ -3191,19 +3393,21 @@ mod tests {
     ) {
         let edges: Vec<GraphEdge> = slugs
             .iter()
-            .map(|slug| GraphEdge {
-                id: Uuid::new_v4(),
-                slug: *slug,
-                user_id: owner_id,
-                data_id,
-                dataset_id,
-                pipeline_run_id: None,
-                source_node_id: Uuid::new_v4(),
-                destination_node_id: Uuid::new_v4(),
-                relationship_name: relationship_name.to_string(),
-                label: None,
-                attributes: None,
-                created_at: chrono::Utc::now(),
+            .map(|slug| {
+                per_document_row(GraphEdge {
+                    id: Uuid::new_v4(),
+                    slug: *slug,
+                    user_id: owner_id,
+                    data_id,
+                    dataset_id,
+                    pipeline_run_id: None,
+                    source_node_id: Uuid::new_v4(),
+                    destination_node_id: Uuid::new_v4(),
+                    relationship_name: relationship_name.to_string(),
+                    label: None,
+                    attributes: None,
+                    created_at: chrono::Utc::now(),
+                })
             })
             .collect();
         ops::graph_storage::upsert_edges(db, &edges).await.unwrap();
@@ -3731,6 +3935,107 @@ mod tests {
         assert_eq!(graph_db.node_count(), 0, "graph nodes should be cleaned up");
     }
 
+    /// A dataset delete in one shared store removes an edge whose last
+    /// per-document row the dataset held, although another dataset keeps both
+    /// its endpoints (SDK-1694 O6, as Python's graph-provenance delete removes
+    /// every edge whose last source ref goes). An edge only a Python-shaped
+    /// row names (keyed without its `data_id`, the first writer's) stays: that
+    /// row cannot say no other document holds it.
+    #[tokio::test]
+    async fn delete_dataset_removes_the_edges_only_it_held() {
+        let (svc, storage, db, graph_db, _vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, data_id) = seed_dataset_with_data(&db, &storage, owner, "edges_ds").await;
+        let (other_dataset, other_data) =
+            seed_dataset_with_data(&db, &storage, owner, "keeps_ds").await;
+        let (apple, fruit, pear) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        for (dataset, data) in [(dataset_id, data_id), (other_dataset, other_data)] {
+            seed_provenance_nodes(
+                &db,
+                dataset,
+                data,
+                owner,
+                &[apple, fruit, pear],
+                "Entity",
+                serde_json::json!([]),
+            )
+            .await;
+        }
+        for id in [apple, fruit, pear] {
+            graph_db
+                .add_node_raw(serde_json::json!({"id": id.to_string(), "name": "n"}))
+                .await
+                .unwrap();
+        }
+        // Per-document rows, as cognify writes them.
+        let row = |source: Uuid, relationship: &str, label: Option<&str>, id: Uuid| GraphEdge {
+            id,
+            slug: Uuid::new_v4(),
+            user_id: owner,
+            data_id,
+            dataset_id,
+            pipeline_run_id: None,
+            source_node_id: source,
+            destination_node_id: fruit,
+            relationship_name: relationship.to_string(),
+            label: label.map(str::to_string),
+            attributes: None,
+            created_at: chrono::Utc::now(),
+        };
+        let per_document = |source: Uuid, relationship: &str| {
+            cognee_database::provenance_ids::provenance_edge_id(
+                None,
+                owner,
+                dataset_id,
+                data_id,
+                source,
+                relationship,
+                fruit,
+            )
+        };
+        let is_a = row(apple, "is_a", None, per_document(apple, "is_a"));
+        let likes = row(apple, "likes", Some("likes"), per_document(apple, "likes"));
+        // A Python-shaped row: no `data_id` in its id.
+        let python = row(pear, "is_a", Some("is_a"), Uuid::new_v4());
+        ops::graph_storage::upsert_edges(&db, &[is_a, likes, python])
+            .await
+            .unwrap();
+        for (source, relationship) in [(apple, "is_a"), (apple, "likes"), (pear, "is_a")] {
+            graph_db
+                .add_edge(&source.to_string(), &fruit.to_string(), relationship, None)
+                .await
+                .unwrap();
+        }
+
+        svc.execute(&DeleteRequest {
+            scope: DeleteScope::Dataset {
+                owner_id: owner,
+                dataset_name: "edges_ds".to_string(),
+                tenant_id: None,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        })
+        .await
+        .expect("execute should succeed");
+
+        assert_eq!(
+            graph_db.node_count(),
+            3,
+            "the other dataset keeps the nodes"
+        );
+        let (_, edges) = graph_db.get_graph_data().await.unwrap();
+        let left: BTreeSet<(String, String)> = edges
+            .into_iter()
+            .map(|(source, _, relationship, _)| (source, relationship))
+            .collect();
+        assert_eq!(
+            left,
+            BTreeSet::from([(pear.to_string(), "is_a".to_string())]),
+            "the dataset's own edges go; the one a Python-shaped row names stays"
+        );
+    }
+
     #[tokio::test]
     async fn delete_dataset_cleans_vector_points() {
         let (svc, storage, db, _graph_db, vector_db) = make_service_with_graph_vector().await;
@@ -4100,7 +4405,7 @@ mod tests {
         .id;
         ops::graph_storage::upsert_edges(
             &db,
-            &[GraphEdge {
+            &[per_document_row(GraphEdge {
                 id: Uuid::new_v4(),
                 slug: triplet_id,
                 user_id: owner,
@@ -4113,7 +4418,7 @@ mod tests {
                 label: None,
                 attributes: None,
                 created_at: chrono::Utc::now(),
-            }],
+            })],
         )
         .await
         .unwrap();
@@ -4222,19 +4527,21 @@ mod tests {
         relationship_name: &str,
     ) -> Vec<GraphEdge> {
         let edges: Vec<GraphEdge> = (0..count)
-            .map(|_| GraphEdge {
-                id: Uuid::new_v4(),
-                slug: Uuid::new_v4(),
-                user_id: owner_id,
-                data_id,
-                dataset_id,
-                pipeline_run_id: None,
-                source_node_id: Uuid::new_v4(),
-                destination_node_id: Uuid::new_v4(),
-                relationship_name: relationship_name.to_string(),
-                label: None,
-                attributes: None,
-                created_at: chrono::Utc::now(),
+            .map(|_| {
+                per_document_row(GraphEdge {
+                    id: Uuid::new_v4(),
+                    slug: Uuid::new_v4(),
+                    user_id: owner_id,
+                    data_id,
+                    dataset_id,
+                    pipeline_run_id: None,
+                    source_node_id: Uuid::new_v4(),
+                    destination_node_id: Uuid::new_v4(),
+                    relationship_name: relationship_name.to_string(),
+                    label: None,
+                    attributes: None,
+                    created_at: chrono::Utc::now(),
+                })
             })
             .collect();
         ops::graph_storage::upsert_edges(db, &edges).await.unwrap();
@@ -4858,7 +5165,7 @@ mod tests {
 
         ops::graph_storage::upsert_edges(
             &db,
-            &[GraphEdge {
+            &[per_document_row(GraphEdge {
                 id: Uuid::new_v4(),
                 slug: triplet_id,
                 user_id: owner,
@@ -4871,7 +5178,7 @@ mod tests {
                 label: Some(relationship_name.to_string()),
                 attributes: Some(serde_json::json!({ "edge_text": edge_text })),
                 created_at: chrono::Utc::now(),
-            }],
+            })],
         )
         .await
         .unwrap();
@@ -5125,7 +5432,7 @@ mod tests {
         for data_id in &data_ids {
             ops::graph_storage::upsert_edges(
                 &db,
-                &[GraphEdge {
+                &[per_document_row(GraphEdge {
                     id: Uuid::new_v4(),
                     slug: triplet_id,
                     user_id: owner,
@@ -5138,7 +5445,7 @@ mod tests {
                     label: None,
                     attributes: Some(serde_json::json!({ "edge_text": edge_text })),
                     created_at: chrono::Utc::now(),
-                }],
+                })],
             )
             .await
             .unwrap();
@@ -5307,8 +5614,8 @@ mod tests {
             .await;
         }
 
-        let edge_row =
-            |data_id: Uuid, source: Uuid, target: Uuid, name: &str, text: &str| GraphEdge {
+        let edge_row = |data_id: Uuid, source: Uuid, target: Uuid, name: &str, text: &str| {
+            per_document_row(GraphEdge {
                 id: Uuid::new_v4(),
                 slug: Uuid::new_v4(),
                 user_id: owner,
@@ -5321,7 +5628,8 @@ mod tests {
                 label: None,
                 attributes: Some(serde_json::json!({ "edge_text": text })),
                 created_at: chrono::Utc::now(),
-            };
+            })
+        };
         ops::graph_storage::upsert_edges(
             &db,
             &[

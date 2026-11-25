@@ -31,9 +31,14 @@ pub struct Entity {
     /// repeating [`Self::is_a`]. Python keeps the first type per document and
     /// combines the types of every document that mentions an entity, so one
     /// entity can carry several `is_a` edges; this holds every type after the
-    /// first. Empty for an entity with one type, and then left out of the
-    /// serialised form, so a single-typed entity serialises as before.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// first, for [`Self::type_ids`] and the `is_a` edges it becomes.
+    ///
+    /// Never serialised (SDK-1694 O6), so it is in no graph node, ledger row,
+    /// vector payload or COGX export: Python's `Entity` has no such field, and
+    /// a stored copy went stale as soon as a later run added a type or a
+    /// delete removed one, while the `is_a` edges stay right. A payload
+    /// written while it was stored still deserialises, the field included.
+    #[serde(default, skip_serializing)]
     pub extra_types: Vec<Uuid>,
 
     /// Entity description from LLM extraction
@@ -306,15 +311,21 @@ mod tests {
         assert!(back.extra_types.is_empty());
     }
 
+    /// SDK-1694 O6: the extra types are never stored — the `is_a` edges are
+    /// the entity's type set — while a payload that stored them still reads.
     #[test]
-    fn extra_types_round_trip_after_the_primary_type() {
+    fn extra_types_are_never_serialised_but_still_read() {
         let (company, fruit) = (Uuid::new_v4(), Uuid::new_v4());
         let mut entity = Entity::new("Apple", Some(company), "", None);
         entity.extra_types.push(fruit);
+        assert_eq!(entity.type_ids().collect::<Vec<_>>(), [company, fruit]);
 
-        let value = serde_json::to_value(&entity).expect("an entity serialises");
-        assert_eq!(value["extra_types"], serde_json::json!([fruit]));
-        let back: Entity = serde_json::from_value(value).expect("and deserialises");
+        let mut value = serde_json::to_value(&entity).expect("an entity serialises");
+        assert!(value.get("extra_types").is_none(), "{value}");
+        assert_eq!(value["is_a"], serde_json::json!(company));
+
+        value["extra_types"] = serde_json::json!([fruit]);
+        let back: Entity = serde_json::from_value(value).expect("an older payload deserialises");
         assert_eq!(back.type_ids().collect::<Vec<_>>(), [company, fruit]);
     }
 

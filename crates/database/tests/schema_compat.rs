@@ -377,3 +377,44 @@ async fn slug_exclusivity_subquery_uses_the_slug_index() {
         );
     }
 }
+
+/// The per-document delete decides an edge row's exclusivity on its
+/// `(source, target, relationship)` triple (SDK-1694 O6). The correlated
+/// subquery must be planned through `ix_edges_source_node_id_destination_node_id`
+/// (`m20261125_000001`), not a scan of the whole ledger per selected row.
+#[tokio::test]
+async fn triple_exclusivity_subquery_uses_the_endpoint_index() {
+    use sea_orm::ConnectionTrait;
+
+    let db = connect("sqlite::memory:").await.expect("connect");
+    initialize(&db).await.expect("initialize");
+
+    let plan = db
+        .query_all(sea_orm::Statement::from_string(
+            sea_orm::DatabaseBackend::Sqlite,
+            "EXPLAIN QUERY PLAN \
+             SELECT \"edges\".\"id\" FROM \"edges\" \
+             WHERE \"edges\".\"data_id\" = 'a' AND \"edges\".\"dataset_id\" = 'd' \
+               AND NOT EXISTS (SELECT 1 FROM \"edges\" AS \"e2\" \
+                 WHERE \"e2\".\"source_node_id\" = \"edges\".\"source_node_id\" \
+                   AND \"e2\".\"destination_node_id\" = \"edges\".\"destination_node_id\" \
+                   AND \"e2\".\"relationship_name\" = \"edges\".\"relationship_name\" \
+                   AND (\"e2\".\"dataset_id\" <> 'd' OR \"e2\".\"data_id\" <> 'a'))"
+                .to_string(),
+        ))
+        .await
+        .unwrap_or_else(|e| panic!("EXPLAIN QUERY PLAN failed: {e}"))
+        .iter()
+        .map(|row| row.try_get::<String>("", "detail").unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        plan.contains("SEARCH e2 USING INDEX ix_edges_source_node_id_destination_node_id"),
+        "the triple exclusivity subquery must use the endpoint index; plan was:\n{plan}"
+    );
+    assert!(
+        !plan.contains("SCAN e2"),
+        "the triple exclusivity subquery still full-scans; plan was:\n{plan}"
+    );
+}

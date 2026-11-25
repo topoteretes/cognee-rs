@@ -352,6 +352,22 @@ Removes memory: a whole dataset, a specific data item, or everything. Cascades
 across the relational, graph, and vector backends and file storage. rustdoc:
 `api::forget`.
 
+Deleting a data item removes what no other data item still claims in the
+ownership ledger, as Python's graph-provenance delete does with its source
+refs: an entity, an entity type or a chunk goes with the last document that
+produced it (or, for an entity or ontology edge, reached it through an
+ontology lookup). An edge is counted by its `(source, target, relationship)`
+triple and goes with the last document that produced it even when both its
+endpoints stay — an `is_a` edge with the last document that declared that
+entity with that type, a semantic edge with the last document that extracted
+it — and its `EdgeType` point goes once no surviving edge produces its text.
+Only a per-document ledger row says no other document holds an edge: an edge
+only an older or Python-written row names (one row per edge, its first
+writer's) leaves the graph only with an endpoint. Ledger rows with a nil
+`data_id`, which databases written before SDK-1694 O6 hold for every entity
+type and structural edge, still claim their artifact until its dataset is
+deleted. A delete does not lock against a running cognify of the same data.
+
 ## Lower-level pipeline
 
 The memory API composes these building blocks. They remain available directly

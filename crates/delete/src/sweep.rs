@@ -53,9 +53,10 @@ impl SweepScope {
     /// stops an item-scoped sweep deleting an entity a surviving file shares.
     ///
     /// The run's nil-`data_id` rows of an artifact (an EntityType's, a
-    /// structural edge's, an ontology-first entity's delete guard) are in the
-    /// scope when every document row beside them is: a type only the swept
-    /// items declared goes with them (SDK-1694 O5b, see
+    /// structural edge's, an ontology-first entity's delete guard, as cognify
+    /// wrote them between SDK-1694 O5a and O6) are in the scope when every
+    /// document row beside them is: a type only the swept items declared
+    /// goes with them (O5b, see
     /// `cognee_database::ops::graph_storage::RunScope`).
     pub fn for_data(pipeline_run_id: Uuid, dataset_id: Uuid, data_ids: Vec<Uuid>) -> Self {
         Self {
@@ -152,8 +153,9 @@ impl RunSweeper {
     /// slug and its `EdgeType` retrieval text, derived per row from the
     /// `edge_text` attribute and the relationship name — see
     /// `graph_storage::get_edge_retrieval_texts_claimed_outside_run`. An edge
-    /// whose endpoints survive stays in the graph while its vectors go; that
-    /// residual is Python's too.
+    /// whose endpoints survive leaves the graph when the scope held its last
+    /// per-document row (SDK-1694 O6); one only a legacy or Python-shaped row
+    /// names stays, with its vectors.
     #[instrument(
         name = "cognee.rollback.sweep",
         level = "info",
@@ -361,15 +363,31 @@ impl RunSweeper {
         //     `is_a` edge and a surviving file's `is_a` edge resolve to one
         //     point — so slug exclusivity does not license deleting it. Only
         //     the texts no surviving row claims may go.
+        //     Only the edges that leave the graph free their texts: those with
+        //     an endpoint the sweep deletes, and those whose last per-document
+        //     row the sweep takes, removed below (SDK-1694 O6 review). An edge
+        //     that stays keeps its point.
+        let tenants =
+            match cognee_database::DeleteDb::get_dataset_by_id(&*self.database, scope.dataset_id)
+                .await
+            {
+                Ok(dataset) => crate::ledger_tenants(dataset.iter()),
+                Err(_) => crate::ledger_tenants(std::iter::empty()),
+            };
+        let edges = crate::removed_edges(&edges, &nodes, &tenants);
         let edge_type_ids = self.deletable_edge_type_ids(&run_scope, &edges).await?;
 
-        // 3. Artifacts first. Graph *edges* are never deleted directly — they
-        //    cascade with their endpoints, matching Python and the dataset
-        //    delete path.
+        // 3. Artifacts first: the nodes, then the edges no document holds any
+        //    more whose endpoints both stay (`delete_unowned_edges`, as
+        //    Python's graph-provenance delete removes every edge whose last
+        //    source ref goes). Every other edge cascades with an endpoint.
         let (graph_nodes, graph_warnings) =
             delete_graph_artifacts(Some(&self.graph_db), &nodes).await?;
         outcome.graph_nodes_deleted = graph_nodes;
         outcome.warnings.extend(graph_warnings);
+        outcome
+            .warnings
+            .extend(crate::delete_unowned_edges(Some(&self.graph_db), &edges, &nodes).await?);
 
         let (vector_points, vector_warnings) =
             delete_vector_artifacts(Some(&self.vector_db), &nodes, &edges, &edge_type_ids).await?;

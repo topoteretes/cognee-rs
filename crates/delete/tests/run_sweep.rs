@@ -106,16 +106,21 @@ impl Fixture {
         }
     }
 
+    /// An edge row keyed as cognify keys a per-document row: its id folds
+    /// its `data_id` (`provenance_ids::provenance_edge_id`).
     fn edge(&self, dataset: Uuid, data: Uuid, run: Option<Uuid>, slug: Uuid) -> GraphEdge {
+        let (source, target) = (Uuid::new_v4(), Uuid::new_v4());
         GraphEdge {
-            id: Uuid::new_v4(),
+            id: cognee_database::provenance_ids::provenance_edge_id(
+                None, self.owner, dataset, data, source, "is_a", target,
+            ),
             slug,
             user_id: self.owner,
             data_id: data,
             dataset_id: dataset,
             pipeline_run_id: run,
-            source_node_id: Uuid::new_v4(),
-            destination_node_id: Uuid::new_v4(),
+            source_node_id: source,
+            destination_node_id: target,
             relationship_name: "is_a".into(),
             label: None,
             attributes: None,
@@ -391,71 +396,84 @@ async fn a_sweep_is_scoped_to_its_dataset() {
     assert!(f.is_marked(data_b, ds_b).await);
 }
 
-/// Graph edges are never deleted directly — they cascade with their endpoints,
-/// matching Python and the dataset delete path. Their *vectors* do go.
+/// An edge whose last per-document row the sweep takes leaves the graph
+/// although both its endpoints stay, and so do its vectors (SDK-1694 O6
+/// review; Python's graph-provenance rollback deletes every edge whose last
+/// source ref goes). An edge only a legacy row names — one row per edge, its
+/// id without the `data_id`, as Python's `upsert_edges` and older Rust key it
+/// — cannot say no other document holds it: it is left to cascade with an
+/// endpoint, and keeps its vectors while it stays. Neither issues a node
+/// delete.
 #[tokio::test]
-async fn edges_lose_their_vectors_but_are_never_deleted_from_the_graph_directly() {
-    let f = Fixture::new().await;
-    let dataset = f.dataset("ds").await;
-    let data = f.data(dataset, "a.txt").await;
-    let run = Uuid::new_v4();
+async fn an_edge_leaves_the_graph_with_its_last_per_document_row() {
+    for per_document in [true, false] {
+        let f = Fixture::new().await;
+        let dataset = f.dataset("ds").await;
+        let data = f.data(dataset, "a.txt").await;
+        let run = Uuid::new_v4();
 
-    let mut edge = f.edge(dataset, data, Some(run), Uuid::new_v4());
-    edge.attributes = Some(json!({ "edge_text": "Alice knows Bob" }));
-    f.seed_edges(&[edge.clone()]).await;
+        let mut edge = f.edge(dataset, data, Some(run), Uuid::new_v4());
+        if !per_document {
+            edge.id = Uuid::new_v4();
+        }
+        edge.attributes = Some(json!({ "edge_text": "Alice knows Bob" }));
+        f.seed_edges(&[edge.clone()]).await;
 
-    let (edge_type_id, triplet_id) = edge_vector_ids(&edge);
-    for (data_type, field, id) in [
-        ("EdgeType", "relationship_name", edge_type_id),
-        ("Triplet", "text", triplet_id),
-    ] {
-        f.vector
-            .create_collection(data_type, field, 3)
-            .await
-            .expect("collection");
-        f.vector
-            .index_points(
-                data_type,
-                field,
-                &[VectorPoint::new(id, vec![1.0, 0.0, 0.0])],
+        let (edge_type_id, triplet_id) = edge_vector_ids(&edge);
+        for (data_type, field, id) in [
+            ("EdgeType", "relationship_name", edge_type_id),
+            ("Triplet", "text", triplet_id),
+        ] {
+            f.vector
+                .create_collection(data_type, field, 3)
+                .await
+                .expect("collection");
+            f.vector
+                .index_points(
+                    data_type,
+                    field,
+                    &[VectorPoint::new(id, vec![1.0, 0.0, 0.0])],
+                )
+                .await
+                .expect("index");
+        }
+        f.graph
+            .add_edge(
+                &edge.source_node_id.to_string(),
+                &edge.destination_node_id.to_string(),
+                &edge.relationship_name,
+                None,
             )
             .await
-            .expect("index");
-    }
-    f.graph
-        .add_edge(
-            &edge.source_node_id.to_string(),
-            &edge.destination_node_id.to_string(),
-            &edge.relationship_name,
-            None,
-        )
-        .await
-        .expect("graph edge");
+            .expect("graph edge");
 
-    let outcome = f
-        .sweeper
-        .sweep(&SweepScope::whole_run(run, dataset))
-        .await
-        .expect("sweep");
-
-    assert_eq!(outcome.provenance_edges_deleted, 1);
-    assert_eq!(outcome.vector_points_deleted, 2);
-    assert_eq!(
-        f.vector
-            .collection_size("EdgeType", "relationship_name")
+        let outcome = f
+            .sweeper
+            .sweep(&SweepScope::whole_run(run, dataset))
             .await
-            .unwrap(),
-        0,
-    );
-    assert_eq!(
-        f.vector.collection_size("Triplet", "text").await.unwrap(),
-        0
-    );
-    assert_eq!(f.graph.edge_count(), 1, "graph edges are left to cascade");
-    assert!(
-        !f.graph.get_call_log().contains(&"delete_nodes".to_string()),
-        "an edge-only sweep must not issue a node delete",
-    );
+            .expect("sweep");
+
+        assert_eq!(outcome.provenance_edges_deleted, 1);
+        let points = if per_document { 0 } else { 1 };
+        assert_eq!(outcome.vector_points_deleted, 2 - 2 * points);
+        assert_eq!(
+            f.vector
+                .collection_size("EdgeType", "relationship_name")
+                .await
+                .unwrap(),
+            points,
+            "per_document {per_document}"
+        );
+        assert_eq!(
+            f.vector.collection_size("Triplet", "text").await.unwrap(),
+            points
+        );
+        assert_eq!(f.graph.edge_count(), points, "per_document {per_document}");
+        assert!(
+            !f.graph.get_call_log().contains(&"delete_nodes".to_string()),
+            "an edge-only sweep must not issue a node delete",
+        );
+    }
 }
 
 /// The other half of that claim: cascading is how a swept node's edges *do*

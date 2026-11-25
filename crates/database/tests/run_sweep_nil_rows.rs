@@ -5,9 +5,12 @@
 )]
 //! The run sweep's handling of nil-`data_id` rows (SDK-1694 O5b).
 //!
-//! Since O5a an EntityType, a structural edge and an ontology-first entity
-//! carry one ledger row per producing document plus a nil-`data_id` row, the
-//! guard the data-scoped delete reads. Two sweeps decide about those nil rows:
+//! Between O5a and O6 an EntityType, a structural edge and an ontology-first
+//! entity carried one ledger row per producing document plus a nil-`data_id`
+//! row, the guard the data-scoped delete read. Since O6 cognify writes a nil
+//! row only for a run-level artifact (a DLT schema node), but a database
+//! written before then still holds them, so the sweeps still have to weigh
+//! them. Two sweeps decide about those nil rows:
 //!
 //! * the item-scoped sweep (`RunScope::for_data`) takes a nil row of the run
 //!   when a swept row of the same artifact stands beside it and no non-nil row
@@ -250,12 +253,18 @@ async fn item_sweep(db: &DatabaseConnection) {
             .map(String::from)
             .collect(),
     );
-    // The `is_a` slug is shared, and the kept document's row claims it.
-    assert!(
+    // Edges are matched on their triple (SDK-1694 O6), not on the `is_a` slug
+    // every row shares: `x is_a only_swept` is the swept item's alone (its row
+    // and the nil row the sweep takes), while the kept document's row claims
+    // `y is_a shared_with_kept`.
+    assert_eq!(
         get_unique_edges_for_run(db, &scope)
             .await
             .unwrap()
-            .is_empty()
+            .into_iter()
+            .map(|row| (row.source_node_id, row.destination_node_id))
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([(slug("x"), slug("only_swept"))])
     );
     assert!(
         get_edge_retrieval_texts_claimed_outside_run(db, &scope)

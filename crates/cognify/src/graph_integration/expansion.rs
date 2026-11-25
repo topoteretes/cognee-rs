@@ -1276,6 +1276,7 @@ fn expand_unit(
     // Every chunk that produced each merged artifact, not only the one that
     // created it (see the `# Returns` note above).
     let mut producers = ArtifactProducers::default();
+    producers.mark_recorded();
 
     // Map from node_id to entity_id for edge resolution. The second element is
     // the position of the chunk that **most recently** declared the key, at or
