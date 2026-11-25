@@ -747,12 +747,35 @@
       "repo": "shop"
     }
   ],
+  "node_order": [
+    "0cdcbf52-5199-5f87-a8ff-14ac6960f9ae",
+    "4ee4a5f0-afb3-5f13-8c4c-e14bb29bca66",
+    "a3d96438-5b6a-51fd-a7bf-74ec729d10e0",
+    "ab7b70ad-b75a-5e63-97a8-4f38cc0024ef",
+    "c8774c26-8ba4-5e47-bf67-d7115d00caf8",
+    "e5aa1eb4-47ca-55b5-b99e-7d630440a27b",
+    "a2f73496-0928-5127-92ba-4d0731b4909a",
+    "1a17bf7c-3551-554b-b1a0-1b863cdc3839",
+    "c2200376-8242-5e8c-969c-aa81be5e3a03",
+    "b917b92e-f1cd-54ad-8394-5d50a18f0f7a",
+    "5c74bd57-b97c-56c4-bffe-94c35530702e",
+    "0c14c945-4a36-5b2c-a1c1-32eb2ab3ff1d",
+    "902bbd7e-2872-508b-b1b2-5bcc61a63e1d",
+    "eb403ee9-f3c4-5690-a2cd-0b0c6072111c",
+    "b2a68318-e77a-5902-96c0-22c7e8647804",
+    "1a9aa0fb-d481-59c8-800e-ddb25b394455",
+    "51cc00e7-5a5e-56b0-afde-adfa303cf797"
+  ],
   "nodes": [
     {
+      "belongs_to_set": null,
       "id": "0c14c945-4a36-5b2c-a1c1-32eb2ab3ff1d",
+      "part_of": "0cdcbf52-5199-5f87-a8ff-14ac6960f9ae",
       "properties": {
+        "belongs_to_set": null,
         "description": "Persist orders in the orders table.",
         "doc": "Persist orders in the orders table.",
+        "end_line": null,
         "enola_id": "37cc15a67384c53c3328d9ec4c6d7f88",
         "fact_hash": "sha256:b98e186778cde3f73cc42d90b8ad01981e1a7229791a64b9dc0738dfbffbd988",
         "fact_properties": {
@@ -772,8 +795,14 @@
           ]
         },
         "name": "orders/repository.OrderRepository",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "symbol_kind": "class",
         "topological_rank": 0,
         "type": "CodeSymbol",
@@ -782,19 +811,32 @@
       "type": "CodeSymbol"
     },
     {
+      "belongs_to_set": null,
       "id": "0cdcbf52-5199-5f87-a8ff-14ac6960f9ae",
+      "part_of": null,
       "properties": {
+        "belongs_to_set": null,
         "feedback_weight": 0.5,
         "id": "0cdcbf52-5199-5f87-a8ff-14ac6960f9ae",
         "importance_weight": 0.5,
+        "last_delta": null,
+        "last_mapping_version": null,
+        "last_receipt": null,
+        "last_snapshot_id": null,
         "metadata": {
           "index_fields": [
             "name"
           ]
         },
         "name": "shop",
+        "ontology_uri": null,
         "ontology_valid": false,
         "path": "/tmp/shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "topological_rank": 0,
         "type": "CodeRepository",
         "version": 1
@@ -802,9 +844,14 @@
       "type": "CodeRepository"
     },
     {
+      "belongs_to_set": null,
       "id": "1a17bf7c-3551-554b-b1a0-1b863cdc3839",
+      "part_of": "0cdcbf52-5199-5f87-a8ff-14ac6960f9ae",
       "properties": {
+        "belongs_to_set": null,
         "description": "symbol: language=python, symbol_kind=function",
+        "doc": null,
+        "end_line": null,
         "enola_id": "abd4ad58261e68be12abd3bf6adba5ab",
         "fact_hash": "sha256:55b611e717d9817215620517935c23f3034fb97400c6379122ef4b44711b927f",
         "fact_properties": {
@@ -823,8 +870,14 @@
           ]
         },
         "name": "app.serve",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "symbol_kind": "function",
         "topological_rank": 0,
         "type": "CodeSymbol",
@@ -833,9 +886,14 @@
       "type": "CodeSymbol"
     },
     {
+      "belongs_to_set": null,
       "id": "1a9aa0fb-d481-59c8-800e-ddb25b394455",
+      "part_of": "0cdcbf52-5199-5f87-a8ff-14ac6960f9ae",
       "properties": {
+        "belongs_to_set": null,
         "description": "The program starts at app.main (\"Start the shop's HTTP server and register its routes.\"). It hands off to app.serve. Its 2 symbols sit in . (2 symbols).",
+        "doc": null,
+        "end_line": null,
         "enola_id": "f31a15f82e4314c2fc5c507ae5b7dccb",
         "fact_hash": "sha256:1391b292d2b970553d64e1e544d523f3f3934bccd7692638b14a26f5260839d7",
         "fact_properties": {
@@ -885,8 +943,14 @@
           ]
         },
         "name": "app.main",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "topological_rank": 0,
         "type": "CodeFlow",
         "version": 1
@@ -894,9 +958,14 @@
       "type": "CodeFlow"
     },
     {
+      "belongs_to_set": null,
       "id": "4ee4a5f0-afb3-5f13-8c4c-e14bb29bca66",
+      "part_of": "0cdcbf52-5199-5f87-a8ff-14ac6960f9ae",
       "properties": {
+        "belongs_to_set": null,
         "description": "module: language=python",
+        "doc": null,
+        "end_line": null,
         "enola_id": "608c12386353274f113238897bdfb416",
         "fact_hash": "sha256:4e7b17a7f021621785446ae4a972c0af46a864d550ff0c1792e22da07aa52f36",
         "fact_properties": {
@@ -907,14 +976,21 @@
         "id": "4ee4a5f0-afb3-5f13-8c4c-e14bb29bca66",
         "importance_weight": 0.5,
         "kind": "module",
+        "line": null,
         "metadata": {
           "index_fields": [
             "name"
           ]
         },
         "name": ".",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "topological_rank": 0,
         "type": "CodeModule",
         "version": 1
@@ -922,9 +998,14 @@
       "type": "CodeModule"
     },
     {
+      "belongs_to_set": null,
       "id": "51cc00e7-5a5e-56b0-afde-adfa303cf797",
+      "part_of": "0cdcbf52-5199-5f87-a8ff-14ac6960f9ae",
       "properties": {
+        "belongs_to_set": null,
         "description": "A side entry: scripts/seed.main (\"Fill a development database with sample orders.\") hands off to repository.OrderRepository.save. Its 2 symbols sit in orders (1 symbol) and scripts (1).",
+        "doc": null,
+        "end_line": null,
         "enola_id": "30a87d2645d2b11df9ad16984e1a0589",
         "fact_hash": "sha256:294deb94120475bf3a7f789b73802862966981c497a53ec836ba0528d9587a3c",
         "fact_properties": {
@@ -979,8 +1060,14 @@
           ]
         },
         "name": "scripts/seed.main",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "topological_rank": 0,
         "type": "CodeFlow",
         "version": 1
@@ -988,10 +1075,14 @@
       "type": "CodeFlow"
     },
     {
+      "belongs_to_set": null,
       "id": "5c74bd57-b97c-56c4-bffe-94c35530702e",
+      "part_of": "0cdcbf52-5199-5f87-a8ff-14ac6960f9ae",
       "properties": {
+        "belongs_to_set": null,
         "description": "Turn the cart in the request into an order and charge the customer.",
         "doc": "Turn the cart in the request into an order and charge the customer.",
+        "end_line": null,
         "enola_id": "7005efd41c3df03d785196bc41a50700",
         "fact_hash": "sha256:82f2fb718013799d4e5c7b8c7c93b46d58f10e1a9559bf5ff95e3ff7bbf7a367",
         "fact_properties": {
@@ -1011,8 +1102,14 @@
           ]
         },
         "name": "orders/checkout.place_order",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "symbol_kind": "function",
         "topological_rank": 0,
         "type": "CodeSymbol",
@@ -1021,9 +1118,14 @@
       "type": "CodeSymbol"
     },
     {
+      "belongs_to_set": null,
       "id": "902bbd7e-2872-508b-b1b2-5bcc61a63e1d",
+      "part_of": "0cdcbf52-5199-5f87-a8ff-14ac6960f9ae",
       "properties": {
+        "belongs_to_set": null,
         "description": "symbol: language=python, symbol_kind=method",
+        "doc": null,
+        "end_line": null,
         "enola_id": "902fefc888717ece9db7fc355f660556",
         "fact_hash": "sha256:a8f808fa46be3315fe9af60f43b9510f0fb3bfb7c4503c4d8767c47d6fc4cfde",
         "fact_properties": {
@@ -1042,8 +1144,14 @@
           ]
         },
         "name": "orders/repository.OrderRepository.save",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "symbol_kind": "method",
         "topological_rank": 0,
         "type": "CodeSymbol",
@@ -1052,10 +1160,14 @@
       "type": "CodeSymbol"
     },
     {
+      "belongs_to_set": null,
       "id": "a2f73496-0928-5127-92ba-4d0731b4909a",
+      "part_of": "0cdcbf52-5199-5f87-a8ff-14ac6960f9ae",
       "properties": {
+        "belongs_to_set": null,
         "description": "Start the shop's HTTP server and register its routes.",
         "doc": "Start the shop's HTTP server and register its routes.",
+        "end_line": null,
         "enola_id": "8ea13bd2c0d8bbd731ae334cb2acc8d7",
         "fact_hash": "sha256:ea8dc71cc9f030767dadb55a9f030577cda9ba22ff57d02ae7e825ac07e62c7e",
         "fact_properties": {
@@ -1075,8 +1187,14 @@
           ]
         },
         "name": "app.main",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "symbol_kind": "function",
         "topological_rank": 0,
         "type": "CodeSymbol",
@@ -1085,9 +1203,14 @@
       "type": "CodeSymbol"
     },
     {
+      "belongs_to_set": null,
       "id": "a3d96438-5b6a-51fd-a7bf-74ec729d10e0",
+      "part_of": "0cdcbf52-5199-5f87-a8ff-14ac6960f9ae",
       "properties": {
+        "belongs_to_set": null,
         "description": "module: language=python",
+        "doc": null,
+        "end_line": null,
         "enola_id": "1a3e4e710b88ca85879662485d23be4b",
         "fact_hash": "sha256:7d1c8a7a0a7c388a871b61493ee97d5c239ae4ff7c353cb0d73f85160dd33e6e",
         "fact_properties": {
@@ -1098,14 +1221,21 @@
         "id": "a3d96438-5b6a-51fd-a7bf-74ec729d10e0",
         "importance_weight": 0.5,
         "kind": "module",
+        "line": null,
         "metadata": {
           "index_fields": [
             "name"
           ]
         },
         "name": "auth",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "topological_rank": 0,
         "type": "CodeModule",
         "version": 1
@@ -1113,9 +1243,14 @@
       "type": "CodeModule"
     },
     {
+      "belongs_to_set": null,
       "id": "ab7b70ad-b75a-5e63-97a8-4f38cc0024ef",
+      "part_of": "0cdcbf52-5199-5f87-a8ff-14ac6960f9ae",
       "properties": {
+        "belongs_to_set": null,
         "description": "module: language=python",
+        "doc": null,
+        "end_line": null,
         "enola_id": "5d386f991ee5bde76306c0bd41efdefd",
         "fact_hash": "sha256:d7e44a4cf9fedad3b08a953d042b757aec71df4d08e34cd786c7c6d8270f4375",
         "fact_properties": {
@@ -1126,14 +1261,21 @@
         "id": "ab7b70ad-b75a-5e63-97a8-4f38cc0024ef",
         "importance_weight": 0.5,
         "kind": "module",
+        "line": null,
         "metadata": {
           "index_fields": [
             "name"
           ]
         },
         "name": "orders",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "topological_rank": 0,
         "type": "CodeModule",
         "version": 1
@@ -1141,9 +1283,14 @@
       "type": "CodeModule"
     },
     {
+      "belongs_to_set": null,
       "id": "b2a68318-e77a-5902-96c0-22c7e8647804",
+      "part_of": "0cdcbf52-5199-5f87-a8ff-14ac6960f9ae",
       "properties": {
+        "belongs_to_set": null,
         "description": "POST /checkout is served by orders/checkout.place_order (\"Turn the cart in the request into an order and charge the customer.\"). It hands off to tokens.validate_token, which calls tokens.decode, and to repository.OrderRepository.save. Its 4 symbols sit in auth (2 symbols) and orders (2).",
+        "doc": null,
+        "end_line": null,
         "enola_id": "19fff23f7659d1e32f5ff8a83f1abda9",
         "fact_hash": "sha256:3edb8d03d7660e6f5f0ff49e0be9379cac629101147a7906618dedd5d40e39a3",
         "fact_properties": {
@@ -1226,8 +1373,14 @@
           ]
         },
         "name": "POST /checkout",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "topological_rank": 0,
         "type": "CodeFlow",
         "version": 1
@@ -1235,10 +1388,14 @@
       "type": "CodeFlow"
     },
     {
+      "belongs_to_set": null,
       "id": "b917b92e-f1cd-54ad-8394-5d50a18f0f7a",
+      "part_of": "0cdcbf52-5199-5f87-a8ff-14ac6960f9ae",
       "properties": {
+        "belongs_to_set": null,
         "description": "Check a bearer token's signature and expiry, then return the user it was issued to.",
         "doc": "Check a bearer token's signature and expiry, then return the user it was issued to.",
+        "end_line": null,
         "enola_id": "d18f1ba5d1f48d7dd7aaa47130f7c10b",
         "fact_hash": "sha256:3ddb3e499fbfcae8788cafdc6d1785642a6c8bd0a46530a9f0cd67f0c451b139",
         "fact_properties": {
@@ -1258,8 +1415,14 @@
           ]
         },
         "name": "auth/tokens.validate_token",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "symbol_kind": "function",
         "topological_rank": 0,
         "type": "CodeSymbol",
@@ -1268,9 +1431,14 @@
       "type": "CodeSymbol"
     },
     {
+      "belongs_to_set": null,
       "id": "c2200376-8242-5e8c-969c-aa81be5e3a03",
+      "part_of": "0cdcbf52-5199-5f87-a8ff-14ac6960f9ae",
       "properties": {
+        "belongs_to_set": null,
         "description": "symbol: language=python, symbol_kind=function",
+        "doc": null,
+        "end_line": null,
         "enola_id": "918ab0aca0d00d8356108f913d08596e",
         "fact_hash": "sha256:59c983d4a68e064f2f6237b26b57c0dd0562f776558fb114c5c229b366a88ca3",
         "fact_properties": {
@@ -1289,8 +1457,14 @@
           ]
         },
         "name": "auth/tokens.decode",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "symbol_kind": "function",
         "topological_rank": 0,
         "type": "CodeSymbol",
@@ -1299,9 +1473,14 @@
       "type": "CodeSymbol"
     },
     {
+      "belongs_to_set": null,
       "id": "c8774c26-8ba4-5e47-bf67-d7115d00caf8",
+      "part_of": "0cdcbf52-5199-5f87-a8ff-14ac6960f9ae",
       "properties": {
+        "belongs_to_set": null,
         "description": "module: language=python",
+        "doc": null,
+        "end_line": null,
         "enola_id": "e9d7509db4e0f70a035168cd5784d56d",
         "fact_hash": "sha256:a9e327a2ffafe5968664794819e30ff5e6bb6d5de2e715323f93b7ca2edff830",
         "fact_properties": {
@@ -1312,14 +1491,21 @@
         "id": "c8774c26-8ba4-5e47-bf67-d7115d00caf8",
         "importance_weight": 0.5,
         "kind": "module",
+        "line": null,
         "metadata": {
           "index_fields": [
             "name"
           ]
         },
         "name": "scripts",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "topological_rank": 0,
         "type": "CodeModule",
         "version": 1
@@ -1327,9 +1513,14 @@
       "type": "CodeModule"
     },
     {
+      "belongs_to_set": null,
       "id": "e5aa1eb4-47ca-55b5-b99e-7d630440a27b",
+      "part_of": "0cdcbf52-5199-5f87-a8ff-14ac6960f9ae",
       "properties": {
+        "belongs_to_set": null,
         "description": "route: framework=fastapi, language=python, method=POST",
+        "doc": null,
+        "end_line": null,
         "enola_id": "01c1396efb449bb82f899a68648fdd30",
         "fact_hash": "sha256:34c8f4b2f644ca197ba94ebea3edca13a8ddb575de344009b57a593be54dc8f1",
         "fact_properties": {
@@ -1349,8 +1540,14 @@
           ]
         },
         "name": "/checkout",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "topological_rank": 0,
         "type": "ApiEndpoint",
         "version": 1
@@ -1358,10 +1555,14 @@
       "type": "ApiEndpoint"
     },
     {
+      "belongs_to_set": null,
       "id": "eb403ee9-f3c4-5690-a2cd-0b0c6072111c",
+      "part_of": "0cdcbf52-5199-5f87-a8ff-14ac6960f9ae",
       "properties": {
+        "belongs_to_set": null,
         "description": "Fill a development database with sample orders.",
         "doc": "Fill a development database with sample orders.",
+        "end_line": null,
         "enola_id": "2476070b88f851c09edd9a7eb4005798",
         "fact_hash": "sha256:c47d189935695c6f9fc1b7e22d24f81c4ec6e144bc2548cb50222923592ae3b1",
         "fact_properties": {
@@ -1381,8 +1582,14 @@
           ]
         },
         "name": "scripts/seed.main",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "symbol_kind": "function",
         "topological_rank": 0,
         "type": "CodeSymbol",

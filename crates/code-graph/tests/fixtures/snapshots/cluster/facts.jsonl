@@ -1,4 +1,4 @@
 {"kind": "symbol", "name": "api.fetchRounds", "repo": "ui", "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
-{"kind": "route", "name": "/api/rounds", "repo": "ui", "props": {"role": "client", "caller": "api.fetchRounds", "caller_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "matched_routes": [{"repo": "golf", "name": "/api/rounds", "confidence": "verified", "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}}
-{"kind": "route", "name": "/api/rounds", "repo": "golf", "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "relations": [{"kind": "handled_by", "target": "handlers.ListRounds"}]}
-{"kind": "symbol", "name": "handlers.ListRounds", "repo": "golf"}
+{"kind": "route", "name": "/api/rounds", "repo": "ui", "props": {"role": "client", "caller": "api.fetchRounds", "caller_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "matched_routes": [{"repo": "golf", "name": "/api/rounds", "confidence": "verified", "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, {"repo": "golf", "name": "/api/retired", "confidence": "inferred"}, "not a match"]}}
+{"kind": "route", "name": "/api/rounds", "repo": "golf", "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "relations": [{"kind": "handled_by", "target": "handlers.ListRounds"}, {"kind": "handled_by", "target": "handlers.Gone"}]}
+{"kind": "symbol", "name": "handlers.ListRounds", "repo": "golf", "relations": [{"note": "no kind and no target"}]}

@@ -224,6 +224,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 # shares with datamodel-code-generator; see cognee-cognify dynamic_graph.rs.
 unicode-ident = "1"
 unicode-normalization = "0.1"
+# Unicode general categories, for Python's `str.isprintable` in `repr()`
+# (cognee-code-graph `pyjson::py_repr`).
+unicode-properties = { version = "0.1", default-features = false, features = ["general-category"] }
 url = "2.5"
 # `js` makes uuid's v4 randomness work on wasm32-unknown (routing through
 # wasm-bindgen/js-sys). It is a no-op on native targets — uuid gates its

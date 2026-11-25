@@ -1,0 +1,686 @@
+{
+  "edges": [
+    {
+      "properties": {
+        "edge_text": "declares",
+        "relationship_name": "declares",
+        "source_node_id": "5228a21c-f776-5693-b4c2-1e50495a5009",
+        "target_node_id": "6c466a0d-13a6-58e7-9745-d561e27132ba"
+      },
+      "relationship_name": "declares",
+      "source": "5228a21c-f776-5693-b4c2-1e50495a5009",
+      "target": "6c466a0d-13a6-58e7-9745-d561e27132ba"
+    },
+    {
+      "properties": {
+        "edge_text": "calls",
+        "relationship_name": "calls",
+        "source_node_id": "6c466a0d-13a6-58e7-9745-d561e27132ba",
+        "target_node_id": "bc0a40dd-b74e-52a3-a5ba-45cfb1d4d96b"
+      },
+      "relationship_name": "calls",
+      "source": "6c466a0d-13a6-58e7-9745-d561e27132ba",
+      "target": "bc0a40dd-b74e-52a3-a5ba-45cfb1d4d96b"
+    },
+    {
+      "properties": {
+        "edge_text": "evidences",
+        "relationship_name": "evidences",
+        "source_node_id": "19aa74bf-89f8-5246-a2f9-1b17d1accfc3",
+        "target_node_id": "6c466a0d-13a6-58e7-9745-d561e27132ba"
+      },
+      "relationship_name": "evidences",
+      "source": "19aa74bf-89f8-5246-a2f9-1b17d1accfc3",
+      "target": "6c466a0d-13a6-58e7-9745-d561e27132ba"
+    },
+    {
+      "properties": {
+        "edge_text": "evidences",
+        "relationship_name": "evidences",
+        "source_node_id": "cd9171d8-28cf-54ec-9b1b-b2d327078f9b",
+        "target_node_id": "bc0a40dd-b74e-52a3-a5ba-45cfb1d4d96b"
+      },
+      "relationship_name": "evidences",
+      "source": "cd9171d8-28cf-54ec-9b1b-b2d327078f9b",
+      "target": "bc0a40dd-b74e-52a3-a5ba-45cfb1d4d96b"
+    },
+    {
+      "properties": {
+        "edge_text": "evidences",
+        "relationship_name": "evidences",
+        "source_node_id": "cd9171d8-28cf-54ec-9b1b-b2d327078f9b",
+        "target_node_id": "4eea6166-3c06-510a-8e76-79638c76d292"
+      },
+      "relationship_name": "evidences",
+      "source": "cd9171d8-28cf-54ec-9b1b-b2d327078f9b",
+      "target": "4eea6166-3c06-510a-8e76-79638c76d292"
+    }
+  ],
+  "facts": [
+    {
+      "file": "billing/billing.go",
+      "id": "0123456789abcdef0123456789abcdef",
+      "kind": "module",
+      "line": 1,
+      "name": "billing",
+      "props": {
+        "language": "go"
+      },
+      "relations": [
+        {
+          "kind": "declares",
+          "target": "billing.Charge",
+          "target_id": "fedcba9876543210fedcba9876543210"
+        }
+      ],
+      "repo": "acme/pay"
+    },
+    {
+      "end_line": 42,
+      "file": "billing/billing.go",
+      "id": "fedcba9876543210fedcba9876543210",
+      "kind": "symbol",
+      "line": 10,
+      "name": "billing.Charge",
+      "props": {
+        "doc": "Charge bills a card once.",
+        "symbol_kind": "function"
+      },
+      "relations": [
+        {
+          "kind": "calls",
+          "target": "billing.retry"
+        }
+      ],
+      "repo": "acme/pay"
+    },
+    {
+      "file": "billing/retry.go",
+      "kind": "symbol",
+      "line": 3,
+      "name": "billing.retry",
+      "props": {
+        "symbol_kind": "function"
+      },
+      "relations": [],
+      "repo": "acme/pay"
+    },
+    {
+      "file": "billing/retry.go",
+      "kind": "file_ref",
+      "name": "billing/retry.go",
+      "props": {
+        "bytes": 512
+      },
+      "relations": [],
+      "repo": "acme/pay"
+    },
+    {
+      "kind": "insight",
+      "name": "Charge is a hotspot",
+      "props": {
+        "confidence": 0.75,
+        "description": "billing.Charge is called from 12 places.",
+        "informational": false,
+        "metrics": {
+          "fan_in": 12,
+          "ratio": -0.0
+        },
+        "source": "hotspots",
+        "suggested_actions": [
+          "Split Charge",
+          "Add tests"
+        ]
+      },
+      "relations": [
+        {
+          "kind": "evidences",
+          "target": "billing.Charge",
+          "target_id": "fedcba9876543210fedcba9876543210"
+        }
+      ]
+    },
+    {
+      "kind": "insight",
+      "name": "retry has no callers outside billing",
+      "props": {
+        "confidence": "high",
+        "source": "dead-methods"
+      },
+      "relations": [
+        {
+          "kind": "evidences",
+          "target": "billing.retry"
+        },
+        {
+          "kind": "evidences",
+          "target": "billing/retry.go"
+        }
+      ]
+    },
+    {
+      "kind": "insight",
+      "name": "Cycle through a removed package",
+      "props": {
+        "informational": true,
+        "source": "cycles"
+      },
+      "relations": [
+        {
+          "kind": "evidences",
+          "target": "ghost.Phantom"
+        }
+      ]
+    },
+    {
+      "kind": "insight",
+      "name": "Bare file evidence",
+      "props": {
+        "metrics": {
+          "depth": 2
+        },
+        "source": "layers"
+      },
+      "relations": [
+        {
+          "kind": "evidences",
+          "target": "billing/billing.go"
+        }
+      ]
+    }
+  ],
+  "node_order": [
+    "d5fa3b8c-4d64-5dc8-9f5c-eb5e82c13b75",
+    "5228a21c-f776-5693-b4c2-1e50495a5009",
+    "6c466a0d-13a6-58e7-9745-d561e27132ba",
+    "bc0a40dd-b74e-52a3-a5ba-45cfb1d4d96b",
+    "4eea6166-3c06-510a-8e76-79638c76d292",
+    "19aa74bf-89f8-5246-a2f9-1b17d1accfc3",
+    "cd9171d8-28cf-54ec-9b1b-b2d327078f9b",
+    "2f52b546-2ab7-5484-a9c5-d66ac275466e",
+    "66b6d55c-e39b-5389-96d0-32f41282dcdb"
+  ],
+  "nodes": [
+    {
+      "belongs_to_set": [
+        {
+          "id": "2916e07e-ec03-55c1-947e-cc4352e3e750",
+          "name": "team-a"
+        },
+        {
+          "id": "ebb7b392-7ec8-5e3a-826e-cfb65db67f77",
+          "name": "shared"
+        }
+      ],
+      "id": "19aa74bf-89f8-5246-a2f9-1b17d1accfc3",
+      "part_of": "d5fa3b8c-4d64-5dc8-9f5c-eb5e82c13b75",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "billing.Charge is called from 12 places.",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
+        "fact_hash": "sha256:f6f131c7811382c2f374ef146c01f583e726865df40b777d7501864de93a4b3f",
+        "fact_properties": {
+          "confidence": 0.75,
+          "description": "billing.Charge is called from 12 places.",
+          "informational": false,
+          "metrics": {
+            "fan_in": 12,
+            "ratio": -0.0
+          },
+          "source": "hotspots",
+          "suggested_actions": [
+            "Split Charge",
+            "Add tests"
+          ]
+        },
+        "feedback_weight": 0.5,
+        "file_path": null,
+        "id": "19aa74bf-89f8-5246-a2f9-1b17d1accfc3",
+        "importance_weight": 0.5,
+        "kind": "insight",
+        "line": null,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "Charge is a hotspot",
+        "ontology_uri": null,
+        "ontology_valid": false,
+        "repo": "acme/pay",
+        "source_content_hash": null,
+        "source_node_set": "team-a, shared",
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
+        "topological_rank": 0,
+        "type": "CodeInsight",
+        "version": 1
+      },
+      "type": "CodeInsight"
+    },
+    {
+      "belongs_to_set": [
+        {
+          "id": "2916e07e-ec03-55c1-947e-cc4352e3e750",
+          "name": "team-a"
+        },
+        {
+          "id": "ebb7b392-7ec8-5e3a-826e-cfb65db67f77",
+          "name": "shared"
+        }
+      ],
+      "id": "2f52b546-2ab7-5484-a9c5-d66ac275466e",
+      "part_of": "d5fa3b8c-4d64-5dc8-9f5c-eb5e82c13b75",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "insight: informational=True, source=cycles",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
+        "fact_hash": "sha256:1ed7315a9256fd9c4701529db6fdeed7a4989646b0ca885f840b508a55be2ac5",
+        "fact_properties": {
+          "informational": true,
+          "source": "cycles"
+        },
+        "feedback_weight": 0.5,
+        "file_path": null,
+        "id": "2f52b546-2ab7-5484-a9c5-d66ac275466e",
+        "importance_weight": 0.5,
+        "kind": "insight",
+        "line": null,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "Cycle through a removed package",
+        "ontology_uri": null,
+        "ontology_valid": false,
+        "repo": "acme/pay",
+        "source_content_hash": null,
+        "source_node_set": "team-a, shared",
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
+        "topological_rank": 0,
+        "type": "CodeInsight",
+        "version": 1
+      },
+      "type": "CodeInsight"
+    },
+    {
+      "belongs_to_set": [
+        {
+          "id": "2916e07e-ec03-55c1-947e-cc4352e3e750",
+          "name": "team-a"
+        },
+        {
+          "id": "ebb7b392-7ec8-5e3a-826e-cfb65db67f77",
+          "name": "shared"
+        }
+      ],
+      "id": "4eea6166-3c06-510a-8e76-79638c76d292",
+      "part_of": "d5fa3b8c-4d64-5dc8-9f5c-eb5e82c13b75",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "file_ref: bytes=512",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
+        "fact_hash": "sha256:4683f345f352587c0ac808fb4400371ef6838c041185b3f610cc93724a508404",
+        "fact_properties": {
+          "bytes": 512
+        },
+        "feedback_weight": 0.5,
+        "file_path": "billing/retry.go",
+        "id": "4eea6166-3c06-510a-8e76-79638c76d292",
+        "importance_weight": 0.5,
+        "kind": "file_ref",
+        "line": null,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "billing/retry.go",
+        "ontology_uri": null,
+        "ontology_valid": false,
+        "repo": "acme/pay",
+        "source_content_hash": null,
+        "source_node_set": "team-a, shared",
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
+        "topological_rank": 0,
+        "type": "CodeFileReference",
+        "version": 1
+      },
+      "type": "CodeFileReference"
+    },
+    {
+      "belongs_to_set": [
+        {
+          "id": "2916e07e-ec03-55c1-947e-cc4352e3e750",
+          "name": "team-a"
+        },
+        {
+          "id": "ebb7b392-7ec8-5e3a-826e-cfb65db67f77",
+          "name": "shared"
+        }
+      ],
+      "id": "5228a21c-f776-5693-b4c2-1e50495a5009",
+      "part_of": "d5fa3b8c-4d64-5dc8-9f5c-eb5e82c13b75",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "module: language=go",
+        "doc": null,
+        "end_line": null,
+        "enola_id": "0123456789abcdef0123456789abcdef",
+        "fact_hash": "sha256:895d0e6847c34e401b80a21c655f502d0e37484607c94f88bfc1a8aa3802ef2d",
+        "fact_properties": {
+          "language": "go"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "billing/billing.go",
+        "id": "5228a21c-f776-5693-b4c2-1e50495a5009",
+        "importance_weight": 0.5,
+        "kind": "module",
+        "line": 1,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "billing",
+        "ontology_uri": null,
+        "ontology_valid": false,
+        "repo": "acme/pay",
+        "source_content_hash": null,
+        "source_node_set": "team-a, shared",
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
+        "topological_rank": 0,
+        "type": "CodeModule",
+        "version": 1
+      },
+      "type": "CodeModule"
+    },
+    {
+      "belongs_to_set": [
+        {
+          "id": "2916e07e-ec03-55c1-947e-cc4352e3e750",
+          "name": "team-a"
+        },
+        {
+          "id": "ebb7b392-7ec8-5e3a-826e-cfb65db67f77",
+          "name": "shared"
+        }
+      ],
+      "id": "66b6d55c-e39b-5389-96d0-32f41282dcdb",
+      "part_of": "d5fa3b8c-4d64-5dc8-9f5c-eb5e82c13b75",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "insight: source=layers",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
+        "fact_hash": "sha256:e08245b1caacd5ddf40bd0e016d91b01fe123f8709a4ea763d4ff1eb9aaf4e30",
+        "fact_properties": {
+          "metrics": {
+            "depth": 2
+          },
+          "source": "layers"
+        },
+        "feedback_weight": 0.5,
+        "file_path": null,
+        "id": "66b6d55c-e39b-5389-96d0-32f41282dcdb",
+        "importance_weight": 0.5,
+        "kind": "insight",
+        "line": null,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "Bare file evidence",
+        "ontology_uri": null,
+        "ontology_valid": false,
+        "repo": "acme/pay",
+        "source_content_hash": null,
+        "source_node_set": "team-a, shared",
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
+        "topological_rank": 0,
+        "type": "CodeInsight",
+        "version": 1
+      },
+      "type": "CodeInsight"
+    },
+    {
+      "belongs_to_set": [
+        {
+          "id": "2916e07e-ec03-55c1-947e-cc4352e3e750",
+          "name": "team-a"
+        },
+        {
+          "id": "ebb7b392-7ec8-5e3a-826e-cfb65db67f77",
+          "name": "shared"
+        }
+      ],
+      "id": "6c466a0d-13a6-58e7-9745-d561e27132ba",
+      "part_of": "d5fa3b8c-4d64-5dc8-9f5c-eb5e82c13b75",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "Charge bills a card once.",
+        "doc": "Charge bills a card once.",
+        "end_line": 42,
+        "enola_id": "fedcba9876543210fedcba9876543210",
+        "fact_hash": "sha256:c246256206908bbeebd8afb4d219dc5f0b3add0a1be505c707cd3be911b5d3ec",
+        "fact_properties": {
+          "doc": "Charge bills a card once.",
+          "symbol_kind": "function"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "billing/billing.go",
+        "id": "6c466a0d-13a6-58e7-9745-d561e27132ba",
+        "importance_weight": 0.5,
+        "kind": "symbol",
+        "line": 10,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "billing.Charge",
+        "ontology_uri": null,
+        "ontology_valid": false,
+        "repo": "acme/pay",
+        "source_content_hash": null,
+        "source_node_set": "team-a, shared",
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
+        "symbol_kind": "function",
+        "topological_rank": 0,
+        "type": "CodeSymbol",
+        "version": 1
+      },
+      "type": "CodeSymbol"
+    },
+    {
+      "belongs_to_set": [
+        {
+          "id": "2916e07e-ec03-55c1-947e-cc4352e3e750",
+          "name": "team-a"
+        },
+        {
+          "id": "ebb7b392-7ec8-5e3a-826e-cfb65db67f77",
+          "name": "shared"
+        }
+      ],
+      "id": "bc0a40dd-b74e-52a3-a5ba-45cfb1d4d96b",
+      "part_of": "d5fa3b8c-4d64-5dc8-9f5c-eb5e82c13b75",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "symbol: symbol_kind=function",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
+        "fact_hash": "sha256:fb00b2c10e180356d0beafc4bffe9d6a304fac53c7255097d76846598aa5d891",
+        "fact_properties": {
+          "symbol_kind": "function"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "billing/retry.go",
+        "id": "bc0a40dd-b74e-52a3-a5ba-45cfb1d4d96b",
+        "importance_weight": 0.5,
+        "kind": "symbol",
+        "line": 3,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "billing.retry",
+        "ontology_uri": null,
+        "ontology_valid": false,
+        "repo": "acme/pay",
+        "source_content_hash": null,
+        "source_node_set": "team-a, shared",
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
+        "symbol_kind": "function",
+        "topological_rank": 0,
+        "type": "CodeSymbol",
+        "version": 1
+      },
+      "type": "CodeSymbol"
+    },
+    {
+      "belongs_to_set": [
+        {
+          "id": "2916e07e-ec03-55c1-947e-cc4352e3e750",
+          "name": "team-a"
+        },
+        {
+          "id": "ebb7b392-7ec8-5e3a-826e-cfb65db67f77",
+          "name": "shared"
+        }
+      ],
+      "id": "cd9171d8-28cf-54ec-9b1b-b2d327078f9b",
+      "part_of": "d5fa3b8c-4d64-5dc8-9f5c-eb5e82c13b75",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "insight: confidence=high, source=dead-methods",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
+        "fact_hash": "sha256:f306c705613e9549ee427cd2e72b8b77be3a14e54f8bd28ed0f0c87bbd43e593",
+        "fact_properties": {
+          "confidence": "high",
+          "source": "dead-methods"
+        },
+        "feedback_weight": 0.5,
+        "file_path": null,
+        "id": "cd9171d8-28cf-54ec-9b1b-b2d327078f9b",
+        "importance_weight": 0.5,
+        "kind": "insight",
+        "line": null,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "retry has no callers outside billing",
+        "ontology_uri": null,
+        "ontology_valid": false,
+        "repo": "acme/pay",
+        "source_content_hash": null,
+        "source_node_set": "team-a, shared",
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
+        "topological_rank": 0,
+        "type": "CodeInsight",
+        "version": 1
+      },
+      "type": "CodeInsight"
+    },
+    {
+      "belongs_to_set": [
+        {
+          "id": "2916e07e-ec03-55c1-947e-cc4352e3e750",
+          "name": "team-a"
+        },
+        {
+          "id": "ebb7b392-7ec8-5e3a-826e-cfb65db67f77",
+          "name": "shared"
+        }
+      ],
+      "id": "d5fa3b8c-4d64-5dc8-9f5c-eb5e82c13b75",
+      "part_of": null,
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "feedback_weight": 0.5,
+        "id": "d5fa3b8c-4d64-5dc8-9f5c-eb5e82c13b75",
+        "importance_weight": 0.5,
+        "last_delta": null,
+        "last_mapping_version": null,
+        "last_receipt": null,
+        "last_snapshot_id": null,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "acme/pay",
+        "ontology_uri": null,
+        "ontology_valid": false,
+        "path": "/tmp/shop",
+        "source_content_hash": null,
+        "source_node_set": "team-a, shared",
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
+        "topological_rank": 0,
+        "type": "CodeRepository",
+        "version": 1
+      },
+      "type": "CodeRepository"
+    }
+  ],
+  "skipped": 2
+}

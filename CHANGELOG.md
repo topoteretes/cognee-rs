@@ -425,6 +425,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The code routes task is named after the route that ran (SDK-1703).**
+  cognify's one task for both code routes is now `extract_code_files_graph`
+  (`EXTRACT_CODE_FILES_GRAPH_TASK_NAME`, Python's CODE-route task) when every
+  code-routed item of the run is a per-file code item, so telemetry tells the
+  two routes apart as Python's does. A run with a code repository (a mixed
+  run included) and `build_cognify_pipeline` keep `extract_code_repo_graph`.
+  `cognee_cognify::tasks::code_routes_task_name` picks the name.
+
 - **The text loader translates line endings as Python does (SDK-1379,
   behaviour change).** `text_loader` now turns `\r\n` and a lone `\r` into
   `\n`, as Python's text-mode read does (a BOM is still kept). A CRLF text
@@ -2263,6 +2271,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `make_*_task_with_rank` builders let a custom pipeline supply its own values.
 
 ### Fixed
+
+- **Code graph: `-0` and quoted values read and print as in Python
+  (SDK-1703).** A bare `-0` number in an enola snapshot (`facts.jsonl`,
+  `receipt.json`, `insights.json`, `flows.json`) is now the integer `0`, as
+  Python's `json.loads` reads it, so a fact holding one hashes and describes
+  as Python's does (serde_json read the float `-0.0`); `-0.0` stays a float.
+  `pyjson::py_repr` is Python's `repr` for strings (quote choice, escapes,
+  non-printable characters), lists and dicts, so the unsupported
+  `format_version` error is Python's text, and the receipt quality log lines
+  use `str` as Python's `%s` does. The code graph goldens cover three more
+  snapshots (`insights`, `all_kinds`, `cluster`) and compare every node field,
+  None fields included, with its `part_of`, its `belongs_to_set` points and
+  Python's node order. `MockGraphDB` gains `set_get_node_error` /
+  `clear_get_node_error`.
 
 - **Ontology-derived entity graph nodes carry their provenance stamp
   (SDK-1694, stage O4b).** Graph building does not pre-stamp the entities an

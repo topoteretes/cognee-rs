@@ -327,11 +327,36 @@
       "repo": "acme/shop"
     }
   ],
+  "node_order": [
+    "8b166c03-b383-50d2-a2f1-25e80fdb6b0a",
+    "0fab59bb-20ae-5f83-94a0-ec1d5821cd73",
+    "028b4726-d8c7-5192-9ba6-54d4608471fe",
+    "24f82656-e63e-5d85-a340-c5cb07380d90",
+    "69e64d4b-482a-5050-a3d0-facc5d0f6113",
+    "7551d254-2c54-5e48-81af-05dd2c7b9736",
+    "fca77ad7-2a77-5821-b86f-4a743a24913a",
+    "e305f34e-8845-5492-a282-e0043475d748",
+    "41724f17-d469-5fa3-94b1-301086e27e70",
+    "621cfd1c-921f-53b3-af28-9d7c496dc4a8",
+    "1c36e207-88c1-5c06-9fb0-d03fba1ae9f1",
+    "d5681970-fab1-5446-8378-69516e0e0745",
+    "0178fe51-7409-5533-9357-8bb4bd0412d5",
+    "b328f929-9450-57d5-8619-35d17dfde8ab",
+    "1a0d59f0-c6f4-564e-b8d7-19f1af50157c",
+    "5aba3209-369b-52c7-b97f-7eb59e3ea69b",
+    "ced0dedf-063f-5e6d-80a2-2049c1f80c8d"
+  ],
   "nodes": [
     {
+      "belongs_to_set": null,
       "id": "0178fe51-7409-5533-9357-8bb4bd0412d5",
+      "part_of": "8b166c03-b383-50d2-a2f1-25e80fdb6b0a",
       "properties": {
+        "belongs_to_set": null,
         "description": "symbol: symbol_kind=type",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
         "fact_hash": "sha256:c9957e8e964b4397486a566235c4a06aa8f4c4fdc39ee0ef56e9531c1d6f4394",
         "fact_properties": {
           "symbol_kind": "type"
@@ -348,8 +373,14 @@
           ]
         },
         "name": "OrderID",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "acme/shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "symbol_kind": "type",
         "topological_rank": 0,
         "type": "CodeSymbol",
@@ -358,9 +389,15 @@
       "type": "CodeSymbol"
     },
     {
+      "belongs_to_set": null,
       "id": "028b4726-d8c7-5192-9ba6-54d4608471fe",
+      "part_of": "8b166c03-b383-50d2-a2f1-25e80fdb6b0a",
       "properties": {
+        "belongs_to_set": null,
         "description": "module: language=go",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
         "fact_hash": "sha256:7fa17c384a91bf8dc874247ba467779361276d4f189956235226cd91a38a6b3b",
         "fact_properties": {
           "language": "go"
@@ -377,8 +414,14 @@
           ]
         },
         "name": "utils",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "acme/shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "topological_rank": 0,
         "type": "CodeModule",
         "version": 1
@@ -386,9 +429,15 @@
       "type": "CodeModule"
     },
     {
+      "belongs_to_set": null,
       "id": "0fab59bb-20ae-5f83-94a0-ec1d5821cd73",
+      "part_of": "8b166c03-b383-50d2-a2f1-25e80fdb6b0a",
       "properties": {
+        "belongs_to_set": null,
         "description": "module: language=go",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
         "fact_hash": "sha256:f2dce3d555c747c7bd1ca9aa7a279021e83f3ce6465a3cc2a6f0845ced2d215d",
         "fact_properties": {
           "language": "go"
@@ -405,8 +454,14 @@
           ]
         },
         "name": "app",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "acme/shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "topological_rank": 0,
         "type": "CodeModule",
         "version": 1
@@ -414,9 +469,15 @@
       "type": "CodeModule"
     },
     {
+      "belongs_to_set": null,
       "id": "1a0d59f0-c6f4-564e-b8d7-19f1af50157c",
+      "part_of": "8b166c03-b383-50d2-a2f1-25e80fdb6b0a",
       "properties": {
+        "belongs_to_set": null,
         "description": "storage: storage_type=postgres_table",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
         "fact_hash": "sha256:46e6ea1b702dc013d9e29bbf8b5118480c9018770129615487e40b74cd7fcd1e",
         "fact_properties": {
           "storage_type": "postgres_table"
@@ -433,8 +494,14 @@
           ]
         },
         "name": "orders_table",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "acme/shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "topological_rank": 0,
         "type": "StorageResource",
         "version": 1
@@ -442,9 +509,15 @@
       "type": "StorageResource"
     },
     {
+      "belongs_to_set": null,
       "id": "1c36e207-88c1-5c06-9fb0-d03fba1ae9f1",
+      "part_of": "8b166c03-b383-50d2-a2f1-25e80fdb6b0a",
       "properties": {
+        "belongs_to_set": null,
         "description": "symbol: symbol_kind=variable",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
         "fact_hash": "sha256:aa3b2d677f70a60dd6676f79bd55687ef608304e6f6eccbb9aa669c7ca87d7c8",
         "fact_properties": {
           "symbol_kind": "variable"
@@ -461,8 +534,14 @@
           ]
         },
         "name": "log_level",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "acme/shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "symbol_kind": "variable",
         "topological_rank": 0,
         "type": "CodeSymbol",
@@ -471,9 +550,15 @@
       "type": "CodeSymbol"
     },
     {
+      "belongs_to_set": null,
       "id": "24f82656-e63e-5d85-a340-c5cb07380d90",
+      "part_of": "8b166c03-b383-50d2-a2f1-25e80fdb6b0a",
       "properties": {
+        "belongs_to_set": null,
         "description": "symbol: symbol_kind=function",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
         "fact_hash": "sha256:036e48f152a374d3b8b2be320bea8bba89732d57a5ecbba9964776ad7c857973",
         "fact_properties": {
           "symbol_kind": "function"
@@ -490,8 +575,14 @@
           ]
         },
         "name": "main",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "acme/shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "symbol_kind": "function",
         "topological_rank": 0,
         "type": "CodeSymbol",
@@ -500,9 +591,15 @@
       "type": "CodeSymbol"
     },
     {
+      "belongs_to_set": null,
       "id": "41724f17-d469-5fa3-94b1-301086e27e70",
+      "part_of": "8b166c03-b383-50d2-a2f1-25e80fdb6b0a",
       "properties": {
+        "belongs_to_set": null,
         "description": "symbol: symbol_kind=class",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
         "fact_hash": "sha256:138c42e769d5b9b71c44263abf01c9faad71e4ca1c18c735162c8c87e6c123c3",
         "fact_properties": {
           "symbol_kind": "class"
@@ -519,8 +616,14 @@
           ]
         },
         "name": "PostgresStore",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "acme/shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "symbol_kind": "class",
         "topological_rank": 0,
         "type": "CodeSymbol",
@@ -529,25 +632,39 @@
       "type": "CodeSymbol"
     },
     {
+      "belongs_to_set": null,
       "id": "5aba3209-369b-52c7-b97f-7eb59e3ea69b",
+      "part_of": "8b166c03-b383-50d2-a2f1-25e80fdb6b0a",
       "properties": {
+        "belongs_to_set": null,
         "description": "dependency: version=v1.10.9",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
         "fact_hash": "sha256:b150c4f0473778b380a078ad9047fbe7a49500b79d63ad8235dd3d4a948ed173",
         "fact_properties": {
           "version": "v1.10.9"
         },
         "feedback_weight": 0.5,
+        "file_path": null,
         "id": "5aba3209-369b-52c7-b97f-7eb59e3ea69b",
         "importance_weight": 0.5,
         "kind": "dependency",
+        "line": null,
         "metadata": {
           "index_fields": [
             "name"
           ]
         },
         "name": "github.com/lib/pq",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "acme/shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "topological_rank": 0,
         "type": "ExternalDependency",
         "version": 1
@@ -555,9 +672,15 @@
       "type": "ExternalDependency"
     },
     {
+      "belongs_to_set": null,
       "id": "621cfd1c-921f-53b3-af28-9d7c496dc4a8",
+      "part_of": "8b166c03-b383-50d2-a2f1-25e80fdb6b0a",
       "properties": {
+        "belongs_to_set": null,
         "description": "symbol: symbol_kind=constant",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
         "fact_hash": "sha256:4cc1c614b4b5a684c92210950c7a8d1a07094571f136525b781c8315969acc95",
         "fact_properties": {
           "symbol_kind": "constant"
@@ -574,8 +697,14 @@
           ]
         },
         "name": "MAX_RETRIES",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "acme/shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "symbol_kind": "constant",
         "topological_rank": 0,
         "type": "CodeSymbol",
@@ -584,9 +713,15 @@
       "type": "CodeSymbol"
     },
     {
+      "belongs_to_set": null,
       "id": "69e64d4b-482a-5050-a3d0-facc5d0f6113",
+      "part_of": "8b166c03-b383-50d2-a2f1-25e80fdb6b0a",
       "properties": {
+        "belongs_to_set": null,
         "description": "symbol: symbol_kind=function",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
         "fact_hash": "sha256:8499b79c7abc5ad9e4c88f0da87fd967479c811ccde0d6509a67413e2da4b61d",
         "fact_properties": {
           "symbol_kind": "function"
@@ -603,8 +738,14 @@
           ]
         },
         "name": "helper",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "acme/shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "symbol_kind": "function",
         "topological_rank": 0,
         "type": "CodeSymbol",
@@ -613,9 +754,15 @@
       "type": "CodeSymbol"
     },
     {
+      "belongs_to_set": null,
       "id": "7551d254-2c54-5e48-81af-05dd2c7b9736",
+      "part_of": "8b166c03-b383-50d2-a2f1-25e80fdb6b0a",
       "properties": {
+        "belongs_to_set": null,
         "description": "symbol: symbol_kind=struct",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
         "fact_hash": "sha256:3d2e11e16a295f85a000fe0bcb0d056071ab1d164bdaa823c00258cb7e2afe1c",
         "fact_properties": {
           "symbol_kind": "struct"
@@ -632,8 +779,14 @@
           ]
         },
         "name": "Config",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "acme/shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "symbol_kind": "struct",
         "topological_rank": 0,
         "type": "CodeSymbol",
@@ -642,19 +795,32 @@
       "type": "CodeSymbol"
     },
     {
+      "belongs_to_set": null,
       "id": "8b166c03-b383-50d2-a2f1-25e80fdb6b0a",
+      "part_of": null,
       "properties": {
+        "belongs_to_set": null,
         "feedback_weight": 0.5,
         "id": "8b166c03-b383-50d2-a2f1-25e80fdb6b0a",
         "importance_weight": 0.5,
+        "last_delta": null,
+        "last_mapping_version": null,
+        "last_receipt": null,
+        "last_snapshot_id": null,
         "metadata": {
           "index_fields": [
             "name"
           ]
         },
         "name": "acme/shop",
+        "ontology_uri": null,
         "ontology_valid": false,
         "path": "/tmp/shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "topological_rank": 0,
         "type": "CodeRepository",
         "version": 1
@@ -662,9 +828,15 @@
       "type": "CodeRepository"
     },
     {
+      "belongs_to_set": null,
       "id": "b328f929-9450-57d5-8619-35d17dfde8ab",
+      "part_of": "8b166c03-b383-50d2-a2f1-25e80fdb6b0a",
       "properties": {
+        "belongs_to_set": null,
         "description": "route: method=GET, path=/orders",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
         "fact_hash": "sha256:b7458067a4881f61bc89a84b6c87ef20c201ef1a5aebfc5ccd75f3644e9b3805",
         "fact_properties": {
           "method": "GET",
@@ -682,8 +854,14 @@
           ]
         },
         "name": "GET /orders",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "acme/shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "topological_rank": 0,
         "type": "ApiEndpoint",
         "version": 1
@@ -691,9 +869,15 @@
       "type": "ApiEndpoint"
     },
     {
+      "belongs_to_set": null,
       "id": "ced0dedf-063f-5e6d-80a2-2049c1f80c8d",
+      "part_of": "8b166c03-b383-50d2-a2f1-25e80fdb6b0a",
       "properties": {
+        "belongs_to_set": null,
         "description": "service: port=8080",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
         "fact_hash": "sha256:c2508b513891d886dd921be89c2dd0b946549ef7835010a8095e8ac6bac66d66",
         "fact_properties": {
           "port": 8080
@@ -710,8 +894,14 @@
           ]
         },
         "name": "shop-api",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "acme/shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "topological_rank": 0,
         "type": "CodeService",
         "version": 1
@@ -719,9 +909,15 @@
       "type": "CodeService"
     },
     {
+      "belongs_to_set": null,
       "id": "d5681970-fab1-5446-8378-69516e0e0745",
+      "part_of": "8b166c03-b383-50d2-a2f1-25e80fdb6b0a",
       "properties": {
+        "belongs_to_set": null,
         "description": "symbol: symbol_kind=enum",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
         "fact_hash": "sha256:87ce0bcdeb70cc65a280e54f116f6297e4b2484385d236d02cf6f2c53be4ee0b",
         "fact_properties": {
           "symbol_kind": "enum"
@@ -738,8 +934,14 @@
           ]
         },
         "name": "Color",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "acme/shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "symbol_kind": "enum",
         "topological_rank": 0,
         "type": "CodeSymbol",
@@ -748,9 +950,15 @@
       "type": "CodeSymbol"
     },
     {
+      "belongs_to_set": null,
       "id": "e305f34e-8845-5492-a282-e0043475d748",
+      "part_of": "8b166c03-b383-50d2-a2f1-25e80fdb6b0a",
       "properties": {
+        "belongs_to_set": null,
         "description": "symbol: symbol_kind=interface",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
         "fact_hash": "sha256:74a92ddf832ae406b9c52306c4e139dfa0cafa45aeea5ef4271eeb588ec715d3",
         "fact_properties": {
           "symbol_kind": "interface"
@@ -767,8 +975,14 @@
           ]
         },
         "name": "Storer",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "acme/shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "symbol_kind": "interface",
         "topological_rank": 0,
         "type": "CodeSymbol",
@@ -777,9 +991,15 @@
       "type": "CodeSymbol"
     },
     {
+      "belongs_to_set": null,
       "id": "fca77ad7-2a77-5821-b86f-4a743a24913a",
+      "part_of": "8b166c03-b383-50d2-a2f1-25e80fdb6b0a",
       "properties": {
+        "belongs_to_set": null,
         "description": "symbol: symbol_kind=method",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
         "fact_hash": "sha256:4739c575ab3ef79c54a89807769b538b6194235f3b742478b2cbcd8503beba49",
         "fact_properties": {
           "symbol_kind": "method"
@@ -796,8 +1016,14 @@
           ]
         },
         "name": "Load",
+        "ontology_uri": null,
         "ontology_valid": false,
         "repo": "acme/shop",
+        "source_content_hash": null,
+        "source_node_set": null,
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
         "symbol_kind": "method",
         "topological_rank": 0,
         "type": "CodeSymbol",

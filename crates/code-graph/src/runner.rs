@@ -501,6 +501,59 @@ mod tests {
         );
     }
 
+    /// A program that cannot exist is `EnolaNotInstalled`, whatever this
+    /// machine's `PATH` holds: the path is absolute and names nothing.
+    #[tokio::test]
+    async fn a_program_that_cannot_exist_is_enola_not_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("no-such-enola");
+        let error = run_enola(
+            &missing,
+            &[std::ffi::OsStr::new("--generate")],
+            dir.path(),
+            std::time::Duration::from_secs(30),
+            "'repo'",
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(error, CodeGraphError::EnolaNotInstalled(_)),
+            "{error}"
+        );
+        assert_eq!(error.to_string(), INSTALL_HINT);
+    }
+
+    /// A working directory that vanished is `EnolaSnapshot`, not a missing
+    /// enola, although the spawn reports both as `NotFound`. The program is
+    /// this test binary, which exists on every platform.
+    #[tokio::test]
+    async fn a_removed_working_directory_is_enola_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("repo");
+        std::fs::create_dir(&cwd).unwrap();
+        std::fs::remove_dir(&cwd).unwrap();
+        let program = std::env::current_exe().unwrap();
+        let error = run_enola(
+            &program,
+            &[std::ffi::OsStr::new("--generate")],
+            &cwd,
+            std::time::Duration::from_secs(30),
+            "'repo'",
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, CodeGraphError::EnolaSnapshot(_)), "{error}");
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Could not start enola on 'repo': its working directory '{}' does not exist.",
+                cwd.display()
+            )
+        );
+    }
+
     #[test]
     fn stderr_tail_counts_characters() {
         assert_eq!(tail_chars("abc", 5), "abc");

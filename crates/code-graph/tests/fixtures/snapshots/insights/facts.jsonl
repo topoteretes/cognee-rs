@@ -1,0 +1,4 @@
+{"kind": "module", "name": "billing", "file": "billing/billing.go", "line": 1, "repo": "acme/pay", "id": "0123456789abcdef0123456789abcdef", "props": {"language": "go"}, "relations": [{"kind": "declares", "target": "billing.Charge", "target_id": "fedcba9876543210fedcba9876543210"}]}
+{"kind": "symbol", "name": "billing.Charge", "file": "billing/billing.go", "line": 10, "end_line": 42, "repo": "acme/pay", "id": "fedcba9876543210fedcba9876543210", "props": {"symbol_kind": "function", "doc": "Charge bills a card once."}, "relations": [{"kind": "calls", "target": "billing.retry"}]}
+{"kind": "symbol", "name": "billing.retry", "file": "billing/retry.go", "line": 3, "repo": "acme/pay", "props": {"symbol_kind": "function"}, "relations": []}
+{"kind": "file_ref", "name": "billing/retry.go", "file": "billing/retry.go", "repo": "acme/pay", "props": {"bytes": 512}, "relations": []}

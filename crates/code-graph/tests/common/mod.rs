@@ -157,3 +157,12 @@ pub fn logical_properties(node: &CodeNode) -> Map<String, Value> {
         .filter(|(key, value)| !value.is_null() && key != "created_at" && key != "updated_at")
         .collect()
 }
+
+/// A node's graph properties as the golden script writes them: no
+/// timestamps, None-valued fields kept as null.
+pub fn golden_properties(node: &CodeNode) -> Map<String, Value> {
+    node.graph_properties()
+        .into_iter()
+        .filter(|(key, _)| key != "created_at" && key != "updated_at")
+        .collect()
+}
