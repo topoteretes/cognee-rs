@@ -942,13 +942,16 @@ pub(crate) async fn persist_group(
 
 /// The extraction part of the layer on its own, for
 /// [`crate::tasks::extract_graph_from_data`] driven outside the pipeline: the
-/// extraction ownership rows, then the entity and Timestamp nodes and the
-/// semantic edges — exactly the steps [`persist_group`] takes for them.
+/// extraction ownership rows and the EntityType rows, then the entity,
+/// Timestamp and EntityType nodes, then the semantic edges — exactly the steps
+/// [`persist_group`] takes for them, in its order (every node before any edge).
 ///
-/// It writes no EntityType node, so an ontology edge between types (or from an
-/// entity to its type) names an endpoint only `add_data_points` writes; on
-/// Ladybug such an edge is dropped and on Postgres it fails, as it always did
-/// on this path. The pipeline does not use it.
+/// The EntityType nodes are what an ontology's edges name: an entity→class or
+/// class→class edge (`Algorithm → Technology`) has a type at one end at least.
+/// Python writes every EntityType a chunk's graph reaches in `add_data_points`
+/// before any edge; without them here Ladybug (`MATCH … MERGE`) dropped those
+/// edges while their ledger rows stayed, and Postgres failed the call on
+/// `graph_edge_source_id_fkey` after the ledger was committed.
 pub(crate) async fn persist_extraction(
     db: &dyn RelationalDb,
     graph_db: &dyn GraphDBTrait,
@@ -957,7 +960,7 @@ pub(crate) async fn persist_extraction(
 ) -> Result<(), CognifyError> {
     let earlier = Written::default();
     let mut tracker = Tracker::new(&earlier);
-    let (nodes, edges) = crate::tasks::extraction_ownership_rows(
+    let (mut nodes, edges) = crate::tasks::extraction_ownership_rows(
         ledger,
         &graph.chunks,
         &graph.entities,
@@ -967,11 +970,19 @@ pub(crate) async fn persist_extraction(
         &graph.producers,
         None,
     );
+    // The same EntityType rows `persist_group` writes (through
+    // `provenance_rows`), in the same transaction as the rest.
+    nodes.extend(crate::tasks::entity_type_provenance_rows(
+        ledger,
+        &graph.entities,
+        &crate::tasks::chunk_document_map(&graph.chunks),
+        &graph.producers,
+    ));
     let (node_rows, edge_rows) = write_ledger(db, &mut tracker, nodes, edges).await?;
     if node_rows + edge_rows > 0 {
         info!(
-            "Recorded ownership of {node_rows} entities and Timestamps and {edge_rows} semantic \
-             edges before writing them"
+            "Recorded ownership of {node_rows} entities, entity types and Timestamps and \
+             {edge_rows} semantic edges before writing them"
         );
     }
     let entity_refs: Vec<&cognee_models::Entity> =
@@ -986,26 +997,51 @@ pub(crate) async fn persist_extraction(
     if written > 0 {
         info!("Upserted {written} Timestamp nodes");
     }
+    let entity_types = unique_entity_types(&graph.entities);
+    let written = write_typed_nodes(graph_db, &mut tracker, &entity_types, |t| t.base.id).await?;
+    if written > 0 {
+        info!("Stored {written} entity types as graph nodes");
+    }
     write_semantic_edges(graph_db, &mut tracker, &graph.edges).await
 }
 
 /// The web-page part of the layer on its own, for
 /// [`crate::tasks::create_web_page_nodes`] driven outside the pipeline: the
-/// ownership rows, then the nodes and the edges the graph does not hold yet.
-/// The `SOURCED_FROM` edges name the chunks, which this path does not write:
-/// the caller must have written them first.
+/// ownership rows, then the WebPage / WebSite nodes and the sourced chunks'
+/// nodes, then the edges the graph does not hold yet.
+///
+/// The `SOURCED_FROM` edges start at the chunks, so the chunk nodes (and their
+/// ownership rows) are written here too, before any edge, as [`persist_group`]
+/// writes them in the same group as the web nodes. A caller that already
+/// stored the chunks gets an idempotent upsert; one that had not no longer
+/// loses the edges (Ladybug) or the call (Postgres, `graph_edge` foreign key).
 pub(crate) async fn persist_web_pages(
     db: &dyn RelationalDb,
     graph_db: &dyn GraphDBTrait,
     ledger: LedgerIdentity,
     pages: &[WebPage],
+    chunks: &[DocumentChunk],
 ) -> Result<(), CognifyError> {
     let earlier = Written::default();
     let mut tracker = Tracker::new(&earlier);
-    let (nodes, edges) = crate::tasks::web_page_ownership_rows(ledger, pages);
+    // Only the chunks some page names: the ones a `SOURCED_FROM` edge starts at.
+    let sourced: HashSet<Uuid> = pages
+        .iter()
+        .flat_map(|page| page.chunk_ids.iter().copied())
+        .collect();
+    let sourced_chunks: Vec<&DocumentChunk> = chunks
+        .iter()
+        .filter(|chunk| sourced.contains(&chunk.base.id))
+        .collect();
+    let (mut nodes, edges) = crate::tasks::web_page_ownership_rows(ledger, pages);
+    nodes.extend(crate::tasks::chunk_provenance_rows(
+        ledger,
+        sourced_chunks.iter().copied(),
+    ));
     write_ledger(db, &mut tracker, nodes, edges).await?;
     let (web_nodes, web_edges) = crate::tasks::web_page_graph(pages);
     write_raw_nodes(graph_db, &mut tracker, web_nodes.into_iter()).await?;
+    write_typed_nodes(graph_db, &mut tracker, &sourced_chunks, |c| c.base.id).await?;
     write_missing_edges(graph_db, &mut tracker, web_edges).await
 }
 
