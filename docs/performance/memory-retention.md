@@ -210,25 +210,41 @@ descriptions ~150 bytes):
 | `RunGraph` nodes (an `Entity` plus a copy of each of its `EntityType`s) — become `CognifyResult::entities` | 2.3 KB / entity | 56 MB | 690 KB |
 | `RunGraph` edges — become `CognifyResult::edges` | 0.76 KB / edge | 29 MB | 360 KB |
 | the writer's `edge_status` map | 0.12 KB / edge | 4.5 MB | 55 KB |
-| chunks (text, metadata, `contains` ids): the stage's input plus the copy kept for `CognifyResult::chunks` | 4.6 KB / chunk × 2 | 23 MB | 285 KB |
+| chunks (text, metadata, `contains` ids): the stage's input, plus a per-document clone the writer keeps for `CognifyResult::chunks` | 4.6 KB / chunk × 2 | 23 MB | 285 KB |
 | `CognifyResult::summaries` | ~2.5 KB / chunk (estimate) | ~6 MB | ~75 KB |
-| **total** | | **~120 MB** | **~1.5 MB** |
+| **total of the above** | | **~120 MB** | **~1.5 MB** |
+
+The total is a **lower bound**: not measured are the persistence layer's
+run-level bookkeeping (`PersistState`: written ids, per-entity versions and
+ownership-row lists, edge texts and counted edge keys; plus the vectors kept
+under `retain_embeddings`) and the writer's run-wide chunk → document map,
+which add tens of bytes per entity, edge and chunk.
 
 Scaled by the 320-document run's counts (8,748 chunks, 79,064 entities,
-~130,000 semantic edges) that is roughly 0.4 GB, and for a corpus of the
-171,888 documents that prompted SDK-507, at this document size, it would be well past 100 GB — the
-growth is real but only matters for very large single runs. Two thirds of it is
-the merged graph, which is the run's `CognifyResult`: bounding it means no
-longer returning every entity and edge from `cognify()` (or returning ids
-only), an API change. The chunk copy is the same. Only `edge_status` could be
-dropped without one, and it is 4% of the total.
+~130,000 semantic edges) that is roughly 0.4 GB. The growth is real but only
+matters for large single runs. What each holder would take to bound:
+
+- **The merged graph (`RunGraph`, ~70%)** is not only the result: the writer
+  needs it to merge each document into what earlier documents saved (first
+  block wins, types combined, rewrite on change), so returning a summary-only
+  `CognifyResult` would not free it. Bounding it means keeping only what the
+  merge reads (ids, type ids, the first description's fingerprint) instead of
+  whole `GraphNodePair`s, plus replacing the `EntityType` copy per node with
+  its id — a change to the merge and to `CognifyResult`'s public fields.
+- **The chunk clone (~10%)** is internal, not an API change: the writer clones
+  each document's chunks out of the stage's borrowed input
+  (`document_stage.rs`, `build_document`) to hand them to the result. Owning
+  the input, or sharing chunks behind an `Arc`, removes one copy. This is the
+  cheapest follow-up.
+- **`edge_status` (~4%)** could be dropped or folded into `RunGraph` without
+  an API change.
+- The stage's own chunk list is the chunking stage's output and stays O(run)
+  until chunking streams.
 
 **Decision (SDK-1694 O7): defer to SDK-507, no change here.** The per-document
-pipeline bounds the LLM results in flight (`cognify.max_unsaved_documents`);
-what is left is the result the API hands back plus the run's own chunk list,
-and bounding those is the API decision SDK-507 already tracks (a summary-only
-`CognifyResult`, the `EntityType` copy per node replaced by its id, and the
-chunk list streamed from the chunking stage).
+pipeline bounds the LLM results in flight (`cognify.max_unsaved_documents`).
+What is left is dominated by the merge state, whose bound is a design change,
+so it goes to SDK-507 with the chunk clone above as the first, internal step.
 
 ## Attribution: where the bytes are
 

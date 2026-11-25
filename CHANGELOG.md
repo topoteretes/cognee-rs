@@ -46,8 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Cross-SDK: `e2e-cross-sdk/harness/test_cognify_type_parity.py` drives both
   SDKs through a scripted OpenAI-compatible endpoint and checks that they
   store the same entity types and normalised edges, on a first and a second
-  run (SDK-1694 O7). Existing graphs keep one type per entity, and raw
-  labels, until their data is cognified again.
+  run (SDK-1694 O7). Existing graphs are not migrated: an entity gains
+  further types only when its data is cognified again (with
+  `incremental_loading` off, or re-added), and raw-label edges stay, with a
+  normalised copy added beside them.
 
 - **Deleting a document removes the entity types and `is_a` edges only it
   declared (SDK-1694, stage O6).** Python removes an EntityType with the last
@@ -688,8 +690,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   name; the new key `cognify.cross_chunk_endpoints`
   (`COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS`, default `true`) turns that off,
   which resolves endpoints only within their own chunk and only by node id,
-  as Python does. Existing graphs keep one type per entity until their data is
-  cognified again. The visualization payload still names one
+  as Python does. Existing graphs are not migrated: an entity gains further
+  types only when its data is cognified again. The visualization payload still names one
   type per entity: the last `is_a` link, as Python's does. COGX export writes
   every `is_a` edge as its own fact.
 

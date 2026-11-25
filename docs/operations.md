@@ -504,7 +504,8 @@ saves it on its own:
   narrows that to the edge's own chunk, by node id, as Python does.
 - **An entity keeps every document's type.** The blocks' types are combined,
   one `is_a` edge each, so an entity two documents type differently has two
-  types and, without an ontology, never more types than documents. Its
+  types and, without an ontology, never more types than the blocks that
+  mention it (one block per document of up to `chunks_per_batch` chunks). Its
   description, importance weight and metadata come from the first block in
   input order (Python's last writer, which depends on timing, wins there);
   NodeSet memberships are combined.
