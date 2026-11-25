@@ -5165,22 +5165,6 @@ fn timestamp_provenance_rows(
     rows
 }
 
-/// Ownership rows for the semantic edges produced by graph extraction.
-///
-/// One row per data item that produced the edge — the same one-to-many relation
-/// the entity rows carry, so an edge is swept only when its LAST owning file
-/// goes. The row *identity* carries `data_id` ([`provenance_edge_id`]), which is
-/// what lets several rows for one edge coexist instead of colliding on the
-/// primary key; the rows share a `slug` ([`triplet_slug`]), which is what
-/// `get_unique_edges_for_data` compares, so each row claims the edge on behalf
-/// of its own file. Without this, an edge between entities merged from two
-/// different files resolved to nil — and `get_unique_edges_for_data` never
-/// selects a nil row, so the edge's EdgeType/Triplet vectors outlived every file
-/// that produced them.
-///
-/// Divergence from Python, deliberate: `upsert_edges.py` omits `data_id` from
-/// the row id and keeps exactly one row per edge, letting the last writer take
-/// ownership. See the note on [`provenance_edge_id`].
 /// Which documents a group's ownership rows give each endpoint an edge can
 /// name: its entities (from their rows) and its EntityTypes, which every
 /// document owns through their nil row.
@@ -5214,6 +5198,22 @@ impl EndpointOwners {
     }
 }
 
+/// Ownership rows for the semantic edges produced by graph extraction.
+///
+/// One row per data item that produced the edge — the same one-to-many relation
+/// the entity rows carry, so an edge is swept only when its LAST owning file
+/// goes. The row *identity* carries `data_id` ([`provenance_edge_id`]), which is
+/// what lets several rows for one edge coexist instead of colliding on the
+/// primary key; the rows share a `slug` ([`triplet_slug`]), which is what
+/// `get_unique_edges_for_data` compares, so each row claims the edge on behalf
+/// of its own file. Without this, an edge between entities merged from two
+/// different files resolved to nil — and `get_unique_edges_for_data` never
+/// selects a nil row, so the edge's EdgeType/Triplet vectors outlived every file
+/// that produced them.
+///
+/// Divergence from Python, deliberate: `upsert_edges.py` omits `data_id` from
+/// the row id and keeps exactly one row per edge, which `on_conflict_do_nothing`
+/// leaves with its first writer. See the note on [`provenance_edge_id`].
 fn semantic_edge_provenance_rows(
     id: LedgerIdentity,
     edges: &[GraphEdgePair],

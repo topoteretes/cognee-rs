@@ -575,8 +575,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   second records no row for an ontology edge the first one wrote, and the
   edge survives deleting the first dataset's data, because a nil-`data_id`
   row is only retired through an endpoint exclusive to the deleted item.
-  Ownership of ontology and structural edges per document comes with
-  SDK-1694 stage O5a.
+  Stage O5a (above) then adds the per-document rows: every document whose
+  ontology lookup produced such an edge, and which owns both endpoints,
+  claims it with a row of its own beside the first one.
 
   Graphs built before this change are not migrated. Their edges, ledger rows
   and `EdgeType` points keep the raw label and stay consistent with each

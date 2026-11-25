@@ -17,6 +17,16 @@
 //!   (`expand_with_nodes_and_edges.py:283-302`), so such a chunk still cites it;
 //! - `structural`: edges of the storage batch rooted at the chunk, such as
 //!   `contains` and `is_part_of`.
+//!
+//! An ontology edge has no evidence. The chunk whose ontology lookup brought
+//! it in gives its document an ownership row
+//! ([`ArtifactProducers::ontology_edge_chunks`], SDK-1694 O5a) but is not
+//! cited for it: Python appends to `_provenance_edges` only in
+//! `_add_extracted_edges` (`expand_with_nodes_and_edges.py:295`), never in
+//! `_add_ontology_edges`
+//! (`construct_data_points_and_edges_with_ontology.py:420-436`), and an
+//! ontology edge starts at an entity or a type, so it is not `structural`
+//! either. [`ArtifactProducers::edges`] lists extracting chunks only.
 
 use std::collections::HashMap;
 
@@ -340,5 +350,27 @@ mod tests {
                 "works_with"
             )
         );
+    }
+
+    /// A chunk whose ontology lookup brought an edge in owns it (SDK-1694
+    /// O5a) but is not evidence for it: Python's `_add_ontology_edges` never
+    /// appends to `_provenance_edges`. A chunk that also extracted the same
+    /// edge still cites it.
+    #[test]
+    fn an_ontology_edge_is_not_evidence_of_the_chunk_that_looked_it_up() {
+        let (lookup, extractor) = (chunk(0, Uuid::new_v4()), chunk(1, Uuid::new_v4()));
+        let is_a = GraphEdgePair::new(Uuid::new_v4(), Uuid::new_v4(), "is_a");
+        let chunks = [lookup.clone(), extractor.clone()];
+
+        let mut producers = ArtifactProducers::default();
+        producers.record_ontology_edge(is_a.dedup_key(), lookup.base.id);
+        assert!(producers.produces_edge(&is_a.dedup_key()));
+        assert!(build_edge_evidence(&scope(), &chunks, &[], &producers).is_empty());
+
+        producers.record_edge(is_a.dedup_key(), extractor.base.id);
+        let rows = build_edge_evidence(&scope(), &chunks, &[], &producers);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].chunk_id, extractor.base.id);
+        assert_eq!(rows[0].evidence_kind, KIND_EXTRACTED);
     }
 }

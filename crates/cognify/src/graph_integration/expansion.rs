@@ -3458,6 +3458,101 @@ mod tests {
         );
     }
 
+    /// An ontology whose class `person`, also reached as `Human`, is an
+    /// `agent`: either spelling brings the edge `person -is_a-> agent` along.
+    struct PersonOrHumanIsAnAgent;
+
+    impl OntologyResolver for PersonOrHumanIsAnAgent {
+        fn find_closest_match(&self, _: &str, _: &str) -> OntologyResult<Option<String>> {
+            Ok(None)
+        }
+
+        fn get_subgraph(
+            &self,
+            node_name: &str,
+            node_type: &str,
+            _directed: bool,
+        ) -> OntologyResult<OntologySubgraph> {
+            if node_type != "classes" || !["Person", "Human"].contains(&node_name) {
+                return Ok((vec![], vec![], None));
+            }
+            let class = |name: &str| AttachedOntologyNode {
+                uri: format!("http://test.org#{name}"),
+                name: name.to_string(),
+                category: NodeCategory::Classes,
+            };
+            Ok((
+                vec![class("agent")],
+                vec![(
+                    "person".to_string(),
+                    "is_a".to_string(),
+                    "agent".to_string(),
+                )],
+                Some(class("person")),
+            ))
+        }
+
+        fn is_loaded(&self) -> bool {
+            true
+        }
+    }
+
+    /// Two documents that spell one ontology class differently (`Person`,
+    /// `Human`) both brought its ontology edge in, so both own it (SDK-1694
+    /// O5a): the second spelling's lookup adds its chunk to the first's and
+    /// does not replace it. A third document that spells it both ways, across
+    /// two chunks, is one more owner, named by its first lookup.
+    #[tokio::test]
+    async fn every_document_owns_an_ontology_edge_whichever_spelling_brought_it_in() {
+        let (a, b, c1, c2) = (
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+        );
+        let one = |name: &str, node_type: &str| {
+            graph(
+                vec![node(&name.to_lowercase(), name, node_type, "")],
+                vec![],
+            )
+        };
+        let units = vec![
+            vec![(a, one("Ada", "Person"))],
+            vec![(b, one("Grace", "Human"))],
+            vec![(c1, one("Alan", "Human")), (c2, one("Edsger", "Person"))],
+        ];
+
+        let out = expand_units_with(
+            units,
+            EndpointScope::Unit,
+            Arc::new(PersonOrHumanIsAnAgent),
+            &HashMap::new(),
+        )
+        .await;
+
+        let person_is_a_agent = (
+            EntityType::id_for("person"),
+            EntityType::id_for("agent"),
+            "is_a".to_string(),
+        );
+        assert_eq!(
+            out.edges
+                .iter()
+                .filter(|edge| edge.dedup_key() == person_is_a_agent)
+                .count(),
+            1,
+            "one edge, whatever the spelling"
+        );
+        assert_eq!(
+            out.producers.ontology_edge_chunks(&person_is_a_agent),
+            [a, b, c1]
+        );
+        assert!(
+            out.producers.edge_chunks(&person_is_a_agent).is_empty(),
+            "no chunk extracted it"
+        );
+    }
+
     /// Finding 2: an entity keeps the NodeSet membership of every unit.
     #[tokio::test]
     async fn an_entity_keeps_the_node_sets_of_every_unit() {
