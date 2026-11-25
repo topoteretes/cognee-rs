@@ -18,6 +18,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **Deleting a document removes the entity types and `is_a` edges only it
+  declared (SDK-1694, stage O6).** Python removes an EntityType with the last
+  document whose walk reached it (`get_data_related_nodes`). Rust wrote a
+  nil-`data_id` ledger row beside every EntityType, structural edge and
+  ontology-first entity, which claimed it for every document, so no
+  data-scoped delete removed one. cognify no longer writes those rows (only
+  an artifact no document is known to have produced, such as a DLT schema
+  node, still gets one), and delete counts the per-document rows stage O5a
+  added:
+  - an **EntityType** goes with its last declaring document, in soft and
+    hard delete, and a dataset delete removes the types no other dataset
+    declares, as before;
+  - an **edge** is the last claim on itself when no other owner's row names
+    the same `(source, target, relationship)` triple, in the data-scoped
+    delete, the dataset delete and the run sweep. It used to be the slug,
+    which every `is_a` row (and every `is_part_of` row) shares, so a
+    document's own `is_a` edge was never its own. An `is_a` edge whose last
+    declaring document goes is removed from the graph even when the entity
+    and the type both stay (`GraphDBTrait::delete_edge_triples`), and its
+    `EdgeType` point goes once no surviving row produces its text. Python
+    compares the slug and keeps both ends' edge; this is a deliberate
+    difference;
+  - a document that reaches an entity, or an ontology edge whose endpoints
+    it owns, only through an ontology lookup gets its own row, whether or
+    not another document extracted it, so deleting the extractor keeps it;
+  - the hard delete's sweep of degree-one EntityTypes keeps a type a
+    document's ledger row still claims (`DeleteDb::get_node_slugs_owned_by_data`,
+    with a default that claims nothing). A type only legacy nil rows claim
+    is swept as before.
+
+  **Existing databases:** nil rows already written stay claims. A type or
+  structural edge written before this change is not removed by a
+  data-scoped delete, as before, until its dataset is deleted; re-cognifying
+  its documents does not remove the nil row. Migration
+  `m20261125_000001_edges_endpoint_index` adds an index on `edges
+  (source_node_id, destination_node_id)` for the triple lookups.
+
+  `cognee_models::Entity::extra_types` is no longer serialised, so it is in
+  no graph node, ledger row, vector payload or COGX export (Python has no
+  such field, and the stored copy went stale when a later run or a delete
+  changed the types); the `is_a` edges are an entity's type set. A payload
+  that holds it still deserialises.
+
 - **The default `cognify.rollback_scope` follows `incremental_loading`
   (SDK-1694 D4).** Unset, it is now `failed_items` with `incremental_loading`
   on (the default) and `whole_run` with it off — Python keeps the items its

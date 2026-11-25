@@ -758,8 +758,18 @@ pub async fn get_unique_nodes_for_data(
     Ok(rows)
 }
 
-/// Return edges belonging to `(data_id, dataset_id)` whose slug no other
-/// owner claims; see [`get_unique_nodes_for_data`].
+/// Return edges belonging to `(data_id, dataset_id)` that no other owner
+/// claims; see [`get_unique_nodes_for_data`].
+///
+/// An edge is identified by its `(source, target, relationship)` triple
+/// ([`Ledger::Edges`]), not by its slug (SDK-1694 O6). A structural row's slug
+/// is Python's `generate_edge_id` of its text alone, so every `is_a` row, and
+/// every `is_part_of` row, shares one slug: under slug identity a document's
+/// own `is_a` edge was never its own while any other document had one.
+/// Python's `get_data_related_edges` compares slugs and has the same blind
+/// spot (it also keeps one row per edge, its first writer's); Rust counts the
+/// edge's producers. For a semantic row the two identities agree: its slug is
+/// `triplet_slug` of the same three values.
 #[instrument(
     name = "cognee.db.relational.graph_storage.get_unique_edges_for_data",
     level = "info",
@@ -785,12 +795,12 @@ pub async fn get_unique_edges_for_data(
         .expr(Expr::val(1))
         .from_as(Alias::new("edges"), e2.clone())
         .cond_where(
-            Condition::all()
-                .add(
-                    Expr::col((e2.clone(), edge::Column::Slug))
-                        .equals((Alias::new("edges"), edge::Column::Slug)),
-                )
-                .add(claimed_elsewhere(&e2, scope, &data_hex, &dataset_hex)),
+            same_artifact(Ledger::Edges, "e2", "edges").add(claimed_elsewhere(
+                &e2,
+                scope,
+                &data_hex,
+                &dataset_hex,
+            )),
         )
         .to_owned();
 
@@ -862,9 +872,11 @@ pub async fn get_unique_nodes_for_datasets(
     Ok(rows)
 }
 
-/// Return the edge rows of `dataset_ids` whose slug no row of any other
-/// dataset claims; see [`get_unique_nodes_for_datasets`]. Python's
-/// `get_global_dataset_related_edges` for one dataset.
+/// Return the edge rows of `dataset_ids` whose `(source, target,
+/// relationship)` triple no row of any other dataset claims; see
+/// [`get_unique_nodes_for_datasets`]. Python's
+/// `get_global_dataset_related_edges` for one dataset, by triple rather than
+/// slug, as [`get_unique_edges_for_data`] explains.
 #[instrument(
     name = "cognee.db.relational.graph_storage.get_unique_edges_for_datasets",
     level = "info",
@@ -889,10 +901,7 @@ pub async fn get_unique_edges_for_datasets(
     let claimed_outside = Query::select()
         .expr(Expr::val(1))
         .from_as(Alias::new("edges"), e2.clone())
-        .and_where(
-            Expr::col((e2.clone(), edge::Column::Slug))
-                .equals((Alias::new("edges"), edge::Column::Slug)),
-        )
+        .cond_where(same_artifact(Ledger::Edges, "e2", "edges"))
         .and_where(Expr::col((e2, edge::Column::DatasetId)).is_not_in(dataset_hexes.clone()))
         .to_owned();
 
@@ -957,25 +966,27 @@ fn endpoint_exclusive_to(
         .add(endpoint_claimed(endpoint, claimed_by_other).not())
 }
 
-/// Selection predicate for the structural edge rows (`is_part_of`, `contains`,
-/// `made_from`, `is_a`, ...) that belong to `(data_id, dataset_id)` although
-/// their `data_id` column is nil.
+/// Selection predicate for the **legacy** structural edge rows (`is_part_of`,
+/// `contains`, `made_from`, `is_a`, ...) that belong to `(data_id,
+/// dataset_id)` although their `data_id` column is nil.
 ///
-/// Cognify writes those rows with a nil `data_id` ("structural edges span
-/// multiple DataPoints"), so `data_id = :data` never selects them. (Since
-/// SDK-1694 O5a it also writes one row per producing document beside the nil
-/// row, with the same slug; the nil row claims that slug for every document,
-/// so slug exclusivity never selects those, and this predicate reads only the
-/// nil rows. Per-document delete, which reads them, is O6.) Their owner
-/// is recoverable from their endpoints instead: a row belongs to the data item
-/// when *either* endpoint is exclusive to it (see [`endpoint_exclusive_to`]).
-/// The delete detach-deletes every such node from the graph, and a graph edge
-/// cannot outlive either of its endpoints, so the row's edge is gone with the
-/// item whichever end was exclusive. A chunk, summary or document is
-/// exclusive to one item. An entity shared by several items is not, and an
-/// `EntityType` never is (it always has a node row with a nil `data_id`), so an edge
-/// joining two such nodes keeps its row, and its claim on its retrieval text,
-/// until one of its endpoints goes.
+/// Cognify used to write those rows with a nil `data_id` ("structural edges
+/// span multiple DataPoints"), so `data_id = :data` never selects them. Since
+/// SDK-1694 O5a it writes one row per producing document, and since O6 no nil
+/// row beside them: a document's own structural rows are selected by
+/// [`get_unique_edges_for_data`], by triple, like any other edge of it. This
+/// predicate is what still reads the nil rows a database written before then
+/// holds. Their owner is recoverable from their endpoints: a row belongs to
+/// the data item when *either* endpoint is exclusive to it (see
+/// [`endpoint_exclusive_to`]), which reads the node rows as they are now,
+/// per-document EntityType rows included. The delete detach-deletes every such
+/// node from the graph, and a graph edge cannot outlive either of its
+/// endpoints, so the row's edge is gone with the item whichever end was
+/// exclusive. A chunk, summary or document is exclusive to one item. An entity
+/// shared by several items is not, nor is an `EntityType` another item
+/// declares or a legacy nil node row claims, so an edge joining two such nodes
+/// keeps its row, and its claim on its retrieval text, until one of its
+/// endpoints goes.
 ///
 /// Because the predicate reads the node rows, it has to be evaluated before
 /// the data item's node rows are deleted.
@@ -1025,9 +1036,10 @@ fn edge_row_is_live_claim() -> Condition {
         .add(endpoint_claimed(edge::Column::DestinationNodeId, |_| None))
 }
 
-/// The nil-`data_id` structural edge rows that belong to `(data_id, dataset_id)`
-/// by their endpoints, with exclusivity decided under `scope`; see
-/// [`structural_edges_owned_by`].
+/// The legacy nil-`data_id` structural edge rows that belong to `(data_id,
+/// dataset_id)` by their endpoints, with exclusivity decided under `scope`;
+/// see [`structural_edges_owned_by`]. Empty for a ledger written since
+/// SDK-1694 O6.
 #[instrument(
     name = "cognee.db.relational.graph_storage.get_structural_edges_for_data",
     level = "info",
@@ -1059,6 +1071,62 @@ pub async fn get_structural_edges_for_data(
         .collect();
     Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
     Ok(rows)
+}
+
+/// Slugs per `IN (…)` list of [`get_node_slugs_owned_by_data`].
+const OWNED_SLUG_BATCH: usize = 500;
+
+/// The members of `slugs` that a node row naming a data item (a non-nil
+/// `data_id`) still claims, in `dataset_id` when it is given and in any
+/// dataset otherwise.
+///
+/// What the hard delete's degree-one sweep keeps (SDK-1694 O6): an
+/// `EntityType` is removed with its last declaring document by the
+/// data-scoped delete, so one with a single `is_a` edge left may still be a
+/// surviving document's type. A legacy nil-`data_id` row is not such a claim:
+/// the sweep removed those types before and still does.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.get_node_slugs_owned_by_data",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn get_node_slugs_owned_by_data(
+    db: &DatabaseConnection,
+    slugs: &[Uuid],
+    dataset_id: Option<Uuid>,
+) -> Result<Vec<Uuid>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let nil = uuid_hex::to_hex(Uuid::nil());
+    let mut owned = BTreeSet::new();
+    for batch in slugs.chunks(OWNED_SLUG_BATCH) {
+        let mut query = node::Entity::find()
+            .select_only()
+            .column(node::Column::Slug)
+            .distinct()
+            .filter(node::Column::Slug.is_in(batch.iter().copied().map(uuid_hex::to_hex)))
+            .filter(node::Column::DataId.ne(nil.clone()));
+        if let Some(dataset_id) = dataset_id {
+            query = query.filter(node::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)));
+        }
+        let rows: Vec<String> = query.into_tuple().all(db).await.map_err(map_sea_err)?;
+        for slug in rows {
+            match uuid_hex::from_hex(&slug) {
+                Ok(slug) => {
+                    owned.insert(slug);
+                }
+                Err(error) => {
+                    warn!(slug = %slug, "skipping a node row with an unparseable slug: {error}")
+                }
+            }
+        }
+    }
+    Span::current().record(COGNEE_DB_ROW_COUNT, owned.len() as i64);
+    Ok(owned.into_iter().collect())
 }
 
 /// Delete the provenance edge rows with these ids, returning how many went.
@@ -1360,12 +1428,22 @@ fn ledger_col(table: &str, column: &str) -> Expr {
     Expr::col((Alias::new(table), Alias::new(column)))
 }
 
+/// The row of `ledger` referred to as `inner` names the same artifact as the
+/// one referred to as `outer`: the same [`Ledger::key`].
+fn same_artifact(ledger: Ledger, inner: &str, outer: &str) -> Condition {
+    ledger.key().iter().fold(Condition::all(), |cond, column| {
+        cond.add(ledger_col(inner, column).equals((Alias::new(outer), Alias::new(*column))))
+    })
+}
+
 /// Whether the row of `ledger` referred to as `outer` is a **nil row an
 /// item-scoped sweep takes with it** (SDK-1694 O5b).
 ///
-/// Since O5a an EntityType, a structural edge and an ontology-first entity
-/// carry one ledger row per producing document **and** a row with the nil
-/// `data_id`, the guard the data-scoped delete reads. A `data_id IN (…)`
+/// Between O5a and O6 an EntityType, a structural edge and an ontology-first
+/// entity carried one ledger row per producing document **and** a row with
+/// the nil `data_id`, the guard the data-scoped delete read; since O6 cognify
+/// writes the nil row only for an artifact no document is known to have
+/// produced, but a database written before then holds them. A `data_id IN (…)`
 /// selection never selects the nil row, so without this an item-scoped sweep
 /// removed the failed document's rows while the run's nil row went on
 /// claiming the artifact: a type only the failed document declared outlived
@@ -1392,11 +1470,7 @@ fn swept_nil_row(
     outer: &str,
 ) -> Condition {
     let nil = uuid_hex::to_hex(Uuid::nil());
-    let same_artifact = |inner: &str| {
-        ledger.key().iter().fold(Condition::all(), |cond, column| {
-            cond.add(ledger_col(inner, column).equals((Alias::new(outer), Alias::new(*column))))
-        })
-    };
+    let same_artifact = |inner: &str| same_artifact(ledger, inner, outer);
     let swept_sibling = Query::select()
         .expr(Expr::val(1))
         .from_as(Alias::new(ledger.table()), Alias::new("swept_sibling"))
@@ -1620,8 +1694,10 @@ pub async fn get_unique_nodes_for_run(
     Ok(rows)
 }
 
-/// Return the edges of [`get_edges_for_run`] whose `slug` is claimed by no row
-/// outside `scope`; see [`get_unique_nodes_for_run`] for the reasoning.
+/// Return the edges of [`get_edges_for_run`] whose `(source, target,
+/// relationship)` triple is claimed by no row outside `scope`; see
+/// [`get_unique_nodes_for_run`] for the reasoning and
+/// [`get_unique_edges_for_data`] for why not the slug.
 #[instrument(
     name = "cognee.db.relational.graph_storage.get_unique_edges_for_run",
     level = "info",
@@ -1646,15 +1722,8 @@ pub async fn get_unique_edges_for_run(
 
     let claimed = Query::select()
         .expr(Expr::val(1))
-        .from_as(Alias::new("edges"), e2.clone())
-        .cond_where(
-            Condition::all()
-                .add(
-                    Expr::col((e2.clone(), edge::Column::Slug))
-                        .equals((Alias::new("edges"), edge::Column::Slug)),
-                )
-                .add(outside),
-        )
+        .from_as(Alias::new("edges"), e2)
+        .cond_where(same_artifact(Ledger::Edges, "e2", "edges").add(outside))
         .to_owned();
 
     let rows: Vec<GraphEdge> = edge::Entity::find()
@@ -1940,8 +2009,10 @@ pub async fn retag_run_rows(
 /// the same artifact still stands beside — a row of another run, a `NULL`
 /// run, or one already moved to `to` — to run `to`. Returns the rows moved.
 ///
-/// The nil row is the guard the data-scoped delete reads for an EntityType, a
-/// structural edge or an ontology-first entity (SDK-1694 O5a). A sweep that
+/// The nil row was the guard the data-scoped delete read for an EntityType, a
+/// structural edge or an ontology-first entity (SDK-1694 O5a; since O6 only a
+/// run-level artifact, or one a database written before then holds, has
+/// one, and it is still a claim). A sweep that
 /// keeps some documents keeps it while a kept or outside document still
 /// produces the artifact, and takes it otherwise: a nil row nothing else
 /// stands beside (a DLT schema node, a type only swept documents declared)
@@ -1974,11 +2045,7 @@ pub async fn retag_guarded_nil_rows(
     );
     let guarded = |ledger: Ledger| {
         let outer = ledger.table();
-        let same_artifact = ledger.key().iter().fold(Condition::all(), |cond, column| {
-            cond.add(
-                ledger_col("standing", column).equals((Alias::new(outer), Alias::new(*column))),
-            )
-        });
+        let same_artifact = same_artifact(ledger, "standing", outer);
         // `IS NULL` is not redundant with `<> :run`; see `get_unique_nodes_for_run`.
         let standing = Query::select()
             .expr(Expr::val(1))

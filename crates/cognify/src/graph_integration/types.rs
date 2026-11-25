@@ -367,6 +367,13 @@ impl ArtifactProducers {
             .map_or(&[], Vec::as_slice)
     }
 
+    /// Whether any type producer was recorded: every unit expansion records
+    /// the types of the entities it owns, so only a hand-built producer set
+    /// (or one with no typed entity) records none.
+    pub fn records_types(&self) -> bool {
+        !self.types.is_empty()
+    }
+
     /// Chunks that declared some entity with `type_id`, or an empty slice.
     pub fn type_chunks(&self, type_id: Uuid) -> &[Uuid] {
         self.types.get(&type_id).map_or(&[], Vec::as_slice)

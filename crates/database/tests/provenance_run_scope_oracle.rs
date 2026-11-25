@@ -364,8 +364,8 @@ mod oracle {
                 data_id: row.data,
                 dataset_id: row.dataset,
                 pipeline_run_id: row.run,
-                source_node_id: Uuid::new_v4(),
-                destination_node_id: Uuid::new_v4(),
+                source_node_id: row.slug,
+                destination_node_id: row.slug,
                 relationship_name: name.to_string(),
                 label: None,
                 attributes: None,
@@ -428,9 +428,17 @@ mod oracle {
                 let r = world.random_row(&mut rng, &edge_rows);
                 edge_rows.push(r);
             }
-            let edge_names: Vec<String> = (0..n_edges)
-                .map(|_| rng.pick(&[0usize, 1, 2]))
-                .map(|i| world.rel_names[i].clone())
+            // An edge's name is a function of its slug, and so are its
+            // endpoints (`edge_of`), as cognify derives a slug from the
+            // triple: edge exclusivity is decided on the triple since
+            // SDK-1694 O6, and this keeps the slug reference exact. The draw
+            // is kept so the case sequence stays the same.
+            let edge_names: Vec<String> = edge_rows
+                .iter()
+                .map(|row| {
+                    let _ = rng.pick(&[0usize, 1, 2]);
+                    world.rel_names[usize::from(row.slug.as_bytes()[15]) % 3].clone()
+                })
                 .collect();
 
             let nodes: Vec<GraphNode> = node_rows.iter().map(|r| world.node_of(r)).collect();

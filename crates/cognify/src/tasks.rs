@@ -5156,49 +5156,37 @@ fn entity_provenance_rows(
         let mut data_ids = producing_data_ids(producers.entity_chunks(entity_id), chunk_data_map);
         // The documents whose ontology lookup brought the entity in, without
         // extracting it (SDK-1694 O5a): Python's walk of such a document
-        // reaches the entity and `upsert_nodes` stamps its `data_id`. Added
-        // only beside the entity's nil row (below), which claims the entity
-        // for every document, so no data-scoped delete selects differently
-        // because of them (per-document delete is O6).
-        let ontology_documents =
-            producing_data_ids(producers.ontology_entity_chunks(entity_id), chunk_data_map);
-        let mut guarded_by_nil = false;
-        if producers.is_ontology_first(entity_id)
-            && (data_ids.is_empty()
-                || ontology_documents
-                    .iter()
-                    .any(|data_id| !data_ids.contains(data_id)))
+        // reaches the entity and `upsert_nodes` stamps its `data_id`. Each
+        // gets its own row, whether or not an earlier document (or unit)
+        // extracted the entity, so deleting the extractor keeps an entity a
+        // looking-up document still reaches, and the looking-up document's
+        // `is_a` and EntityType rows never name an entity it has no row for
+        // (SDK-1694 O6).
+        for data_id in
+            producing_data_ids(producers.ontology_entity_chunks(entity_id), chunk_data_map)
         {
-            // First seen in the run through the ontology alone, and some
-            // document reached it by lookup without extracting it: it keeps
-            // the nil row such an entity had, on whichever path the run is
-            // saved — a later document extracting it changes nothing (O4b
-            // wrote it in the first document's group only). Decided per
-            // document, not per unit: when every looking-up document also
-            // extracts it (a lookup in one block, the extraction in a later
-            // block of the same document), it had no nil row on `main` and
-            // gets none here, so deleting that document still removes it.
-            data_ids.push(Uuid::nil());
-            guarded_by_nil = true;
-        } else if data_ids.is_empty() {
+            if !data_ids.contains(&data_id) {
+                data_ids.push(data_id);
+            }
+        }
+        if data_ids.is_empty() {
             // Callers that hand us a `SummarizedData` they built themselves
-            // carry no producer set, and neither does an entity a document
-            // reached only through the ontology after an earlier one extracted
-            // it: fall back to the single `chunk_id` stamp, then to nil. The
-            // stamp is looked up run-wide (`stamp_documents`), so a
-            // per-document group gets the row one group would (SDK-1694 O4b).
+            // carry no producer set: fall back to the single `chunk_id`
+            // stamp, then to nil. The stamp is looked up run-wide
+            // (`stamp_documents`), so a per-document group gets the row one
+            // group would (SDK-1694 O4b).
+            //
+            // No other entity gets a nil row any more. Until O6 an entity
+            // first seen through the ontology alone kept one beside its
+            // documents' rows, the guard that kept every data-scoped delete
+            // from removing it; it is now removed with the last document that
+            // extracted it or looked it up, as in Python. A nil row is still
+            // a claim, so one a database written before then holds keeps the
+            // entity.
             let fallback = stamped_chunk(entity)
                 .and_then(|chunk_id| stamp_documents.get(&chunk_id).copied())
                 .unwrap_or(Uuid::nil());
-            guarded_by_nil = fallback.is_nil();
             data_ids.push(fallback);
-        }
-        if guarded_by_nil {
-            for data_id in ontology_documents {
-                if !data_ids.contains(&data_id) {
-                    data_ids.push(data_id);
-                }
-            }
         }
 
         rows.extend(
@@ -5294,36 +5282,109 @@ fn timestamp_provenance_rows(
     rows
 }
 
+/// The owners of each entity whose types no producer set names, for its types
+/// and `is_a` edges: the `data_id`s of its ownership rows.
+///
+/// That is an entity no chunk of the group extracted or looked up (its rows
+/// are the fallback ones [`entity_provenance_rows`] gave it: its `chunk_id`
+/// stamp's document, else nil), or any entity when the producer set records
+/// no type at all (a hand-built `SummarizedData`). Every other entity's types
+/// and `is_a` edges have producers of their own, and only those count: a
+/// group that saves one document of a run holds the run's merged copy of every
+/// entity it touches, with the types other documents declared too.
+fn unproduced_entity_owners(
+    entity_rows: &[cognee_database::GraphNode],
+    producers: &ArtifactProducers,
+) -> HashMap<Uuid, Vec<Uuid>> {
+    let mut owners: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+    for row in entity_rows.iter().filter(|row| {
+        !producers.records_types()
+            || (producers.entity_chunks(row.slug).is_empty()
+                && producers.ontology_entity_chunks(row.slug).is_empty())
+    }) {
+        let data_ids = owners.entry(row.slug).or_default();
+        if !data_ids.contains(&row.data_id) {
+            data_ids.push(row.data_id);
+        }
+    }
+    owners
+}
+
+/// The documents that own each EntityType of `entities` in this group, in
+/// first-seen type order: one ledger row each (SDK-1694 O5a; the only rows
+/// since O6).
+///
+/// Every document of the group that declared some entity with the type (O1's
+/// producer sets), as Python's `upsert_nodes` stamps the ctx `data_id` on every
+/// node a document's walk reaches, EntityTypes included. A type of an entity
+/// no producer set names (a hand-built `SummarizedData`) goes to that
+/// entity's fallback owners instead ([`unproduced_entity_owners`]), the nil
+/// `data_id` among them. A type no document of the group declared, and no
+/// such entity carries, gets no row here: another group's document declared
+/// it, and that group's rows hold it.
+fn entity_type_owners(
+    entities: &[GraphNodePair],
+    entity_rows: &[cognee_database::GraphNode],
+    producers: &ArtifactProducers,
+    chunk_data_map: &HashMap<Uuid, Uuid>,
+) -> Vec<(Uuid, Vec<Uuid>)> {
+    let unproduced = unproduced_entity_owners(entity_rows, producers);
+    let mut order: Vec<Uuid> = Vec::new();
+    let mut typed: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+    for pair in entities {
+        for entity_type in pair.entity_types() {
+            let type_id = entity_type.base.id;
+            if !typed.contains_key(&type_id) {
+                order.push(type_id);
+            }
+            typed.entry(type_id).or_default().push(pair.entity.base.id);
+        }
+    }
+    order
+        .into_iter()
+        .map(|type_id| {
+            let mut data_ids = producing_data_ids(producers.type_chunks(type_id), chunk_data_map);
+            if data_ids.is_empty() {
+                for entity_id in typed.get(&type_id).into_iter().flatten() {
+                    for data_id in unproduced.get(entity_id).into_iter().flatten() {
+                        if !data_ids.contains(data_id) {
+                            data_ids.push(*data_id);
+                        }
+                    }
+                }
+            }
+            (type_id, data_ids)
+        })
+        .collect()
+}
+
 /// Which documents a group's ownership rows give each endpoint an edge can
-/// name: its entities (from their rows) and its EntityTypes, which every
-/// document owns through their nil row.
+/// name: its entities and its EntityTypes, from their rows.
 struct EndpointOwners {
-    entities: HashMap<Uuid, HashSet<Uuid>>,
-    types: HashSet<Uuid>,
+    owners: HashMap<Uuid, HashSet<Uuid>>,
 }
 
 impl EndpointOwners {
-    fn new(entities: &[GraphNodePair], entity_rows: &[cognee_database::GraphNode]) -> Self {
+    fn new(entity_rows: &[cognee_database::GraphNode], type_owners: &[(Uuid, Vec<Uuid>)]) -> Self {
         let mut owners: HashMap<Uuid, HashSet<Uuid>> = HashMap::new();
         for row in entity_rows {
             owners.entry(row.slug).or_default().insert(row.data_id);
         }
-        Self {
-            entities: owners,
-            types: entities
-                .iter()
-                .flat_map(|pair| pair.entity_types().map(|t| t.base.id))
-                .collect(),
+        for (type_id, data_ids) in type_owners {
+            owners
+                .entry(*type_id)
+                .or_default()
+                .extend(data_ids.iter().copied());
         }
+        Self { owners }
     }
 
-    /// Whether `data_id` has an ownership row for the endpoint `id`.
+    /// Whether `data_id` has an ownership row for the endpoint `id`, or the
+    /// endpoint's only row is a nil one, which claims it for every document.
     fn owns(&self, id: Uuid, data_id: Uuid) -> bool {
-        self.types.contains(&id)
-            || self
-                .entities
-                .get(&id)
-                .is_some_and(|data_ids| data_ids.contains(&data_id))
+        self.owners.get(&id).is_some_and(|data_ids| {
+            data_ids.contains(&data_id) || (data_ids.len() == 1 && data_ids.contains(&Uuid::nil()))
+        })
     }
 }
 
@@ -5349,8 +5410,6 @@ fn semantic_edge_provenance_rows(
     chunk_data_map: &HashMap<Uuid, Uuid>,
     entity_data_map: &HashMap<Uuid, Uuid>,
     producers: &ArtifactProducers,
-    // `edges` are edges the graph already held, which this run only claims.
-    claimed: bool,
     endpoints: &EndpointOwners,
 ) -> Vec<cognee_database::GraphEdge> {
     let mut rows = Vec::new();
@@ -5396,20 +5455,18 @@ fn semantic_edge_provenance_rows(
                 }
             }
         };
-        if claimed {
-            // An edge the graph already held: this run only claims it. An
-            // existing ontology edge got no row before O5a; now every document
-            // whose lookup produced it claims it, as an extracted one is.
-            add_ontology_documents(&mut data_ids);
-        }
+        // Also for an edge the graph already held, which this run only
+        // claims: an existing ontology edge got no row before O5a; now every
+        // document whose lookup produced it claims it, as an extracted one is.
+        add_ontology_documents(&mut data_ids);
         if data_ids.is_empty() {
-            // No chunk extracted the edge (an ontology edge, or a hand-built
-            // `SummarizedData`): the row it always had, from the
-            // both-endpoints-agree heuristic, then nil. That row is what a
-            // data-scoped delete reads, so it stays until per-document delete
-            // (O6). The ontology documents' rows are added only beside a nil
-            // row, which claims the edge for every document, so a delete
-            // selects exactly what it did before.
+            // No chunk extracted the edge and no looking-up document owns both
+            // its endpoints (a hand-built `SummarizedData`, or an ontology
+            // edge whose endpoints came from elsewhere): the row it always
+            // had, from the both-endpoints-agree heuristic, then nil. Until
+            // SDK-1694 O6 an ontology edge kept that row beside its looking-up
+            // documents' rows, which made it a claim no delete took; it is now
+            // left only when no document is known to have produced the edge.
             let source_data_id = entity_data_map.get(&edge_pair.source_entity_id).copied();
             let target_data_id = entity_data_map.get(&edge_pair.target_entity_id).copied();
             let fallback = match (source_data_id, target_data_id) {
@@ -5417,9 +5474,6 @@ fn semantic_edge_provenance_rows(
                 _ => Uuid::nil(),
             };
             data_ids.push(fallback);
-            if fallback.is_nil() {
-                add_ontology_documents(&mut data_ids);
-            }
         }
 
         // `slug`, endpoints, `relationship_name`, `label` and `attributes` are
@@ -5721,7 +5775,8 @@ pub(crate) fn extraction_ownership_rows(
 
     let mut prov_nodes =
         entity_provenance_rows(id, entities, &chunk_data_map, stamp_documents, producers);
-    let endpoints = EndpointOwners::new(entities, &prov_nodes);
+    let type_owners = entity_type_owners(entities, &prov_nodes, producers, &chunk_data_map);
+    let endpoints = EndpointOwners::new(&prov_nodes, &type_owners);
     prov_nodes.extend(timestamp_provenance_rows(
         id,
         timestamps,
@@ -5734,7 +5789,6 @@ pub(crate) fn extraction_ownership_rows(
         &chunk_data_map,
         &entity_data_map,
         producers,
-        false,
         &endpoints,
     );
     prov_edges.extend(semantic_edge_provenance_rows(
@@ -5743,7 +5797,6 @@ pub(crate) fn extraction_ownership_rows(
         &chunk_data_map,
         &entity_data_map,
         producers,
-        true,
         &endpoints,
     ));
     (prov_nodes, prov_edges)
@@ -5839,7 +5892,10 @@ pub(crate) fn provenance_rows(
     // (idempotent), as before O4a.
     let mut prov_nodes: Vec<GraphNode> =
         entity_provenance_rows(id, entities, &chunk_data_map, stamp_documents, producers);
-    let endpoints = EndpointOwners::new(entities, &prov_nodes);
+    let type_owners = entity_type_owners(entities, &prov_nodes, producers, &chunk_data_map);
+    let endpoints = EndpointOwners::new(&prov_nodes, &type_owners);
+    // The owners of an entity no producer set names, for its `is_a` edges.
+    let unproduced = unproduced_entity_owners(&prov_nodes, producers);
 
     // DocumentChunks
     for chunk in chunks {
@@ -5894,29 +5950,22 @@ pub(crate) fn provenance_rows(
         });
     }
 
-    // EntityTypes, one row per type id: many entities share a type.
-    let mut seen_types = HashSet::new();
-    for et in entities
-        .iter()
-        .flat_map(|pair| pair.entity_types())
-        .filter(|et| seen_types.insert(et.base.id))
-    {
-        // One row per document that declared some entity with this type
-        // (SDK-1694 O5a), as Python's `upsert_nodes` stamps the ctx `data_id`
-        // on every node a document's walk reaches, EntityTypes included.
-        //
-        // Plus the nil-`data_id` row every EntityType always had. It is the
-        // delete guard: a data-scoped delete spares a slug another owner's row
-        // claims, and the nil row claims the type for every document, so no
-        // delete removes an EntityType today. Dropping it flips types from
-        // never-deleted to deleted with their last document, which is
-        // per-document delete's change (O6), not this one.
-        let mut data_ids = vec![Uuid::nil()];
-        for data_id in producing_data_ids(producers.type_chunks(et.base.id), &chunk_data_map) {
-            if !data_ids.contains(&data_id) {
-                data_ids.push(data_id);
-            }
-        }
+    // EntityTypes: one row per document that declared some entity with the
+    // type (`entity_type_owners`). Since SDK-1694 O6 there is no nil-`data_id`
+    // row beside them: that row claimed every type for every document, so no
+    // data-scoped delete removed an EntityType; now the last declaring
+    // document's delete does, as in Python (`get_data_related_nodes`). A nil
+    // row is still a claim, so the types of a database written before then
+    // stay until their dataset is deleted.
+    // The run's first copy of each type, as the graph write takes it.
+    let mut types: HashMap<Uuid, &cognee_models::EntityType> = HashMap::new();
+    for et in entities.iter().flat_map(|pair| pair.entity_types()) {
+        types.entry(et.base.id).or_insert(et);
+    }
+    for (type_id, data_ids) in &type_owners {
+        let Some(et) = types.get(type_id) else {
+            continue;
+        };
         let indexed_fields = et
             .base
             .get_metadata("index_fields")
@@ -5925,10 +5974,10 @@ pub(crate) fn provenance_rows(
         let attributes = serde_json::to_value(et).ok();
         for data_id in data_ids {
             prov_nodes.push(GraphNode {
-                id: provenance_node_id(tenant_id, user_id, dataset_id, data_id, et.base.id),
+                id: provenance_node_id(tenant_id, user_id, dataset_id, *data_id, et.base.id),
                 slug: et.base.id,
                 user_id,
-                data_id,
+                data_id: *data_id,
                 dataset_id,
                 pipeline_run_id,
                 label: Some(et.name.clone()),
@@ -5990,7 +6039,6 @@ pub(crate) fn provenance_rows(
         &chunk_data_map,
         &entity_data_map,
         producers,
-        false,
         &endpoints,
     );
 
@@ -6001,7 +6049,7 @@ pub(crate) fn provenance_rows(
     // - `made_from` (summary → chunk): the summarized chunk's document;
     // - `is_a` (entity → type): every document that declared the entity with
     //   that type, which an entity carrying several documents' types needs;
-    // - anything else: none (only the nil row).
+    // - anything else: none (a nil row, below).
     let summary_documents: HashMap<Uuid, Uuid> = summaries
         .iter()
         .filter_map(|summary| {
@@ -6011,10 +6059,16 @@ pub(crate) fn provenance_rows(
         .collect();
     let structural_edge_data_ids = |source: Uuid, target: Uuid, relationship: &str| -> Vec<Uuid> {
         match relationship {
-            "is_a" => producing_data_ids(
+            // The typed entity's fallback owners when no producer set names
+            // it (`entity_type_owners`); none when another group's document
+            // declared the pair.
+            "is_a" => Some(producing_data_ids(
                 producers.entity_type_chunks(source, target),
                 &chunk_data_map,
-            ),
+            ))
+            .filter(|data_ids| !data_ids.is_empty())
+            .or_else(|| unproduced.get(&source).cloned())
+            .unwrap_or_default(),
             "is_part_of" | "contains" => chunk_data_map.get(&source).copied().into_iter().collect(),
             "made_from" => summary_documents
                 .get(&source)
@@ -6060,21 +6114,23 @@ pub(crate) fn provenance_rows(
             None => (rel_name, None),
         };
 
-        // The nil-`data_id` row every structural edge always had, first: it
-        // is the row a data-scoped delete reads today (through its endpoints,
-        // `get_structural_edges_for_data`), and it claims the edge's slug, so
-        // the per-document rows below are never selected by slug exclusivity
-        // and the delete stays as it was until per-document delete (O6).
+        // One row per document that produced the edge (SDK-1694 O5a), as
+        // Python's `upsert_edges` stamps the ctx `data_id`; a data-scoped
+        // delete selects them by triple (`get_unique_edges_for_data`).
         //
-        // Then one row per document that produced the edge (SDK-1694 O5a), as
-        // Python's `upsert_edges` stamps the ctx `data_id`.
-        let mut data_ids = vec![Uuid::nil()];
-        for data_id in
-            structural_edge_data_ids(source_id, target_id, label.as_deref().unwrap_or(&row_text))
-        {
-            if !data_ids.contains(&data_id) {
-                data_ids.push(data_id);
-            }
+        // Until O6 a nil-`data_id` row stood beside them, the row the delete
+        // read through the edge's endpoints (`get_structural_edges_for_data`,
+        // which still reads those of an older database). Only an edge no
+        // document is known to have produced still gets one.
+        let relationship = label.as_deref().unwrap_or(&row_text);
+        let mut data_ids = structural_edge_data_ids(source_id, target_id, relationship);
+        if data_ids.is_empty() && (relationship != "is_a" || !producers.records_types()) {
+            // A structural edge no document is known to have produced: one of
+            // none of the kinds above, or an `is_a` edge of a hand-built input
+            // whose entity is not among its entities. An `is_a` edge without
+            // a producer in a group whose producers record types was declared
+            // by another group's document, whose rows hold it.
+            data_ids.push(Uuid::nil());
         }
         let slug = edge_slug(&row_text);
         let row_text = row_text.into_owned();
@@ -9686,10 +9742,10 @@ mod tests {
         assert_eq!(rows[0].data_id, Uuid::nil());
     }
 
-    /// Structural edges keep their nil `data_id` row (the delete guard; the
-    /// per-document rows SDK-1694 O5a adds beside it need producers, which a
-    /// hand-built input has none of); the nil is folded into the row id like
-    /// every other edge's.
+    /// A structural edge no document is known to have produced (a hand-built
+    /// input with no producers and no entity behind it) keeps a nil `data_id`
+    /// row, the claim every structural edge had before SDK-1694 O6; the nil
+    /// is folded into the row id like every other edge's.
     #[tokio::test]
     async fn structural_edge_rows_keep_a_nil_data_id() {
         use cognee_database::ops::graph_storage::get_edges_by_dataset;
@@ -16062,9 +16118,10 @@ mod tests {
     /// An ontology edge the graph already holds is not written again (on
     /// `main` before O2 its existence check never matched, so every run
     /// rewrote it). Since SDK-1694 O5a each document whose ontology lookup
-    /// brought it in owns it: the first run's row for its document (beside the
-    /// nil row an ontology edge always had), and the second run's claim for
-    /// its own — as Python's in-graph provenance attaches each document's ref.
+    /// brought it in owns it: the first run's row for its document, and the
+    /// second run's claim for its own — as Python's in-graph provenance
+    /// attaches each document's ref. Since O6 there is no nil row beside them,
+    /// so the edge goes with the last of the two.
     #[tokio::test]
     async fn an_existing_ontology_edge_is_not_written_again_but_claimed() {
         let graph = json!({
@@ -16078,7 +16135,7 @@ mod tests {
         let owners: BTreeSet<Uuid> = rows.iter().map(|row| row.data_id).collect();
         assert_eq!(
             owners,
-            BTreeSet::from([Uuid::nil(), documents[0], documents[1]]),
+            BTreeSet::from([documents[0], documents[1]]),
             "{rows:?}"
         );
         assert!(rows.iter().all(|row| {

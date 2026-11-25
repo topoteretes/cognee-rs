@@ -19,6 +19,7 @@ mod m20261030_000001_drop_pipeline_run_claims;
 mod m20261031_000001_improve_stamps_to_run_info;
 mod m20261101_000001_provenance_edge_evidence;
 mod m20261118_000001_data_system_metadata;
+mod m20261125_000001_edges_endpoint_index;
 
 pub struct Migrator;
 
@@ -73,6 +74,7 @@ pub fn core_migrations() -> Vec<Box<dyn MigrationTrait>> {
         Box::new(m20261031_000001_improve_stamps_to_run_info::Migration),
         Box::new(m20261101_000001_provenance_edge_evidence::Migration),
         Box::new(m20261118_000001_data_system_metadata::Migration),
+        Box::new(m20261125_000001_edges_endpoint_index::Migration),
     ]
 }
 

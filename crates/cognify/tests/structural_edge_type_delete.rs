@@ -3,11 +3,12 @@
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
 )]
-//! Structural edges (`is_part_of`, `contains`, `is_a`, ...) carry a nil
+//! Structural edges (`is_part_of`, `contains`, `is_a`, ...) carried a nil
 //! `data_id` in the ownership ledger, so a data-scoped delete never selected
 //! them and the `EdgeType` points keyed on their retrieval text outlived the
-//! item. These tests run the real cognify path and the real delete service and
-//! assert on the points themselves.
+//! item. (Since SDK-1694 O6 they carry their documents' ids instead, and the
+//! delete selects them by triple.) These tests run the real cognify path and
+//! the real delete service and assert on the points themselves.
 //!
 //! The `EdgeType` id is many-to-one over edges, so the second half of the
 //! contract matters as much as the first: a point a surviving item's edge
@@ -100,19 +101,19 @@ async fn deleting_one_item_removes_its_structural_edge_type_points() {
         .await
         .expect("cognify succeeds");
 
-    // Preconditions: the structural rows exist, carry a nil `data_id` (the
-    // thing under test), and have their points.
-    let structural: Vec<_> = harness
-        .ledger_edges()
-        .await
-        .into_iter()
-        .filter(|row| row.data_id.is_nil())
-        .collect();
+    // Preconditions: the structural rows exist, carry the item's `data_id`
+    // and no nil row beside them (SDK-1694 O6; a database written before
+    // then holds the nil row, which `type_delete.rs` covers), and have their
+    // points.
+    let rows = harness.ledger_edges().await;
     assert!(
-        structural
-            .iter()
-            .any(|row| row.relationship_name == "is_part_of"),
-        "cognify records the structural is_part_of row with a nil data_id"
+        rows.iter()
+            .any(|row| row.relationship_name == "is_part_of" && row.data_id == data_id),
+        "cognify records the structural is_part_of row for the item"
+    );
+    assert!(
+        rows.iter().all(|row| !row.data_id.is_nil()),
+        "and no nil row: {rows:?}"
     );
     assert!(has_edge_type_point(&harness, "alice is a person."));
     assert!(has_edge_type_point(

@@ -1129,7 +1129,7 @@ impl DeleteService {
             };
             for scope in sweep_scopes {
                 let sweeps = async {
-                    let nodes = self.sweep_orphan_nodes().await?;
+                    let nodes = self.sweep_orphan_nodes(scope).await?;
                     let edge_types = self.sweep_orphan_edge_types().await?;
                     Ok::<_, DeleteError>((nodes, edge_types))
                 };
@@ -1647,6 +1647,9 @@ impl DeleteService {
             let (gn, gw) = delete_graph_artifacts(self.graph_db.as_ref(), &unique_nodes).await?;
             graph_node_count += gn;
             warnings.extend(gw);
+            warnings.extend(
+                delete_type_edges(self.graph_db.as_ref(), &unique_edges, &unique_nodes).await?,
+            );
 
             // --- Vector cleanup ---
             let (vp, vw) = delete_vector_artifacts(
@@ -1738,13 +1741,13 @@ impl DeleteService {
                 ))
             })?;
 
-        // Structural edges (`is_part_of`, `contains`, ...) are recorded with a
-        // nil `data_id`, so the queries above never see them; find them through
-        // their endpoints instead. (Their per-document rows, written beside the
-        // nil row since SDK-1694 O5a, share its slug, so the slug-exclusive
-        // query above never selects them either; they leave with the item's
-        // other rows below. Reading them is per-document delete, O6.) Each has an endpoint in `nodes`, so its edge
-        // leaves the graph with it: its `EdgeType` text is weighed below and its
+        // Structural edges (`is_part_of`, `contains`, `is_a`, ...) have one
+        // row per producing document since SDK-1694 O5a, and since O6 no
+        // nil-`data_id` row beside them: the query above selects the item's own
+        // by triple, like any of its edges. A database written before then
+        // holds nil rows instead, which no `data_id` names; find those through
+        // their endpoints. Each has an endpoint in `nodes`, so its edge leaves
+        // the graph with it: its `EdgeType` text is weighed below and its
         // legacy `Triplet_text` point goes (Rust's cognify never wrote one for a
         // structural edge, but Python's did, for every graph edge).
         let structural_edges = self
@@ -1791,6 +1794,7 @@ impl DeleteService {
         let (gn, gw) = delete_graph_artifacts(self.graph_db.as_ref(), &nodes).await?;
         graph_node_count += gn;
         warnings.extend(gw);
+        warnings.extend(delete_type_edges(self.graph_db.as_ref(), &edges, &nodes).await?);
 
         // --- Vector cleanup ---
         let edge_type_ids = self
@@ -1928,8 +1932,20 @@ impl DeleteService {
     /// Hard-mode orphan sweep: find and delete degree-one Entity/EntityType
     /// nodes from the graph and their corresponding vector points.
     ///
+    /// An `EntityType` a document's ledger row still claims is kept (SDK-1694
+    /// O6): the data-scoped delete removes a type with its last declaring
+    /// document, so a degree-one type is one entity's type, not an orphan.
+    /// Python's degree sweep (`legacy_delete`) predates its per-document
+    /// ledger and runs only for a legacy document, which has no such row;
+    /// a legacy type, claimed by a nil-`data_id` row only, is still swept.
+    /// `dataset_id` narrows the claims to one dataset under per-dataset
+    /// storage, where the sweep reads that dataset's graph alone.
+    ///
     /// Returns `(orphan_entities, orphan_entity_types, warnings)`.
-    async fn sweep_orphan_nodes(&self) -> Result<(usize, usize, Vec<String>), DeleteError> {
+    async fn sweep_orphan_nodes(
+        &self,
+        dataset_id: Option<Uuid>,
+    ) -> Result<(usize, usize, Vec<String>), DeleteError> {
         let mut warnings = Vec::new();
 
         let graph_db = match &self.graph_db {
@@ -1945,7 +1961,7 @@ impl DeleteService {
             DeleteError::GraphCleanup(format!("Failed to query degree-one Entity nodes: {e}"))
         })?;
 
-        let orphan_types = graph_db
+        let mut orphan_types = graph_db
             .get_degree_one_nodes("EntityType")
             .await
             .map_err(|e| {
@@ -1953,6 +1969,25 @@ impl DeleteService {
                     "Failed to query degree-one EntityType nodes: {e}"
                 ))
             })?;
+        if !orphan_types.is_empty() {
+            let slugs: Vec<Uuid> = orphan_types
+                .iter()
+                .filter_map(|(id, _)| Uuid::parse_str(id).ok())
+                .collect();
+            let owned: HashSet<String> = self
+                .database
+                .get_node_slugs_owned_by_data(&slugs, dataset_id)
+                .await
+                .map_err(|e| {
+                    DeleteError::Runtime(format!(
+                        "Failed to read the ledger claims on degree-one EntityType nodes: {e}"
+                    ))
+                })?
+                .into_iter()
+                .map(|slug| slug.to_string())
+                .collect();
+            orphan_types.retain(|(id, _)| !owned.contains(id));
+        }
 
         let entity_count = orphan_entities.len();
         let type_count = orphan_types.len();
@@ -2683,6 +2718,58 @@ pub(crate) async fn delete_graph_artifacts(
                 .push("Graph DB not configured; graph artifacts were not cleaned up.".to_string());
         }
         Ok((0, warnings))
+    }
+}
+
+/// Remove from the graph the `is_a` edges among `edges` (rows no surviving
+/// owner claims) whose endpoints both survive the delete — the entity and the
+/// type another document still declares — and return the warnings.
+///
+/// SDK-1694 O6: an entity carries one `is_a` edge per type some document
+/// declared, and the edge goes with the last document that declared that
+/// pair. Every other edge leaves the graph with an endpoint, as in Python
+/// (`delete_from_graph_and_vector` deletes nodes only), and so does an `is_a`
+/// edge whose entity or type goes. Python keeps one ledger row per edge and
+/// compares its slug, which every `is_a` row shares, so it never removes an
+/// `is_a` edge between two surviving nodes; Rust counts the edge's producers.
+pub(crate) async fn delete_type_edges(
+    graph_db: Option<&Arc<dyn GraphDBTrait>>,
+    edges: &[GraphEdge],
+    deleted_nodes: &[GraphNode],
+) -> Result<Vec<String>, DeleteError> {
+    let deleted: HashSet<Uuid> = deleted_nodes.iter().map(|node| node.slug).collect();
+    let keys: Vec<cognee_graph::EdgeKey> = edges
+        .iter()
+        .filter(|edge| edge.label.as_deref().unwrap_or(&edge.relationship_name) == "is_a")
+        .filter(|edge| {
+            !deleted.contains(&edge.source_node_id) && !deleted.contains(&edge.destination_node_id)
+        })
+        .map(|edge| {
+            (
+                edge.source_node_id.to_string(),
+                edge.destination_node_id.to_string(),
+                "is_a".to_string(),
+            )
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if keys.is_empty() {
+        return Ok(Vec::new());
+    }
+    match graph_db {
+        Some(graph_db) => {
+            graph_db.delete_edge_triples(&keys).await.map_err(|e| {
+                DeleteError::GraphCleanup(format!(
+                    "Failed to delete {} is_a graph edges: {e}",
+                    keys.len()
+                ))
+            })?;
+            Ok(Vec::new())
+        }
+        None => Ok(vec![
+            "Graph DB not configured; is_a edges were not cleaned up.".to_string(),
+        ]),
     }
 }
 

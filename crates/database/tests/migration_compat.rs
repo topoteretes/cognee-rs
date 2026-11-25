@@ -321,6 +321,9 @@ async fn baseline_creates_full_table_set_sqlite() {
 /// Bumped to 16 for `m20261118_000001_data_system_metadata`: the nullable
 /// `data.system_metadata` route stamp (Python alembic `f2b4c6d8e0a1`,
 /// SDK-1053), added only if missing.
+/// Bumped to 17 for `m20261125_000001_edges_endpoint_index`: an index on the
+/// `edges` ledger's endpoint columns, which the per-document delete's triple
+/// exclusivity correlates on (SDK-1694 O6), created only if missing.
 #[test]
 fn relational_chain_is_baseline_plus_additive_migrations() {
     use sea_orm_migration::MigratorTrait;
@@ -330,7 +333,7 @@ fn relational_chain_is_baseline_plus_additive_migrations() {
         .collect();
     assert_eq!(
         names.len(),
-        16,
+        17,
         "unexpected migration-chain length — chain: {names:?}"
     );
     assert!(

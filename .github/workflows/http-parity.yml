@@ -374,9 +374,10 @@ jobs:
 
       # ── Cross-SDK delete parity after cognify (LLM-gated) ───────────────
       # Both SDKs add + cognify, then delete; graph, vector and relational
-      # state must be clean on both sides, and deleting one of two datasets
+      # state must be clean on both sides, deleting one of two datasets
       # that share an entity must keep the other's (SDK-1166, the regression
-      # guard for SDK-948). Credentials go per invocation (see the note on
+      # guard for SDK-948), and deleting one document must take the entity
+      # types only it declared and keep the others' (SDK-1694 O6). Credentials go per invocation (see the note on
       # e2e-tests in docker-compose.yml). HARNESS_FAIL_ON_SKIP=1 turns any
       # skip into a failure (conftest.py) whose message carries the skip
       # reason, so a step that checked nothing cannot go green. `!cancelled()`
@@ -403,5 +404,6 @@ jobs:
             pytest -vs -rs \
             /harness/test_delete_parity.py \
             /harness/test_delete_shared_entity_parity.py \
+            /harness/test_delete_type_parity.py \
             --tb=short
 

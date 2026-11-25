@@ -267,6 +267,21 @@ def run_python_cli(
         # user's delete does.
         if delete_all:
             body = "    await cognee.datasets.delete_all()\n"
+        elif dataset_name and data_id:
+            # One data item of a dataset: `datasets.delete_data`, what
+            # Python's `cognee-cli delete --data-id` runs (SDK-1694 O6 cases).
+            body = (
+                "    from uuid import UUID\n"
+                "    from cognee.modules.data.methods import get_datasets_by_name\n"
+                "    from cognee.modules.users.methods import get_default_user\n"
+                "    user = await get_default_user()\n"
+                f"    found = await get_datasets_by_name({dataset_name!r}, user_id=user.id)\n"
+                "    if not found:\n"
+                f"        raise SystemExit('no dataset named {dataset_name}')\n"
+                "    await cognee.datasets.delete_data(\n"
+                f"        dataset_id=found[0].id, data_id=UUID({data_id!r}), user=user\n"
+                "    )\n"
+            )
         elif dataset_name:
             body = (
                 "    from cognee.modules.data.methods import get_datasets_by_name\n"
@@ -279,7 +294,8 @@ def run_python_cli(
             )
         else:
             raise ValueError(
-                "Python delete needs --all or --dataset-name, as Python's CLI does"
+                "Python delete needs --all or --dataset-name (with or without "
+                "--data-id), as Python's CLI does"
             )
         script = (
             f"import asyncio, cognee\n"
