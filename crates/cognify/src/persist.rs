@@ -26,9 +26,11 @@
 //! With [`PersistState::per_document`], an artifact a **later** group changes
 //! is written again rather than skipped:
 //!
-//! - an **entity** whose merged form changed — a new type, a new NodeSet
-//!   membership, or the first real extraction replacing an ontology
-//!   placeholder — gets its graph node rewritten, its vector point rewritten
+//! - an **entity** whose stored form changed — a new NodeSet membership, or
+//!   the first real extraction replacing an ontology placeholder (a later
+//!   document's extra type is not stored on the entity since SDK-1694 O6,
+//!   only as its `is_a` edge, so it changes nothing here) — gets its graph
+//!   node rewritten, its vector point rewritten
 //!   when the payload's inputs (name, NodeSets, importance weight) changed, and
 //!   the ownership rows earlier groups wrote for it rewritten, so every row's
 //!   `attributes` carry the entity as it is now. The point is rewritten with
@@ -636,6 +638,13 @@ pub(crate) async fn persist_group(
     // SDK-1694 O5a); the custom row keeps its own, as it did before.
     let custom_rows: HashSet<Uuid> = edges.iter().map(|row| row.id).collect();
     write_ledger(context.db, &mut tracker, nodes, edges).await?;
+    // The types whose graph node this group writes: an earlier group that
+    // declared one may have failed before its rows (SDK-1694 O6 review).
+    let first_written_types: HashSet<Uuid> = unique_entity_types(group.entities)
+        .iter()
+        .map(|entity_type| entity_type.base.id)
+        .filter(|id| tracker.new_node(&id.to_string()))
+        .collect();
     let (nodes, mut edges) = crate::tasks::provenance_rows(
         context.ledger,
         group.chunks,
@@ -646,6 +655,7 @@ pub(crate) async fn persist_group(
         &structural_edges,
         group.producers,
         context.run_chunk_documents,
+        &first_written_types,
     );
     edges.retain(|row| row.data_id.is_nil() || !custom_rows.contains(&row.id));
     let (node_rows, edge_rows) = write_ledger(context.db, &mut tracker, nodes, edges).await?;

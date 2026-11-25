@@ -142,12 +142,21 @@ async fn get_unique_edges_excludes_slugs_shared_with_other_data() {
     };
 
     let e_unique = mk_edge(data_a, slug_unique);
+    // Data B's row of another edge under the same slug — as every `is_a` row
+    // shares Python's `generate_edge_id("is_a")` — claims nothing of A's: an
+    // edge is its (source, target, relationship) triple (SDK-1694 O6).
+    let same_slug_other_edge = GraphEdge {
+        id: Uuid::new_v4(),
+        source_node_id: Uuid::new_v4(),
+        ..mk_edge(data_b, slug_unique)
+    };
     upsert_edges(
         &db,
         &[
             e_unique.clone(),
             mk_edge(data_a, slug_shared),
             mk_edge(data_b, slug_shared),
+            same_slug_other_edge,
         ],
     )
     .await
@@ -159,7 +168,7 @@ async fn get_unique_edges_excludes_slugs_shared_with_other_data() {
     assert_eq!(
         unique.len(),
         1,
-        "only the non-shared slug is unique to data_a"
+        "only the edge no other row names is unique to data_a"
     );
-    assert_eq!(unique[0].slug, slug_unique);
+    assert_eq!(unique[0].id, e_unique.id);
 }

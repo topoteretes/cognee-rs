@@ -413,6 +413,30 @@ async fn exclusivity_is_defeated_by_a_null_run_row() {
     );
 }
 
+/// Another run's row under the same slug but of another edge — every `is_a`
+/// row shares one slug — does not claim this run's edge: edge exclusivity is
+/// decided on the (source, target, relationship) triple (SDK-1694 O6).
+#[tokio::test]
+async fn a_same_slug_row_of_another_edge_does_not_claim() {
+    let f = Fixture::new().await;
+    let slug = Uuid::new_v4();
+    let ours = f.edge(f.dataset_d, f.data_a, Some(f.run_1), slug);
+    let theirs = GraphEdge {
+        destination_node_id: Uuid::new_v4(),
+        ..f.edge(f.dataset_d, f.data_b, Some(f.run_2), slug)
+    };
+    f.seed_edges(&[ours.clone(), theirs]).await;
+
+    let scope = RunScope::whole_run(f.run_1, f.dataset_d);
+    let unique: Vec<Uuid> = get_unique_edges_for_run(&f.db, &scope)
+        .await
+        .expect("e")
+        .into_iter()
+        .map(|row| row.id)
+        .collect();
+    assert_eq!(unique, vec![ours.id]);
+}
+
 #[tokio::test]
 async fn exclusivity_is_defeated_by_another_run() {
     let f = Fixture::new().await;

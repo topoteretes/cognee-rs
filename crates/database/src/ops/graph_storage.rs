@@ -766,10 +766,13 @@ pub async fn get_unique_nodes_for_data(
 /// is Python's `generate_edge_id` of its text alone, so every `is_a` row, and
 /// every `is_part_of` row, shares one slug: under slug identity a document's
 /// own `is_a` edge was never its own while any other document had one.
-/// Python's `get_data_related_edges` compares slugs and has the same blind
-/// spot (it also keeps one row per edge, its first writer's); Rust counts the
-/// edge's producers. For a semantic row the two identities agree: its slug is
-/// `triplet_slug` of the same three values.
+/// Fresh Python decides the same way: its default delete is the
+/// graph-provenance one (`provenance_delete_planner`), which keeps source refs
+/// per edge triple and deletes an edge when its last ref goes. Only Python's
+/// legacy ledger path (`get_data_related_edges`) compares slugs, over a
+/// ledger that keeps one row per edge, its first writer's. For a semantic row
+/// the two identities agree: its slug is `triplet_slug` of the same three
+/// values.
 #[instrument(
     name = "cognee.db.relational.graph_storage.get_unique_edges_for_data",
     level = "info",

@@ -34,19 +34,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the same `(source, target, relationship)` triple, in the data-scoped
     delete, the dataset delete and the run sweep. It used to be the slug,
     which every `is_a` row (and every `is_part_of` row) shares, so a
-    document's own `is_a` edge was never its own. An `is_a` edge whose last
-    declaring document goes is removed from the graph even when the entity
-    and the type both stay (`GraphDBTrait::delete_edge_triples`), and its
-    `EdgeType` point goes once no surviving row produces its text. Python
-    compares the slug and keeps both ends' edge; this is a deliberate
-    difference;
+    document's own `is_a` edge was never its own. An edge whose last
+    producing document goes — an `is_a` edge, or a semantic edge between
+    two entities other documents keep — is removed from the graph even when
+    both its endpoints stay (`GraphDBTrait::delete_edge_triples`), and its
+    `EdgeType` point goes once no surviving row produces its text, as
+    Python's graph-provenance delete (`provenance_delete_planner`) does with
+    its per-triple source refs. Only a per-document row (one whose id folds
+    its `data_id`) can say that: an edge only a Python-written or older Rust
+    row names (one row per edge, its first writer's) leaves the graph only
+    with an endpoint, and keeps its `EdgeType` point while it stays;
   - a document that reaches an entity, or an ontology edge whose endpoints
     it owns, only through an ontology lookup gets its own row, whether or
     not another document extracted it, so deleting the extractor keeps it;
   - the hard delete's sweep of degree-one EntityTypes keeps a type a
-    document's ledger row still claims (`DeleteDb::get_node_slugs_owned_by_data`,
-    with a default that claims nothing). A type only legacy nil rows claim
-    is swept as before.
+    document's ledger row still claims (new **required** method
+    `DeleteDb::get_node_slugs_owned_by_data`). A type only legacy nil rows
+    claim is swept as before.
 
   **Existing databases:** nil rows already written stay claims. A type or
   structural edge written before this change is not removed by a

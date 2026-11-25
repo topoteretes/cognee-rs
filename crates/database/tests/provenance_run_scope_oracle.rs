@@ -153,6 +153,32 @@ mod oracle {
         out
     }
 
+    /// The selected edge rows whose `(source, target, relationship)` triple
+    /// nothing outside the selection names: edge exclusivity since SDK-1694
+    /// O6, where a slug (Python's `generate_edge_id` of the text, shared by
+    /// every `is_a` row) says nothing about which edge a row stands for.
+    /// `triples[i]` is row `i`'s triple.
+    fn reference_exclusive_edges(
+        rows: &[Row],
+        triples: &[(Uuid, Uuid, String)],
+        scope: &Scope,
+    ) -> BTreeSet<Uuid> {
+        let mut out = BTreeSet::new();
+        for (candidate, triple) in rows.iter().zip(triples) {
+            if !is_selected(candidate, scope) {
+                continue;
+            }
+            let claimed_outside = rows
+                .iter()
+                .zip(triples)
+                .any(|(other, other_triple)| is_outside(other, scope) && other_triple == triple);
+            if !claimed_outside {
+                out.insert(candidate.id);
+            }
+        }
+        out
+    }
+
     /// The distinct files the selection touches — whose completion markers a sweep
     /// has to clear. No exclusivity: a file whose every artifact survives still had
     /// its work rolled back.
@@ -356,7 +382,17 @@ mod oracle {
             }
         }
 
+        /// The endpoints of an edge row of `slug`: one of three pairs, so two
+        /// slugs share a pair (rows of one edge under different slugs) and,
+        /// with the relationship drawn independently, one slug covers several
+        /// edges (the `is_a` slug every `is_a` row shares).
+        fn endpoints_of(&self, slug: Uuid) -> (Uuid, Uuid) {
+            let i = self.slugs.iter().position(|s| *s == slug).unwrap_or(0) % 3;
+            (self.slugs[i], self.slugs[(i + 1) % self.slugs.len()])
+        }
+
         fn edge_of(&self, row: &Row, name: &str) -> GraphEdge {
+            let (source, target) = self.endpoints_of(row.slug);
             GraphEdge {
                 id: row.id,
                 slug: row.slug,
@@ -364,8 +400,8 @@ mod oracle {
                 data_id: row.data,
                 dataset_id: row.dataset,
                 pipeline_run_id: row.run,
-                source_node_id: row.slug,
-                destination_node_id: row.slug,
+                source_node_id: source,
+                destination_node_id: target,
                 relationship_name: name.to_string(),
                 label: None,
                 attributes: None,
@@ -412,6 +448,8 @@ mod oracle {
         let mut cov_other_dataset_claimed = 0usize;
         let mut cov_empty_narrowing = 0usize;
         let mut cov_full_narrowing = 0usize;
+        // Edge exclusivity by triple differed from what the slug would say.
+        let mut cov_triple_not_slug = 0usize;
 
         for case in 0..CASES {
             world.clear().await;
@@ -428,17 +466,9 @@ mod oracle {
                 let r = world.random_row(&mut rng, &edge_rows);
                 edge_rows.push(r);
             }
-            // An edge's name is a function of its slug, and so are its
-            // endpoints (`edge_of`), as cognify derives a slug from the
-            // triple: edge exclusivity is decided on the triple since
-            // SDK-1694 O6, and this keeps the slug reference exact. The draw
-            // is kept so the case sequence stays the same.
-            let edge_names: Vec<String> = edge_rows
-                .iter()
-                .map(|row| {
-                    let _ = rng.pick(&[0usize, 1, 2]);
-                    world.rel_names[usize::from(row.slug.as_bytes()[15]) % 3].clone()
-                })
+            let edge_names: Vec<String> = (0..n_edges)
+                .map(|_| rng.pick(&[0usize, 1, 2]))
+                .map(|i| world.rel_names[i].clone())
                 .collect();
 
             let nodes: Vec<GraphNode> = node_rows.iter().map(|r| world.node_of(r)).collect();
@@ -527,9 +557,21 @@ mod oracle {
                     .await
                     .expect("unique edges"),
             );
+            let edge_triples: Vec<(Uuid, Uuid, String)> = edge_rows
+                .iter()
+                .zip(&edge_names)
+                .map(|(row, name)| {
+                    let (source, target) = world.endpoints_of(row.slug);
+                    (source, target, name.clone())
+                })
+                .collect();
+            let by_triple = reference_exclusive_edges(&edge_rows, &edge_triples, &scope);
+            if by_triple != reference_exclusive(&edge_rows, &scope) {
+                cov_triple_not_slug += 1;
+            }
             assert_eq!(
                 sql_unique_edges,
-                reference_exclusive(&edge_rows, &scope),
+                by_triple,
                 "edge exclusivity diverged\n{}",
                 ctx()
             );
@@ -636,6 +678,10 @@ mod oracle {
         assert!(
             cov_other_dataset_claimed > 100,
             "cross-dataset claimants too rare: {cov_other_dataset_claimed}"
+        );
+        assert!(
+            cov_triple_not_slug > 50,
+            "edges whose triple and slug disagree too rare: {cov_triple_not_slug}"
         );
         assert!(
             cov_empty_narrowing > 100,

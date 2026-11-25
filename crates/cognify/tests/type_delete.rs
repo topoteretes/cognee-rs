@@ -36,12 +36,23 @@ use sea_orm::ConnectionTrait;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-/// Answers each chunk from its text: one node per `Name:Type` token, and no
-/// edge, so an entity's only edges are its chunk's `contains` and its `is_a`
-/// edges.
+/// Answers each chunk from its text: one node per `Name:Type` token (type
+/// `Untyped` is the empty type), and one edge per `Source~relationship~Target`
+/// token, so an entity's only edges are its chunk's `contains`, its `is_a`
+/// edges and the edges named that way.
 struct TypesLlm;
 
 fn graph_from(text: &str) -> Value {
+    let edges: Vec<Value> = text
+        .split_whitespace()
+        .filter_map(|token| {
+            let mut parts = token.split('~');
+            let (source, relationship, target) = (parts.next()?, parts.next()?, parts.next()?);
+            Some(json!({"source_node_id": source.to_lowercase(),
+                        "target_node_id": target.to_lowercase(),
+                        "relationship_name": relationship}))
+        })
+        .collect();
     let nodes: Vec<Value> = text
         .split_whitespace()
         .filter_map(|token| token.split_once(':'))
@@ -52,11 +63,12 @@ fn graph_from(text: &str) -> Value {
             })
         })
         .map(|(name, kind)| {
+            let kind = if kind == "Untyped" { "" } else { kind };
             json!({"id": name.to_lowercase(), "name": name, "type": kind,
                    "description": format!("{name} as a {kind}.")})
         })
         .collect();
-    json!({"nodes": nodes, "edges": []})
+    json!({"nodes": nodes, "edges": edges})
 }
 
 #[async_trait::async_trait]
@@ -400,4 +412,248 @@ async fn a_legacy_ledger_keeps_its_types_as_claimed() {
             "B's chunk's structural rows went: {left:?}"
         );
     }
+}
+
+/// Two documents, each cognified in a run of its own: A first, then B.
+async fn cognified_in_two_runs(first: &str, second: &str) -> (Harness, Uuid, Uuid) {
+    let mut harness = Harness::new().await;
+    let a = harness.add_file(first).await;
+    let b = harness.add_file(second).await;
+    for data in [a, b] {
+        harness
+            .run_over(&extraction_config(), &[data], Arc::new(TypesLlm))
+            .await
+            .expect("cognify succeeds");
+    }
+    (harness, a, b)
+}
+
+/// The graph's edges named `relationship`, by endpoints.
+async fn edges_named(harness: &Harness, relationship: &str) -> BTreeSet<(Uuid, Uuid)> {
+    let (_, edges) = harness.graph_db.get_graph_data().await.unwrap();
+    edges
+        .into_iter()
+        .filter(|(_, _, name, _)| name == relationship)
+        .map(|(source, target, _, _)| {
+            (
+                Uuid::parse_str(&source).unwrap(),
+                Uuid::parse_str(&target).unwrap(),
+            )
+        })
+        .collect()
+}
+
+/// Review finding 1: a ledger Python wrote keeps one row per edge, its first
+/// writer's (`upsert_edges` keys it without the `data_id`). Docs A and B both
+/// declare Apple a company, but only A's row is left. Deleting A must not
+/// take the edge B still declares, nor its `EdgeType` point: such a row says
+/// nothing about who else holds the edge, so only a deleted endpoint removes
+/// it.
+#[tokio::test]
+async fn a_first_writer_ledger_row_never_removes_an_edge_directly() {
+    let (harness, a, _b) = cognified("Apple:Company", "Apple:Company Pear:Fruit").await;
+    let (apple, company) = (Entity::id_for("Apple"), type_id("company"));
+    let rows: Vec<GraphEdge> = harness
+        .ledger_edges()
+        .await
+        .into_iter()
+        .filter(|row| {
+            row.source_node_id == apple
+                && row.destination_node_id == company
+                && row.relationship_name == "is_a"
+        })
+        .collect();
+    assert_eq!(rows.len(), 2, "both documents' rows: {rows:?}");
+    for row in &rows {
+        harness
+            .db
+            .execute_unprepared(&format!(
+                "DELETE FROM edges WHERE id = '{}'",
+                row.id.simple()
+            ))
+            .await
+            .unwrap();
+    }
+    // Python's row: A's, keyed on the edge alone and labelled with its name.
+    let first = rows.iter().find(|row| row.data_id == a).unwrap().clone();
+    let python_id = Uuid::new_v5(
+        &Uuid::NAMESPACE_OID,
+        format!(
+            "None{}{}{}is_a{}",
+            first.user_id, first.dataset_id, apple, company
+        )
+        .as_bytes(),
+    );
+    upsert_edges(
+        &harness.db,
+        &[GraphEdge {
+            id: python_id,
+            label: Some("is_a".to_string()),
+            ..first
+        }],
+    )
+    .await
+    .unwrap();
+
+    delete(&harness, a, DeleteMode::Soft).await;
+
+    assert!(
+        is_a_edges(&harness).await.contains(&(apple, company)),
+        "B's Apple keeps its company type"
+    );
+    assert!(has_edge_type_point(&harness, "apple is a company."));
+}
+
+/// Review finding 2: a run sweep removes the `is_a` edge its run's document
+/// alone declared, with its `EdgeType` point, although Apple and `fruit` stay
+/// (doc A, an earlier run, keeps both). Before, the point went and the edge
+/// stayed, with no row.
+#[tokio::test]
+async fn a_run_sweep_removes_the_is_a_edge_its_document_alone_declared() {
+    use cognee_delete::{RunSweeper, SweepScope};
+    let (harness, _a, b) = cognified_in_two_runs("Apple:Company Pear:Fruit", "Apple:Fruit").await;
+    let (apple, pear, fruit) = (
+        Entity::id_for("Apple"),
+        Entity::id_for("Pear"),
+        type_id("fruit"),
+    );
+    assert!(is_a_edges(&harness).await.contains(&(apple, fruit)));
+    let run_b = harness
+        .ledger_edges()
+        .await
+        .into_iter()
+        .find(|row| row.data_id == b)
+        .and_then(|row| row.pipeline_run_id)
+        .unwrap();
+
+    RunSweeper::new(
+        harness.db.clone(),
+        Arc::clone(&harness.graph_db) as Arc<dyn GraphDBTrait>,
+        Arc::clone(&harness.vector_db) as Arc<dyn VectorDB>,
+    )
+    .sweep(&SweepScope::whole_run(run_b, harness.dataset_id))
+    .await
+    .unwrap();
+
+    assert!(has_node(&harness, apple).await && has_node(&harness, fruit).await);
+    assert_eq!(
+        is_a_edges(&harness).await,
+        BTreeSet::from([(apple, type_id("company")), (pear, fruit)])
+    );
+    assert!(!has_edge_type_point(&harness, "apple is a fruit."));
+    assert!(has_edge_type_point(&harness, "pear is a fruit."));
+}
+
+/// Review finding 3: a semantic edge goes with the last document that
+/// produced it, even when both its entities stay — as Python's
+/// graph-provenance delete removes every edge whose last source ref goes —
+/// in a data delete and in a run sweep. Doc B names Alice and Bob too, but
+/// only doc A says Alice knows Bob.
+#[tokio::test]
+async fn a_semantic_edge_goes_with_its_last_producing_document() {
+    use cognee_delete::{RunSweeper, SweepScope};
+    let (alice, bob) = (Entity::id_for("Alice"), Entity::id_for("Bob"));
+    for sweep in [false, true] {
+        let (harness, _b, a) = cognified_in_two_runs(
+            "Alice:Person Bob:Person",
+            "Alice:Person Bob:Person Alice~knows~Bob",
+        )
+        .await;
+        assert_eq!(
+            edges_named(&harness, "knows").await,
+            BTreeSet::from([(alice, bob)])
+        );
+        if sweep {
+            let run_a = harness
+                .ledger_edges()
+                .await
+                .into_iter()
+                .find(|row| row.data_id == a)
+                .and_then(|row| row.pipeline_run_id)
+                .unwrap();
+            RunSweeper::new(
+                harness.db.clone(),
+                Arc::clone(&harness.graph_db) as Arc<dyn GraphDBTrait>,
+                Arc::clone(&harness.vector_db) as Arc<dyn VectorDB>,
+            )
+            .sweep(&SweepScope::whole_run(run_a, harness.dataset_id))
+            .await
+            .unwrap();
+        } else {
+            delete(&harness, a, DeleteMode::Soft).await;
+        }
+        assert!(has_node(&harness, alice).await && has_node(&harness, bob).await);
+        assert!(
+            edges_named(&harness, "knows").await.is_empty(),
+            "sweep {sweep}: the edge only A produced goes"
+        );
+        assert!(
+            harness
+                .ledger_edges()
+                .await
+                .iter()
+                .all(|row| row.label.as_deref() != Some("knows")),
+            "and so do its rows"
+        );
+    }
+}
+
+/// Review finding 4: a document whose only entity has no type of its own
+/// (Apple, typed by doc A) does not claim A's type. Graph building records
+/// its producer set, so the set's not naming `company` means another
+/// document declared it — whatever else the set holds. Before, a set with no
+/// type in it counted as hand-built, and doc B got rows for `company` and
+/// `apple is_a company`, which kept both after A's delete.
+#[tokio::test]
+async fn a_typeless_document_does_not_claim_another_documents_type() {
+    let (harness, a, b) = cognified("Apple:Company", "Apple:Untyped").await;
+    let (apple, company) = (Entity::id_for("Apple"), type_id("company"));
+    assert_eq!(node_owners(&harness, company).await, BTreeSet::from([a]));
+    assert_eq!(
+        is_a_owners(&harness, apple, company).await,
+        BTreeSet::from([a])
+    );
+    assert!(node_owners(&harness, apple).await.contains(&b));
+
+    delete(&harness, a, DeleteMode::Soft).await;
+
+    assert!(has_node(&harness, apple).await, "B keeps Apple");
+    assert!(!has_node(&harness, company).await, "company goes with A");
+    assert!(is_a_edges(&harness).await.is_empty());
+}
+
+/// Review finding 5: doc A's save fails after the run merged its graph, so
+/// doc B's group carries A's `company` type to the graph store. Under
+/// `failed_items` A is swept; no graph node may be left that no ledger row
+/// names (before O6 the type's nil row named it), so `company` either goes or
+/// is held by a row of B, which wrote it, and goes with B.
+#[tokio::test]
+async fn a_type_a_failed_document_declared_never_outlives_every_row() {
+    use cognee_cognify::RollbackScope;
+    let mut harness = Harness::new().await;
+    let a = harness.add_file("Apple:Company").await;
+    let b = harness.add_file("Apple:Fruit").await;
+    harness
+        .vector_db
+        .set_index_error_for_point(a, "the vector store is down for document A");
+    let config = extraction_config().with_rollback_scope(RollbackScope::FailedItems);
+    let outcome = harness.run_over(&config, &[a, b], Arc::new(TypesLlm)).await;
+    assert!(outcome.is_err(), "A's failure errors the run");
+    let company = type_id("company");
+    let owners = node_owners(&harness, company).await;
+    println!(
+        "company in graph {} owners {owners:?} (a={a}, b={b})",
+        has_node(&harness, company).await
+    );
+    assert!(
+        !has_node(&harness, company).await || owners.iter().any(|data| !data.is_nil()),
+        "company is in the graph with no row: {owners:?}"
+    );
+
+    delete(&harness, b, DeleteMode::Soft).await;
+    let (nodes, _) = harness.graph_db.get_graph_data().await.unwrap();
+    assert!(
+        nodes.is_empty(),
+        "nothing outlives both documents: {nodes:?}"
+    );
 }

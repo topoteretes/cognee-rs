@@ -5287,8 +5287,8 @@ fn timestamp_provenance_rows(
 ///
 /// That is an entity no chunk of the group extracted or looked up (its rows
 /// are the fallback ones [`entity_provenance_rows`] gave it: its `chunk_id`
-/// stamp's document, else nil), or any entity when the producer set records
-/// no type at all (a hand-built `SummarizedData`). Every other entity's types
+/// stamp's document, else nil), or any entity when graph building did not
+/// record the producer set (a hand-built `SummarizedData`). Every other entity's types
 /// and `is_a` edges have producers of their own, and only those count: a
 /// group that saves one document of a run holds the run's merged copy of every
 /// entity it touches, with the types other documents declared too.
@@ -5298,10 +5298,23 @@ fn unproduced_entity_owners(
 ) -> HashMap<Uuid, Vec<Uuid>> {
     let mut owners: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
     for row in entity_rows.iter().filter(|row| {
-        !producers.records_types()
+        !producers.is_recorded()
             || (producers.entity_chunks(row.slug).is_empty()
                 && producers.ontology_entity_chunks(row.slug).is_empty())
     }) {
+        let data_ids = owners.entry(row.slug).or_default();
+        if !data_ids.contains(&row.data_id) {
+            data_ids.push(row.data_id);
+        }
+    }
+    owners
+}
+
+/// Each entity's documents in this group: the `data_id`s of its ownership
+/// rows, nil rows left out.
+fn group_entity_owners(entity_rows: &[cognee_database::GraphNode]) -> HashMap<Uuid, Vec<Uuid>> {
+    let mut owners: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+    for row in entity_rows.iter().filter(|row| !row.data_id.is_nil()) {
         let data_ids = owners.entry(row.slug).or_default();
         if !data_ids.contains(&row.data_id) {
             data_ids.push(row.data_id);
@@ -5321,14 +5334,22 @@ fn unproduced_entity_owners(
 /// entity's fallback owners instead ([`unproduced_entity_owners`]), the nil
 /// `data_id` among them. A type no document of the group declared, and no
 /// such entity carries, gets no row here: another group's document declared
-/// it, and that group's rows hold it.
+/// it, and that group's rows hold it — unless this group is the one that
+/// writes the type's graph node (`first_written`) and its producer set names
+/// the type nowhere: its declaring document's save failed before its rows
+/// (SDK-1694 O6 review), and the run's merged entity carried the type into
+/// this group. The type then goes to the
+/// documents of the group's entities that carry it, so no graph node is left
+/// without a ledger row (before O6 its nil row was that row).
 fn entity_type_owners(
     entities: &[GraphNodePair],
     entity_rows: &[cognee_database::GraphNode],
     producers: &ArtifactProducers,
     chunk_data_map: &HashMap<Uuid, Uuid>,
+    first_written: &HashSet<Uuid>,
 ) -> Vec<(Uuid, Vec<Uuid>)> {
     let unproduced = unproduced_entity_owners(entity_rows, producers);
+    let group_owners = group_entity_owners(entity_rows);
     let mut order: Vec<Uuid> = Vec::new();
     let mut typed: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
     for pair in entities {
@@ -5347,6 +5368,21 @@ fn entity_type_owners(
             if data_ids.is_empty() {
                 for entity_id in typed.get(&type_id).into_iter().flatten() {
                     for data_id in unproduced.get(entity_id).into_iter().flatten() {
+                        if !data_ids.contains(data_id) {
+                            data_ids.push(*data_id);
+                        }
+                    }
+                }
+            }
+            // Only a type the producer set names nowhere: one it names under
+            // another group's chunk (a whole run split into groups) is that
+            // group's.
+            if data_ids.is_empty()
+                && first_written.contains(&type_id)
+                && producers.type_chunks(type_id).is_empty()
+            {
+                for entity_id in typed.get(&type_id).into_iter().flatten() {
+                    for data_id in group_owners.get(entity_id).into_iter().flatten() {
                         if !data_ids.contains(data_id) {
                             data_ids.push(*data_id);
                         }
@@ -5775,7 +5811,13 @@ pub(crate) fn extraction_ownership_rows(
 
     let mut prov_nodes =
         entity_provenance_rows(id, entities, &chunk_data_map, stamp_documents, producers);
-    let type_owners = entity_type_owners(entities, &prov_nodes, producers, &chunk_data_map);
+    let type_owners = entity_type_owners(
+        entities,
+        &prov_nodes,
+        producers,
+        &chunk_data_map,
+        &HashSet::new(),
+    );
     let endpoints = EndpointOwners::new(&prov_nodes, &type_owners);
     prov_nodes.extend(timestamp_provenance_rows(
         id,
@@ -5830,6 +5872,7 @@ async fn upsert_provenance(
         structural_edges,
         producers,
         None,
+        &HashSet::new(),
     );
     // Write the node and edge provenance batches atomically: a failure partway
     // through rolls the whole group back (see `upsert_provenance_graph`).
@@ -5867,6 +5910,9 @@ pub(crate) fn provenance_rows(
     producers: &ArtifactProducers,
     // See `extraction_ownership_rows`.
     run_chunk_documents: Option<&HashMap<Uuid, Uuid>>,
+    // The EntityTypes whose graph node this group writes first (see
+    // `entity_type_owners`); empty outside a per-document writer.
+    first_written_types: &HashSet<Uuid>,
 ) -> (
     Vec<cognee_database::GraphNode>,
     Vec<cognee_database::GraphEdge>,
@@ -5892,10 +5938,19 @@ pub(crate) fn provenance_rows(
     // (idempotent), as before O4a.
     let mut prov_nodes: Vec<GraphNode> =
         entity_provenance_rows(id, entities, &chunk_data_map, stamp_documents, producers);
-    let type_owners = entity_type_owners(entities, &prov_nodes, producers, &chunk_data_map);
+    let type_owners = entity_type_owners(
+        entities,
+        &prov_nodes,
+        producers,
+        &chunk_data_map,
+        first_written_types,
+    );
     let endpoints = EndpointOwners::new(&prov_nodes, &type_owners);
-    // The owners of an entity no producer set names, for its `is_a` edges.
+    // The owners of an entity no producer set names, for its `is_a` edges,
+    // and of every entity of the group, for an `is_a` edge to a type the
+    // group writes first.
     let unproduced = unproduced_entity_owners(&prov_nodes, producers);
+    let group_owners = group_entity_owners(&prov_nodes);
 
     // DocumentChunks
     for chunk in chunks {
@@ -6068,6 +6123,12 @@ pub(crate) fn provenance_rows(
             ))
             .filter(|data_ids| !data_ids.is_empty())
             .or_else(|| unproduced.get(&source).cloned())
+            .or_else(|| {
+                (first_written_types.contains(&target)
+                    && producers.entity_type_chunks(source, target).is_empty())
+                .then(|| group_owners.get(&source).cloned())
+                .flatten()
+            })
             .unwrap_or_default(),
             "is_part_of" | "contains" => chunk_data_map.get(&source).copied().into_iter().collect(),
             "made_from" => summary_documents
@@ -6124,12 +6185,12 @@ pub(crate) fn provenance_rows(
         // document is known to have produced still gets one.
         let relationship = label.as_deref().unwrap_or(&row_text);
         let mut data_ids = structural_edge_data_ids(source_id, target_id, relationship);
-        if data_ids.is_empty() && (relationship != "is_a" || !producers.records_types()) {
+        if data_ids.is_empty() && (relationship != "is_a" || !producers.is_recorded()) {
             // A structural edge no document is known to have produced: one of
             // none of the kinds above, or an `is_a` edge of a hand-built input
             // whose entity is not among its entities. An `is_a` edge without
-            // a producer in a group whose producers record types was declared
-            // by another group's document, whose rows hold it.
+            // a producer in a group graph building recorded was declared by
+            // another group's document, whose rows hold it.
             data_ids.push(Uuid::nil());
         }
         let slug = edge_slug(&row_text);

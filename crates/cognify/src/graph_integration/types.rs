@@ -262,6 +262,12 @@ pub struct ArtifactProducers {
 
     /// Entities first seen in the run through the ontology alone.
     ontology_first: HashSet<Uuid>,
+
+    /// Whether graph building recorded this set (`expand_unit`), as opposed to
+    /// a caller handing over a `SummarizedData` it built itself. Only a
+    /// recorded set says that a type it does not name was declared by some
+    /// other document (SDK-1694 O6 review).
+    recorded: bool,
 }
 
 /// Append `chunk_id` to `chunks` unless it is already there.
@@ -358,6 +364,7 @@ impl ArtifactProducers {
             }
         }
         self.ontology_first.extend(other.ontology_first);
+        self.recorded |= other.recorded;
     }
 
     /// Chunks that declared `entity_id` with `type_id`, or an empty slice.
@@ -367,11 +374,18 @@ impl ArtifactProducers {
             .map_or(&[], Vec::as_slice)
     }
 
-    /// Whether any type producer was recorded: every unit expansion records
-    /// the types of the entities it owns, so only a hand-built producer set
-    /// (or one with no typed entity) records none.
-    pub fn records_types(&self) -> bool {
-        !self.types.is_empty()
+    /// Mark the set as recorded by graph building (`expand_unit`).
+    pub fn mark_recorded(&mut self) {
+        self.recorded = true;
+    }
+
+    /// Whether graph building recorded this set ([`Self::mark_recorded`],
+    /// carried through [`Self::merge`]). A recorded set names every type its
+    /// units' entities were declared with, so a type it does not name came
+    /// from another document. A hand-built set (`ArtifactProducers::default`)
+    /// is not recorded, whatever it holds.
+    pub fn is_recorded(&self) -> bool {
+        self.recorded
     }
 
     /// Chunks that declared some entity with `type_id`, or an empty slice.

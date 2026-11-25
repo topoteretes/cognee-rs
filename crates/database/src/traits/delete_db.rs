@@ -230,17 +230,15 @@ pub trait DeleteDb: Send + Sync {
     /// otherwise: what the hard delete's degree-one `EntityType` sweep keeps
     /// (SDK-1694 O6).
     ///
-    /// The default claims nothing, which is the sweep as it was before: an
-    /// implementation without a provenance ledger has no document to keep a
-    /// type for.
+    /// Required, with no default: an implementation that answered "nothing"
+    /// would let a hard delete sweep a type a surviving document still
+    /// declares. One without a provenance ledger has no document to keep a
+    /// type for and may return an empty list on purpose.
     async fn get_node_slugs_owned_by_data(
         &self,
         slugs: &[Uuid],
         dataset_id: Option<Uuid>,
-    ) -> Result<Vec<Uuid>, DatabaseError> {
-        let _ = (slugs, dataset_id);
-        Ok(Vec::new())
-    }
+    ) -> Result<Vec<Uuid>, DatabaseError>;
 
     /// The subset of `candidates` (`EdgeType` retrieval texts) still claimed
     /// by edge rows that survive the deletion of `(data_id, dataset_id)`.
