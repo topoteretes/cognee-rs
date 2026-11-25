@@ -491,6 +491,48 @@ An extracted node with an empty type gets no `EntityType` and no `is_a` edge.
 for Python's multi-round cascade (see
 [configuration](configuration.md#chunking--tokenizer)).
 
+#### One document at a time (SDK-1694)
+
+cognify processes each document the way Python processes each data item, and
+saves it on its own:
+
+- **The graph is built per block.** A block is one document's chunks, or
+  `chunks_per_batch` of them for a longer document (Python's unit). Each block
+  is expanded with fresh maps, so within a block the first type the model
+  gives an entity wins, and an edge endpoint matches only a node of the same
+  block — never another document's. `cognify.cross_chunk_endpoints=false`
+  narrows that to the edge's own chunk, by node id, as Python does.
+- **An entity keeps every document's type.** The blocks' types are combined,
+  one `is_a` edge each, so an entity two documents type differently has two
+  types and, without an ontology, never more types than documents. Its
+  description, importance weight and metadata come from the first block in
+  input order (Python's last writer, which depends on timing, wins there);
+  NodeSet memberships are combined.
+- **Relationship labels are normalised** as Python's `generate_edge_name` does
+  (lower case, spaces to `_`, apostrophes dropped), so `Born In` and `born_in`
+  are one edge. An edge already in the graph — matched on its final ids and
+  label — is claimed by the new document (a ledger row, no write). Edges
+  stored under a raw label by an older build stay as they are, and
+  re-cognifying their data adds a normalised copy beside them.
+- **Each document is saved once all its results are in.** Extraction and
+  summary calls of every chunk go through one stream each, at most
+  `max_parallel_extractions` in flight and no wait at block boundaries. A
+  per-document assembler builds a finished document's graph on the CPU pool,
+  and one writer saves documents in input order — ledger rows, then nodes,
+  then edges, then vectors and edge evidence. An entity a later document
+  changes (a new type, a new NodeSet) is rewritten. At most
+  `cognify.max_unsaved_documents` documents (default 32) are dispatched but
+  not yet saved, which bounds the LLM results held in memory.
+- **Each document is completed on its own.** With `incremental_loading` (the
+  default), the writer marks a document complete as soon as it is saved, and
+  a failed run keeps what it completed — the default rollback scope is
+  `failed_items` (see [When a cognify run fails](#when-a-cognify-run-fails)).
+- **The ledger names the documents.** Every entity, entity type, `is_a`,
+  `contains`, `is_part_of` and `made_from` edge, and every ontology edge a
+  document's lookup brought in, gets an ownership row per producing document,
+  so [deleting a document](#forget) removes the types and edges only it
+  produced.
+
 #### When a cognify run fails
 
 A chunk or a file the pipeline cannot process is not a bare error: the chunking,
@@ -509,7 +551,8 @@ full matrix is in
 states are:
 
 - **`WholeRun` (the default with `incremental_loading` off).** The run stops
-  at the first failed *batch* — not the first failed file, see below —
+  dispatching at the first failure — the calls in flight still finish, see
+  below —
   everything it created is removed, the run is recorded `ERRORED` and the call
   returns `Err`. The store converges to its pre-run state — what earlier runs
   completed is untouched, because the sweep selects only rows naming *this*
