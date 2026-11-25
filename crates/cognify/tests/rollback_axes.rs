@@ -159,14 +159,16 @@ async fn a_tolerant_run_sweeps_only_the_failed_file_and_marks_the_rest() {
 }
 
 /// A `FailedItems` run at the **default** 5 % threshold escalates: one bad file
-/// out of three is 33 % of the chunks, so the run errors and sweeps everything.
+/// out of three is 33 % of the chunks, so the run errors — but since
+/// SDK-1694 O5b it keeps the files it completed, marked, as Python's per-item
+/// rollback keeps the items its failed run stamped, and sweeps only the rest.
 /// The escalation, end to end.
 #[tokio::test]
-async fn an_escalating_tolerant_run_sweeps_everything() {
+async fn an_escalating_tolerant_run_errors_and_keeps_what_it_completed() {
     let mut harness = Harness::new().await;
-    let good = harness.add_file("Alice works at Acme.").await;
-    harness.add_file("Bob FAILMARKER breaks here.").await;
-    harness.add_file("Carol also works at Acme.").await;
+    let first = harness.add_file("Alice works at Acme.").await;
+    let bad = harness.add_file("Bob FAILMARKER breaks here.").await;
+    let last = harness.add_file("Carol also works at Acme.").await;
 
     let config = extraction_config()
         .with_failure_stop(cognee_cognify::FailureStop::RunToEnd)
@@ -177,12 +179,22 @@ async fn an_escalating_tolerant_run_sweeps_everything() {
         matches!(result, Err(CognifyError::RunFailed { .. })),
         "over the ratio, a FailedItems run errors — and an errored run returns Err"
     );
+    let nodes = harness.graph_node_ids().await;
     assert!(
-        harness.graph_node_ids().await.is_empty(),
-        "…and sweeps as thoroughly as a WholeRun failure would"
+        nodes.contains(&first.to_string()) && nodes.contains(&last.to_string()),
+        "the completed files' Document nodes stay: {nodes:?}"
     );
-    assert!(harness.ledger_nodes().await.is_empty());
-    assert!(!harness.is_marked(good).await);
+    assert!(!nodes.contains(&bad.to_string()), "the failed file's go");
+    let owners: std::collections::BTreeSet<_> = harness
+        .ledger_nodes()
+        .await
+        .into_iter()
+        .map(|row| row.data_id)
+        .collect();
+    assert!(owners.contains(&first) && owners.contains(&last));
+    assert!(!owners.contains(&bad));
+    assert!(harness.is_marked(first).await && harness.is_marked(last).await);
+    assert!(!harness.is_marked(bad).await);
     assert_eq!(harness.latest_status().await, PipelineRunStatus::Errored);
 }
 

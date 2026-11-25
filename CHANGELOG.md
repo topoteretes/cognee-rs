@@ -18,6 +18,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **A `failed_items` cognify run completes each document as it saves it, and
+  a failed run keeps what it completed (SDK-1694, stage O5b).** Python stamps
+  a data item complete once its own tasks ran, and its rollback keeps the
+  items its failed run stamped (`cognify/rollback.py` `_kept_data_ids`). Under
+  `RollbackScope::FailedItems` Rust now does the same:
+  - The document stage's writer **marks each document complete right after
+    saving it** (with `incremental_loading`); a code item is marked as soon as
+    its graph is loaded; a DLT row only after the post-run step wrote its
+    foreign-key edges. A document whose save failed or was cut off mid-save is
+    not completed.
+  - **A `failed_items` run that fails** — over the chunk failure ratio, with no
+    survivor, a failed post-run step, a cancellation — **still returns `Err`,
+    but keeps the documents it completed**, markers and all, and sweeps only
+    the rest. It used to escalate to a whole-run sweep that deleted the
+    completed documents and their markers too; select `whole_run` for that end
+    state.
+  - **A failed save of one document fails only that document** under
+    `failed_items` (new `FailureStage::Persistence`, not counted in the chunk
+    ratio): it is swept, the run goes on (under `FailFast` it stops
+    dispatching), and the run can complete with the failure reported. Under
+    `whole_run` and `nothing` a failed save still fails the run; the writer
+    now returns that error before finishing its bulk-load scope.
+  - **An item-scoped sweep now removes the run's nil-`data_id` row of an
+    artifact** (EntityType, structural edge, ontology-first entity) when every
+    document row beside it is swept — a type only the swept documents
+    declared goes with them. Edges are matched on (source, target,
+    relationship), not the slug every `is_a` row shares.
+  - The kept documents' **edge evidence is detached from the errored run**
+    (Python `keep_completed_items_evidence`), so `include_references` still
+    cites it.
+  - `nothing`: after a stop the documents saved before it keep their
+    artifacts without a marker; complete documents behind the stop are
+    discarded (unchanged, now documented and tested).
+
+  **API changes:** `CognifyConfig` gains `completion` (an opaque
+  `CompletionHandle` that `cognify()` fills; callers leave it `None`);
+  `FailureStage` gains `Persistence` (`Display`: `persistence`);
+  `ProvenanceDb` gains `keep_completed_items_evidence`;
+  `MockVectorDB::set_index_error_for_point` (testing).
 - **cognify saves each document as soon as it is complete, from one ordered
   writer (SDK-1694, stage O4b).** Extraction, summarization and
   `add_data_points` are now **one streaming pipeline stage**,

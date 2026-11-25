@@ -23,9 +23,10 @@
 //!   run's chunk text, its merged graph ([`RunGraph`]), the edge-status map
 //!   and the `CognifyResult` still grow with the run.
 //! - **Stop.** Extraction, summaries and the writer share one [`StopFlag`].
-//!   Under `FailFast` a failed call stops both streams; a failed save stops
-//!   everything and fails the stage, and dropping the stage aborts the calls
-//!   in flight.
+//!   Under `FailFast` a failed call stops both streams. A failed save stops
+//!   everything and fails the stage — except under `FailedItems`, where it
+//!   fails its document and stops dispatch only under `FailFast`. Dropping
+//!   the stage aborts the calls in flight.
 //! - **Assembler.** It counts each document's outstanding results. Once the
 //!   last one is in, it builds the document's graph on the CPU pool (the
 //!   expansion of its blocks, with fresh maps) and hands it to the writer, in
@@ -38,10 +39,17 @@
 //!   one per-document [`PersistState`] (rewrite on change), inside one
 //!   bulk-load scope.
 //!
-//! Completion markers and the rollback decision still happen once, at the end
-//! of the run, and a failed save still fails the run (SDK-1694 O5b moves them
-//! per document). DLT foreign-key edges need every document of the run, so
-//! they stay in the post-run DLT step.
+//! - **Completion (SDK-1694 O5b).** Under `FailedItems` the writer completes
+//!   each document right after its save ([`CognifyConfig::completion`]): with
+//!   `incremental_loading` it is marked complete there and then, as Python
+//!   stamps an item once its own tasks ran, and a run that fails later keeps
+//!   it. A document is completed only once its save returned, so one dropped
+//!   mid-save (the stage cancelled by an error elsewhere) counts as unsaved.
+//!   A failed save fails its own document ([`FailureStage::Persistence`]);
+//!   under the other scopes it fails the stage, as before.
+//!
+//! DLT foreign-key edges need every document of the run, so they stay in the
+//! post-run DLT step, and a DLT document is completed only after it.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -199,10 +207,19 @@ pub(crate) async fn run_document_stage(
         input, stores, config, stamp, &policy, &admission, &stop, ready_rx,
     );
 
-    let (_, _, records, written) = futures::try_join!(extraction, summaries, assembler, writer)
+    let (_, _, records, mut written) = futures::try_join!(extraction, summaries, assembler, writer)
         .inspect_err(|_| stop.raise())?;
 
-    let failures = failure_report(input, &plan, config, fail_fast, records);
+    let failed_saves = std::mem::take(&mut written.failed_saves);
+    let failures = failure_report(
+        input,
+        &plan,
+        config,
+        fail_fast,
+        records,
+        &written.saved,
+        failed_saves,
+    );
     if stop.is_raised() && policy.scope != RollbackScope::FailedItems {
         // A `FailFast` stop under a scope that keeps nothing: the run fails as
         // a whole, as an extraction abort always did. Whatever was saved
@@ -826,6 +843,9 @@ struct Pending {
 /// A document ready for the writer.
 struct ReadyDocument {
     index: usize,
+    /// A call of it failed its item (saved under `RunToEnd` all the same, and
+    /// swept at the end): it is saved, never completed.
+    incomplete: bool,
     document: Option<Document>,
     chunks: Vec<DocumentChunk>,
     /// The expansion of each block, in block order, with its sample of
@@ -1036,6 +1056,7 @@ async fn build_document(
     };
     Ok(ReadyDocument {
         index,
+        incomplete: done.incomplete,
         document: planned.document.clone(),
         chunks,
         expansions,
@@ -1067,11 +1088,42 @@ struct Written {
     chunks: Vec<DocumentChunk>,
     documents: Vec<Document>,
     summaries: Vec<TextSummary>,
+    /// The data items whose documents were saved in full.
+    saved: BTreeSet<Uuid>,
+    /// The documents whose save failed under `FailedItems`, by data item, in
+    /// input order: each fails its own item ([`FailureStage::Persistence`]).
+    failed_saves: Vec<(Uuid, CognifyError)>,
 }
+
+/// Whether the writer completes `document` once it is saved
+/// ([`crate::rollback::CompletionLog`]): every call of it succeeded, chunking
+/// failed none of it, and it is not a DLT row, whose foreign-key edges are
+/// written after the run (it is completed at the end, after them). Chunks
+/// without a `Document` record name no item to complete.
+fn completes_when_saved(input: &ExtractedChunks, document: &ReadyDocument) -> Option<Uuid> {
+    let doc = document.document.as_ref()?;
+    let data_id = doc.base.id;
+    let failed_upstream = input.failures.failed_items().contains(&data_id)
+        || input.failures.unreached_items().contains(&data_id);
+    (!document.incomplete && !failed_upstream && doc.document_type != DLT_DOCUMENT_TYPE)
+        .then_some(data_id)
+}
+
+/// `Document::document_type` of a DLT row ([`crate::tasks::extract_dlt_fk_edges`]).
+const DLT_DOCUMENT_TYPE: &str = "dlt_row";
 
 /// Save each document as it arrives — they arrive in input order — through
 /// the persistence layer, with one per-document state, inside one bulk-load
-/// scope.
+/// scope, and complete it right after its save
+/// ([`CognifyConfig::completion`], SDK-1694 O5b).
+///
+/// A failed save under `FailedItems` fails that document alone: it is
+/// recorded, never completed, and the writer goes on (under `FailFast` the
+/// stop it raises ends dispatch, and the documents already complete are
+/// still saved). Under any other scope it fails the stage at once — the
+/// error is returned before the bulk-load scope is finished, which its guard
+/// closes on drop, so nothing keeps dispatching calls while the scope's
+/// maintenance runs.
 #[allow(clippy::too_many_arguments)]
 async fn write_documents(
     input: &ExtractedChunks,
@@ -1096,7 +1148,11 @@ async fn write_documents(
         chunks: Vec::new(),
         documents: Vec::new(),
         summaries: Vec::new(),
+        saved: BTreeSet::new(),
+        failed_saves: Vec::new(),
     };
+    let completion = config.completion.as_ref().map(|handle| &handle.0);
+    let keeps_failed_saves = policy.scope == RollbackScope::FailedItems;
     // Inside `cognify` this nests in the run's own scope (an inner scope's
     // end does no maintenance while the outer one is open); in a pipeline of
     // the caller's own it is the run's scope.
@@ -1107,22 +1163,57 @@ async fn write_documents(
             None
         }
     };
-    let mut outcome = Ok(());
     while let Some(document) = ready.recv().await {
         let index = document.index;
         // Under any scope but `failed_items` a stop fails the run (`is_fatal`
         // is fatal for `whole_run` and `nothing` alike): saving more would
         // only add to what is swept, or kept from a failed run.
-        if stop.is_raised() && policy.scope != RollbackScope::FailedItems {
+        if stop.is_raised() && !keeps_failed_saves {
             admission.release(index);
             continue;
         }
+        let completes = completes_when_saved(input, &document);
+        let data_ids: BTreeSet<Uuid> = match document.document.as_ref() {
+            Some(doc) => BTreeSet::from([doc.base.id]),
+            None => document.chunks.iter().map(|c| c.document_id).collect(),
+        };
         let saved = write_document(input, stores, config, stamp, &mut written, document).await;
         admission.release(index);
-        if let Err(error) = saved {
-            stop.raise();
-            outcome = Err(error);
-            break;
+        match saved {
+            Ok(()) => {
+                written.saved.extend(data_ids);
+                // Only once the save is in: a document whose save failed, or
+                // was dropped half-way, is never completed.
+                if let (Some(log), Some(data_id)) = (completion, completes) {
+                    log.complete(data_id).await;
+                }
+            }
+            Err(error) if keeps_failed_saves => {
+                warn!(
+                    data_ids = ?data_ids,
+                    "cognify: saving the document failed; only it fails: {error}"
+                );
+                if policy.stop == FailureStop::FailFast {
+                    stop.raise();
+                }
+                let message = error.to_string();
+                let mut ids = data_ids.into_iter();
+                if let Some(first) = ids.next() {
+                    written.failed_saves.push((first, error));
+                }
+                for data_id in ids {
+                    written
+                        .failed_saves
+                        .push((data_id, CognifyError::Execute(message.clone())));
+                }
+            }
+            Err(error) => {
+                stop.raise();
+                // The guard's drop closes the scope; finishing it first would
+                // keep the stage alive while the maintenance runs.
+                drop(bulk);
+                return Err(error);
+            }
         }
     }
     if let Some(bulk) = bulk
@@ -1130,7 +1221,7 @@ async fn write_documents(
     {
         warn!(%error, "cognify: vector store failed to finish its bulk load");
     }
-    outcome.map(|()| written)
+    Ok(written)
 }
 
 /// Merge one document into the run's graph and save its group.
@@ -1348,13 +1439,22 @@ fn stamp_edge_text(
 /// The run's failure report, built as the whole-run stages built it: the
 /// upstream report, then extraction's failures in chunk order and the
 /// documents it never reached, then summarization's, which keep only the
-/// chunks of documents extraction did not exclude.
+/// chunks of documents extraction did not exclude, then the documents whose
+/// save failed.
+///
+/// A skipped call marks its document unreached only when that document was
+/// not saved. A saved document had every result in before it was saved, so
+/// it has no skipped call today; the filter keeps a document the writer
+/// already completed (and marked) from being swept as unreached should that
+/// change.
 fn failure_report(
     input: &ExtractedChunks,
     plan: &Plan,
     config: &CognifyConfig,
     fail_fast: bool,
     mut records: Records,
+    saved: &BTreeSet<Uuid>,
+    failed_saves: Vec<(Uuid, CognifyError)>,
 ) -> FailureReport {
     let policy = config.failure_policy();
     let chunk_of = |call: usize| &input.chunks[plan.calls[call]];
@@ -1387,7 +1487,10 @@ fn failure_report(
     }
     records.extraction_skipped.sort_unstable();
     for call in &records.extraction_skipped {
-        failures.mark_unreached(chunk_of(*call).document_id);
+        let data_id = chunk_of(*call).document_id;
+        if !saved.contains(&data_id) {
+            failures.mark_unreached(data_id);
+        }
     }
     if !plan.calls.is_empty() {
         info!(
@@ -1420,7 +1523,10 @@ fn failure_report(
     }
     records.summary_skipped.sort_unstable();
     for call in &records.summary_skipped {
-        summary_failures.mark_unreached(chunk_of(*call).document_id);
+        let data_id = chunk_of(*call).document_id;
+        if !saved.contains(&data_id) {
+            summary_failures.mark_unreached(data_id);
+        }
     }
     if !records.summary_skipped.is_empty() {
         warn!(
@@ -1447,6 +1553,18 @@ fn failure_report(
         summary_failures.retain_failed_chunks(&surviving);
     }
     failures.absorb(&summary_failures);
+    for (data_id, error) in failed_saves {
+        failures.record_error(
+            StageFailure {
+                stage: FailureStage::Persistence,
+                data_id,
+                chunk_id: None,
+                error: error.to_string(),
+                fails_item: true,
+            },
+            &error,
+        );
+    }
     failures
 }
 
@@ -1963,6 +2081,80 @@ mod tests {
             llm.finished.load(Ordering::SeqCst),
             0,
             "no aborted call finished"
+        );
+    }
+
+    /// An embedding engine that stalls on any text holding `SLOWSAVE`, so a
+    /// save can be caught half-way.
+    struct StallingEmbedding(Arc<cognee_embedding::MockEmbeddingEngine>);
+
+    #[async_trait]
+    impl EmbeddingEngine for StallingEmbedding {
+        async fn embed(
+            &self,
+            texts: &[&str],
+        ) -> cognee_embedding::error::EmbeddingResult<Vec<Vec<f32>>> {
+            if texts.iter().any(|text| text.contains("SLOWSAVE")) {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+            }
+            self.0.embed(texts).await
+        }
+
+        fn dimension(&self) -> usize {
+            self.0.dimension()
+        }
+
+        fn batch_size(&self) -> usize {
+            self.0.batch_size()
+        }
+
+        fn max_sequence_length(&self) -> usize {
+            self.0.max_sequence_length()
+        }
+    }
+
+    /// A document whose save is cut off half-way — the stage dropped, as
+    /// `try_join!` drops the writer when another branch errors — is never
+    /// completed, so a failed run sweeps it as unsaved; the document saved
+    /// before it is completed (SDK-1694 O5b).
+    #[tokio::test]
+    async fn a_document_dropped_mid_save_is_not_completed() {
+        use crate::rollback::CompletionLog;
+        use cognee_database::ops::graph_storage::get_nodes_by_dataset;
+        let test = Stores::new().await;
+        let mut stores = stores_of(&test, Arc::new(TextLlm::default()));
+        stores.embedding_engine = Arc::new(StallingEmbedding(test.engine.clone()));
+        let input = input(&[
+            (1, vec![("Alice:Person", None)]),
+            (2, vec![("Bob:Person SLOWSAVE", None)]),
+        ]);
+        let log = Arc::new(CompletionLog::new(
+            Arc::new(test.db.clone()),
+            DATASET,
+            /* write_markers */ false,
+        ));
+        let config = CognifyConfig {
+            completion: Some(crate::config::CompletionHandle(Arc::clone(&log))),
+            ..CognifyConfig::default().with_rollback_scope(RollbackScope::FailedItems)
+        };
+        let stage_stamp = stamp();
+        let stage = run_document_stage(&input, &stores, &config, &stage_stamp);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(500), stage)
+                .await
+                .is_err(),
+            "the second save stalls"
+        );
+
+        let rows = get_nodes_by_dataset(&test.db, DATASET).await.unwrap();
+        assert!(
+            rows.iter().any(|row| row.data_id == Uuid::from_u128(2)),
+            "the second document's save had begun (its ledger rows go first)"
+        );
+        assert_eq!(
+            log.completed(),
+            BTreeSet::from([Uuid::from_u128(1)]),
+            "only the document whose save returned is completed"
         );
     }
 
@@ -2559,7 +2751,8 @@ mod tests {
 
     /// The item-scoped sweep (`SweepScope::for_data`, O5b's) of one document
     /// removes that document's rows — its type and structural rows included,
-    /// which it can now select by `data_id` — and leaves every other row.
+    /// which it can now select by `data_id` — and the nil rows of the
+    /// artifacts only it produced, and leaves every other row.
     #[tokio::test]
     async fn an_item_scoped_sweep_removes_only_that_documents_rows() {
         use cognee_database::ops::graph_storage::{get_edges_by_dataset, get_nodes_by_dataset};
@@ -2602,7 +2795,54 @@ mod tests {
                     .collect::<BTreeSet<_>>(),
             )
         };
-        let before = kept(&nodes, &edges);
+        let (mut keep_nodes, mut keep_edges) = kept(&nodes, &edges);
+        // A nil row goes with the sweep when only doc A has rows beside it:
+        // nodes by slug, edges by (source, target, relationship).
+        let only_a = |owners: BTreeSet<Uuid>| owners == BTreeSet::from([doc('a')]);
+        let node_owners = |slug: Uuid| -> BTreeSet<Uuid> {
+            nodes
+                .iter()
+                .filter(|row| row.slug == slug && !row.data_id.is_nil())
+                .map(|row| row.data_id)
+                .collect()
+        };
+        let edge_owners = |row: &cognee_database::GraphEdge| -> BTreeSet<Uuid> {
+            edges
+                .iter()
+                .filter(|other| {
+                    (
+                        other.source_node_id,
+                        other.destination_node_id,
+                        &other.relationship_name,
+                    ) == (
+                        row.source_node_id,
+                        row.destination_node_id,
+                        &row.relationship_name,
+                    ) && !other.data_id.is_nil()
+                })
+                .map(|other| other.data_id)
+                .collect()
+        };
+        let swept_nil_nodes: Vec<Uuid> = nodes
+            .iter()
+            .filter(|row| row.data_id.is_nil() && only_a(node_owners(row.slug)))
+            .map(|row| row.id)
+            .collect();
+        let swept_nil_edges: Vec<Uuid> = edges
+            .iter()
+            .filter(|row| row.data_id.is_nil() && only_a(edge_owners(row)))
+            .map(|row| row.id)
+            .collect();
+        assert!(
+            !swept_nil_nodes.is_empty() && !swept_nil_edges.is_empty(),
+            "doc A alone declares `company` and its own structural edges"
+        );
+        for id in &swept_nil_nodes {
+            keep_nodes.remove(id);
+        }
+        for id in &swept_nil_edges {
+            keep_edges.remove(id);
+        }
 
         RunSweeper::new(
             Arc::new(test.db.clone()),
@@ -2620,7 +2860,95 @@ mod tests {
         let (nodes, edges) = rows().await;
         assert!(nodes.iter().all(|row| row.data_id != doc('a')));
         assert!(edges.iter().all(|row| row.data_id != doc('a')));
-        assert_eq!(kept(&nodes, &edges), before, "every other row is kept");
+        assert_eq!(
+            kept(&nodes, &edges),
+            (keep_nodes, keep_edges),
+            "every other row is kept"
+        );
+    }
+
+    /// Sweeping one document removes a type only it declared — the EntityType
+    /// node, its vector point and every ledger row — while a type another
+    /// document also declared stays, nil row and all (SDK-1694 O5b). Before
+    /// O5b the run's nil row stayed outside the item scope and kept the type.
+    #[tokio::test]
+    async fn sweeping_a_document_removes_a_type_only_it_declared() {
+        use cognee_database::ops::graph_storage::get_nodes_by_dataset;
+        use cognee_delete::{RunSweeper, SweepScope};
+        let test = Stores::new().await;
+        run(
+            &test,
+            Arc::new(TextLlm::default()),
+            &three_documents(),
+            &CognifyConfig::default(),
+        )
+        .await
+        .unwrap();
+        // Doc A declares Company (Acme, Apple), Person and Engineer; B
+        // declares Person and Fruit; C Engineer and Person.
+        let type_id = cognee_models::EntityType::id_for;
+        let type_rows = |nodes: &[cognee_database::GraphNode], name: &str| -> BTreeSet<Uuid> {
+            nodes
+                .iter()
+                .filter(|row| row.slug == type_id(name))
+                .map(|row| row.data_id)
+                .collect()
+        };
+        let nodes = get_nodes_by_dataset(&test.db, DATASET).await.unwrap();
+        assert_eq!(type_rows(&nodes, "company"), owners("a"));
+        assert!(
+            test.graph
+                .get_node(&type_id("company").to_string())
+                .await
+                .unwrap()
+                .is_some()
+        );
+
+        RunSweeper::new(
+            Arc::new(test.db.clone()),
+            test.graph.clone(),
+            test.vector.clone(),
+        )
+        .sweep(&SweepScope::for_data(
+            Uuid::from_u128(7),
+            DATASET,
+            vec![doc('a')],
+        ))
+        .await
+        .unwrap();
+
+        let nodes = get_nodes_by_dataset(&test.db, DATASET).await.unwrap();
+        assert!(
+            type_rows(&nodes, "company").is_empty(),
+            "every row of the type only A declared is gone"
+        );
+        assert!(
+            test.graph
+                .get_node(&type_id("company").to_string())
+                .await
+                .unwrap()
+                .is_none(),
+            "and so is its graph node"
+        );
+        assert!(
+            test.vector
+                .all_points()
+                .values()
+                .flatten()
+                .all(|point| point.id != type_id("company")),
+            "and its vector point"
+        );
+        for (name, documents) in [("person", "bc"), ("engineer", "c")] {
+            assert_eq!(type_rows(&nodes, name), owners(documents), "{name}");
+            assert!(
+                test.graph
+                    .get_node(&type_id(name).to_string())
+                    .await
+                    .unwrap()
+                    .is_some(),
+                "{name}: a type another document declared stays"
+            );
+        }
     }
 
     /// A second dataset sharing the stores, so claims across datasets
@@ -2954,9 +3282,18 @@ mod tests {
             delete_selections(&with_rows.db, steps).await,
         );
         assert_eq!(want.len(), got.len());
+        // The item-scoped sweep is the one selection that is meant to change
+        // with the rows: since SDK-1694 O5b it takes a nil row whose every
+        // per-document row it sweeps, which the stripped ledger has none of.
+        // `sweeping_a_document_removes_a_type_only_it_declared` pins it.
+        let item_sweep = |line: &&String| {
+            line.split_once(' ')
+                .is_some_and(|(_, rest)| rest.starts_with("run "))
+        };
         let differences: Vec<String> = want
             .iter()
             .zip(&got)
+            .filter(|(want, _)| !item_sweep(want))
             .filter(|(want, got)| want != got)
             .map(|(want, got)| format!("without O5a rows: {want}\nwith them:        {got}"))
             .collect();
@@ -2973,12 +3310,14 @@ mod tests {
 
     /// Deletion is unchanged by the per-document rows (SDK-1694 O5a): every
     /// selection a data-scoped delete (both claimant scopes), a dataset
-    /// delete, the whole-run sweep and the item-scoped sweep make reads the
-    /// same artifacts from the ledger with them as with the ledger stripped
+    /// delete and the whole-run sweep make reads the same artifacts from the
+    /// ledger with them as with the ledger stripped
     /// back to what the runs wrote before O5a — over three runs, two of them
     /// in one dataset and one in a second dataset sharing the stores. The nil
     /// row each type and structural edge keeps claims its slug for every
-    /// document, so a per-document row is never the last claim.
+    /// document, so a per-document row is never the last claim. The
+    /// item-scoped sweep is left out: since O5b it takes the nil rows of what
+    /// only the swept documents produced, so it selects more with the rows.
     ///
     /// The later run in the first dataset shares entities but no type with
     /// the earlier one: a type both declare is the one intended difference,

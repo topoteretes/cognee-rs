@@ -861,6 +861,59 @@ async fn a_failing_document_beside_a_loaded_repo_follows_the_policy() {
     }
 }
 
+/// Code items never reach the document stage's writer, so the code route
+/// completes each one itself, the moment its graph is loaded (SDK-1694 O5b):
+/// when the run then fails — the README's extraction fails, one chunk in one,
+/// far over the ratio — a `FailedItems` run errors but keeps the loaded repo
+/// item, code graph and completion marker, and sweeps the README. Before O5b
+/// the escalation swept the code graph too.
+#[tokio::test]
+async fn a_loaded_repo_is_kept_when_the_run_fails_after_it() {
+    for stop in [FailureStop::FailFast, FailureStop::RunToEnd] {
+        let (_root, repo) = project();
+        let stack = Stack::new().await;
+        let items = stack.add(&repo, true, None).await;
+        let (manifest, documents) = split(&items);
+        let backend = Arc::new(MockChunkGraphExtractor::new());
+        backend.set_failure_after(0);
+        let config = policy(
+            config(false).with_graph_backend(backend),
+            stop,
+            RollbackScope::FailedItems,
+        );
+
+        let error = stack
+            .cognify(items.clone(), &config)
+            .await
+            .expect_err("the README's failed chunk is over the ratio");
+        let label = format!("{stop:?}");
+        assert!(
+            matches!(error, CognifyError::RunFailed { .. }),
+            "{label}: {error}"
+        );
+        assert!(
+            !stack.code_node_ids().await.is_empty(),
+            "{label}: the code graph the run completed is kept"
+        );
+        assert_eq!(
+            stack.completed(&items).await,
+            HashSet::from([manifest.id]),
+            "{label}: and its repo item stays marked; the README does not"
+        );
+        let node_ids: BTreeSet<String> =
+            stack.nodes().await.into_iter().map(|(id, _)| id).collect();
+        assert!(
+            !node_ids.contains(&documents[0].id.to_string()),
+            "{label}: the README is swept"
+        );
+        assert_eq!(
+            stack.cognify_runs().await,
+            vec![PipelineRunStatus::Errored],
+            "{label}"
+        );
+    }
+}
+
 /// The repository moved after the add; the README is fine.
 ///
 /// - `FailFast` + `WholeRun` (the default): the repo item's own error fails

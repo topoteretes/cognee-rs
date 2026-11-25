@@ -51,6 +51,12 @@ impl SweepScope {
     /// Only what the run created for `data_ids` in `dataset_id`. Artifacts a
     /// data item *outside* this list also produced are kept — that is what
     /// stops an item-scoped sweep deleting an entity a surviving file shares.
+    ///
+    /// The run's nil-`data_id` rows of an artifact (an EntityType's, a
+    /// structural edge's, an ontology-first entity's delete guard) are in the
+    /// scope when every document row beside them is: a type only the swept
+    /// items declared goes with them (SDK-1694 O5b, see
+    /// `cognee_database::ops::graph_storage::RunScope`).
     pub fn for_data(pipeline_run_id: Uuid, dataset_id: Uuid, data_ids: Vec<Uuid>) -> Self {
         Self {
             pipeline_run_id,

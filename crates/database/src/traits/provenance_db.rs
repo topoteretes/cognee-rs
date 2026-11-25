@@ -37,6 +37,17 @@ pub trait ProvenanceDb: Send + Sync {
     /// transaction. Returns the number of rows offered.
     async fn insert_edge_evidence(&self, rows: &[EdgeEvidence]) -> Result<u64, DatabaseError>;
 
+    /// Detach the edge evidence `data_ids` recorded under `pipeline_run_id`
+    /// in the dataset from that run, so it stays readable after the run
+    /// errored (Python `keep_completed_items_evidence`). Returns the number of
+    /// rows changed.
+    async fn keep_completed_items_evidence(
+        &self,
+        dataset_id: Uuid,
+        pipeline_run_id: Uuid,
+        data_ids: &[Uuid],
+    ) -> Result<u64, DatabaseError>;
+
     /// The recorded nodes with these ids.
     async fn get_nodes_by_ids(&self, ids: &[String]) -> Result<Vec<GraphNode>, DatabaseError>;
 
@@ -143,6 +154,16 @@ impl ProvenanceDb for DatabaseConnection {
 
     async fn insert_edge_evidence(&self, rows: &[EdgeEvidence]) -> Result<u64, DatabaseError> {
         edge_evidence::insert_edge_evidence(self, rows).await
+    }
+
+    async fn keep_completed_items_evidence(
+        &self,
+        dataset_id: Uuid,
+        pipeline_run_id: Uuid,
+        data_ids: &[Uuid],
+    ) -> Result<u64, DatabaseError> {
+        edge_evidence::keep_completed_items_evidence(self, dataset_id, pipeline_run_id, data_ids)
+            .await
     }
 
     async fn get_nodes_by_ids(&self, ids: &[String]) -> Result<Vec<GraphNode>, DatabaseError> {

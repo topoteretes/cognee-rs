@@ -8,10 +8,17 @@
 //! never watched failing by anybody: the code that would have swept it
 //! (`cognee_cognify::rollback::on_run_failed`) dies with it. What survives is
 //! a `pipeline_runs` row still at `STARTED`, whatever the run had already
-//! written into the graph and vector stores, and — because a cognify
-//! completion marker is written only on success — *no* marker for any of the
-//! items it processed. The next run would extract the same entities again on
-//! top of the ones the corpse left behind.
+//! written into the graph and vector stores, and — under `whole_run` — *no*
+//! completion marker for any of the items it processed. The next run would
+//! extract the same entities again on top of the ones the corpse left behind.
+//!
+//! A `failed_items` run marks each document as it saves it (SDK-1694 O5b),
+//! so a killed one leaves markers on the documents it finished. Recovery
+//! still sweeps the whole run, those documents and their markers included,
+//! so the next run redoes them; Python's recovery keeps the stamped items
+//! (`rollback.py` `_kept_data_ids` with no run results). Converging on the
+//! pre-run state is the safe direction, and keeping them here is a
+//! follow-up.
 //!
 //! # Proving a run abandoned
 //!

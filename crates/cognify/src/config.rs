@@ -556,6 +556,27 @@ pub struct CognifyConfig {
     /// handles above.
     #[serde(skip)]
     pub code_graph: cognee_code_graph::CodeGraphConfig,
+
+    /// Where the run records each document it completes (SDK-1694 O5b).
+    ///
+    /// [`crate::cognify`] fills it for a [`RollbackScope::FailedItems`] run,
+    /// so the document stage marks each document right after saving it and a
+    /// failed run keeps the documents it completed. A caller leaves it `None`
+    /// (it cannot build one): a pipeline of its own then saves documents
+    /// without completing them, as before.
+    #[serde(skip)]
+    pub completion: Option<CompletionHandle>,
+}
+
+/// The run's completion log ([`CognifyConfig::completion`]), opaque outside
+/// the crate.
+#[derive(Clone)]
+pub struct CompletionHandle(pub(crate) Arc<crate::rollback::CompletionLog>);
+
+impl std::fmt::Debug for CompletionHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CompletionHandle(…)")
+    }
 }
 
 /// Opaque wrapper around a caller-supplied [`Chunker`].
@@ -762,6 +783,7 @@ impl Default for CognifyConfig {
             graph_backend: None,
             cpu_pool: None,
             code_graph: cognee_code_graph::CodeGraphConfig::default(),
+            completion: None,
         }
     }
 }

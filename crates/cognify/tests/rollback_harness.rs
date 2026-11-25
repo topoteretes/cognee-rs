@@ -88,6 +88,15 @@ impl CountingLlm {
         }
     }
 
+    /// The same, failing nothing: the second run of a file whose first run
+    /// failed.
+    pub fn lenient(response_count: usize) -> Self {
+        Self {
+            inner: MockLlm::new(vec![canned_graph_response(); response_count]),
+            calls: AtomicUsize::new(0),
+        }
+    }
+
     pub fn call_count(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
     }
@@ -164,6 +173,11 @@ impl Harness {
     /// Store `text` as a file, persist its `Data` row and attach it to the
     /// dataset. The row is what carries the completion marker.
     pub async fn add_file(&mut self, text: &str) -> Uuid {
+        self.add_file_with_metadata(text, None).await
+    }
+
+    /// [`Self::add_file`] with the row's `external_metadata` — a DLT row's.
+    pub async fn add_file_with_metadata(&mut self, text: &str, metadata: Option<String>) -> Uuid {
         let data_id = Uuid::new_v4();
         let index = self.items.len();
         let location = self
@@ -171,7 +185,7 @@ impl Harness {
             .store(text.as_bytes(), &format!("rollback-{data_id}"))
             .await
             .expect("MockStorage::store");
-        let item = Data::builder(
+        let mut builder = Data::builder(
             data_id,
             format!("rollback-{index}.txt"),
             location,
@@ -180,8 +194,11 @@ impl Harness {
             "text/plain",
             format!("test-hash-{data_id}"),
             self.owner_id,
-        )
-        .build();
+        );
+        if let Some(metadata) = metadata {
+            builder = builder.external_metadata(metadata);
+        }
+        let item = builder.build();
         create_data(&self.db, item.clone())
             .await
             .expect("persist the Data row");
