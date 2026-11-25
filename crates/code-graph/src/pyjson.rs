@@ -9,6 +9,67 @@
 
 use serde_json::{Map, Number, Value};
 
+/// `json.loads(text)` as Python reads numbers: [`zero_negative_integers`]
+/// first, then serde_json.
+///
+/// # Errors
+///
+/// What serde_json raises for text that is not JSON.
+pub fn loads(text: &str) -> serde_json::Result<Value> {
+    serde_json::from_str(&zero_negative_integers(text))
+}
+
+/// `text` with every bare `-0` number written `0`.
+///
+/// Python reads the JSON integer `-0` as the int `0`, and writes it back as
+/// `0`; serde_json reads it as the float `-0.0`, which Python writes as
+/// `-0.0`. So a fact with a `-0` prop would hash and describe differently
+/// in the two SDKs. A `-0` that is a float (`-0.0`, `-0e1`) stays a float,
+/// as in Python, and a `-0` inside a string is text. The pass is lexical: it
+/// leaves invalid JSON as invalid as it was.
+pub fn zero_negative_integers(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains("-0") {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    let mut in_string = false;
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if in_string {
+            match byte {
+                b'\\' => index += 1,
+                b'"' => in_string = false,
+                _ => {}
+            }
+        } else if byte == b'"' {
+            in_string = true;
+        } else if byte == b'-'
+            && bytes.get(index + 1) == Some(&b'0')
+            && !matches!(bytes.get(index + 2), Some(b'.' | b'e' | b'E' | b'0'..=b'9'))
+            && !(index > 0 && is_number_byte(bytes[index - 1]))
+        {
+            // `-` and `0` are ASCII, so `index` is a char boundary.
+            out.push_str(&text[copied..index]);
+            copied = index + 1;
+        }
+        index += 1;
+    }
+    if copied == 0 {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    out.push_str(&text[copied..]);
+    std::borrow::Cow::Owned(out)
+}
+
+/// A byte that continues a JSON number: a `-` after one is an exponent sign
+/// (`1e-0`), not a number of its own.
+fn is_number_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'+' | b'-')
+}
+
 /// `json.dumps(value, sort_keys=True)` with Python's defaults: `", "` and
 /// `": "` separators, `ensure_ascii=True` escaping and `float.__repr__`
 /// floats. Keys are sorted by code point, as Python sorts `str`.
@@ -151,8 +212,9 @@ pub fn float_repr(value: f64) -> String {
     }
 }
 
-/// `str(value)` of a scalar JSON value as Python prints it: strings bare,
-/// `True`/`False`, `None`, numbers as `repr`. Containers fall back to JSON.
+/// `str(value)` of a JSON value as Python prints it: a string bare,
+/// anything else as [`py_repr`] writes it (Python's `str` of a list or dict
+/// is its `repr`).
 pub fn py_str(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),
@@ -160,17 +222,107 @@ pub fn py_str(value: &Value) -> String {
     }
 }
 
-/// An approximation of `repr(value)` for messages: strings single-quoted,
-/// `True`/`False`/`None`, numbers as Python writes them.
+/// `repr(value)` of a JSON value as Python holds it: `None`, `True`,
+/// `False`, numbers as `repr`, strings as [`py_repr_str`], lists as
+/// `[a, b]` and dicts as `{'k': v}` in key order.
 pub fn py_repr(value: &Value) -> String {
+    let mut out = String::new();
+    write_repr(value, &mut out);
+    out
+}
+
+fn write_repr(value: &Value, out: &mut String) {
     match value {
-        Value::Null => "None".to_string(),
-        Value::Bool(true) => "True".to_string(),
-        Value::Bool(false) => "False".to_string(),
-        Value::Number(number) => number_repr(number),
-        Value::String(text) => format!("'{text}'"),
-        other => other.to_string(),
+        Value::Null => out.push_str("None"),
+        Value::Bool(true) => out.push_str("True"),
+        Value::Bool(false) => out.push_str("False"),
+        Value::Number(number) => out.push_str(&number_repr(number)),
+        Value::String(text) => out.push_str(&py_repr_str(text)),
+        Value::Array(items) => {
+            out.push('[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(", ");
+                }
+                write_repr(item, out);
+            }
+            out.push(']');
+        }
+        Value::Object(map) => {
+            out.push('{');
+            for (index, (key, item)) in map.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(&py_repr_str(key));
+                out.push_str(": ");
+                write_repr(item, out);
+            }
+            out.push('}');
+        }
     }
+}
+
+/// `repr(text)` as Python writes a `str`: single-quoted unless the text
+/// holds a `'` and no `"`; `\\`, the quote, `\t`, `\n` and `\r` escaped; any
+/// other character that is not printable as `\xNN`, `\uNNNN` or
+/// `\UNNNNNNNN`.
+pub fn py_repr_str(text: &str) -> String {
+    let quote = if text.contains('\'') && !text.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push(quote);
+    for character in text.chars() {
+        match character {
+            '\\' => out.push_str("\\\\"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            _ if character == quote => {
+                out.push('\\');
+                out.push(character);
+            }
+            _ if is_printable(character) => out.push(character),
+            _ => {
+                let code = u32::from(character);
+                if code <= 0xff {
+                    out.push_str(&format!("\\x{code:02x}"));
+                } else if code <= 0xffff {
+                    out.push_str(&format!("\\u{code:04x}"));
+                } else {
+                    out.push_str(&format!("\\U{code:08x}"));
+                }
+            }
+        }
+    }
+    out.push(quote);
+    out
+}
+
+/// Python's `str.isprintable()` for one character: the space, and every
+/// character outside the categories `Cc`, `Cf`, `Cs`, `Co`, `Cn`, `Zl`,
+/// `Zp` and `Zs`. The category table is unicode-properties' (Unicode 17),
+/// so a character assigned after the Unicode version of the running Python
+/// (15.0 for 3.12) reads as printable here and as `Cn` there.
+fn is_printable(character: char) -> bool {
+    use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
+    if character == ' ' {
+        return true;
+    }
+    !matches!(
+        character.general_category(),
+        GeneralCategory::Control
+            | GeneralCategory::Format
+            | GeneralCategory::Surrogate
+            | GeneralCategory::PrivateUse
+            | GeneralCategory::Unassigned
+            | GeneralCategory::LineSeparator
+            | GeneralCategory::ParagraphSeparator
+            | GeneralCategory::SpaceSeparator
+    )
 }
 
 /// Python's `str.strip()`: trims what `str.isspace()` calls whitespace, which
@@ -210,6 +362,10 @@ pub fn py_iter(value: Option<&Value>) -> Vec<Value> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -249,6 +405,127 @@ mod tests {
         );
         assert_eq!(dumps_sorted(&json!({})), "{}");
         assert_eq!(dumps_sorted(&json!([])), "[]");
+    }
+
+    /// `repr()` and `str()` as Python a59433e6b's interpreter (CPython 3.12,
+    /// Unicode 15.0) wrote them for `json.loads(<json>)`: generated by
+    /// running Python, not written by hand.
+    const PYTHON_REPR_TABLE: &[(&str, &str, Option<&str>)] = &[
+        (r##""plain""##, r##"'plain'"##, Some(r##"plain"##)),
+        (r##""it's""##, r##""it's""##, Some(r##"it's"##)),
+        (
+            r##""say \"hi\"""##,
+            r##"'say "hi"'"##,
+            Some(r##"say "hi""##),
+        ),
+        (
+            r##""both ' and \"""##,
+            r##"'both \' and "'"##,
+            Some(r##"both ' and ""##),
+        ),
+        (
+            r##""back\\slash""##,
+            r##"'back\\slash'"##,
+            Some(r##"back\slash"##),
+        ),
+        (r##""tab\tnl\nret\r""##, r##"'tab\tnl\nret\r'"##, None),
+        (
+            r##""\u0000\u001f\u007f\u0080\u009f""##,
+            r##"'\x00\x1f\x7f\x80\x9f'"##,
+            None,
+        ),
+        (r##""\u00e9t\u00e9""##, r##"'été'"##, Some(r##"été"##)),
+        (r##""nb\u00a0sp""##, r##"'nb\xa0sp'"##, None),
+        (r##""soft\u00adhyphen""##, r##"'soft\xadhyphen'"##, None),
+        (r##""zw\u200bsp""##, r##"'zw\u200bsp'"##, None),
+        (r##""line\u2028sep""##, r##"'line\u2028sep'"##, None),
+        (r##""para\u2029sep""##, r##"'para\u2029sep'"##, None),
+        (r##""ideo\u3000sp""##, r##"'ideo\u3000sp'"##, None),
+        (r##""private\ue000use""##, r##"'private\ue000use'"##, None),
+        (r##""\ud83d\ude00""##, r##"'😀'"##, Some(r##"😀"##)),
+        (r##""tag\udb40\udc01""##, r##"'tag\U000e0001'"##, None),
+        (r##""unassigned\u0378""##, r##"'unassigned\u0378'"##, None),
+        (r##""bom\ufeff""##, r##"'bom\ufeff'"##, None),
+        (r##""\u4e2d\u6587""##, r##"'中文'"##, Some(r##"中文"##)),
+        (r##""""##, r##"''"##, Some(r##""##)),
+        (r##"null"##, r##"None"##, Some(r##"None"##)),
+        (r##"true"##, r##"True"##, Some(r##"True"##)),
+        (r##"false"##, r##"False"##, Some(r##"False"##)),
+        (r##"0"##, r##"0"##, Some(r##"0"##)),
+        (r##"-3"##, r##"-3"##, Some(r##"-3"##)),
+        (r##"1.5"##, r##"1.5"##, Some(r##"1.5"##)),
+        (r##"1e16"##, r##"1e+16"##, Some(r##"1e+16"##)),
+        (r##"-0.0"##, r##"-0.0"##, Some(r##"-0.0"##)),
+        (
+            r##"12345678901234567890"##,
+            r##"12345678901234567890"##,
+            Some(r##"12345678901234567890"##),
+        ),
+        (r##"[]"##, r##"[]"##, Some(r##"[]"##)),
+        (r##"{}"##, r##"{}"##, Some(r##"{}"##)),
+        (
+            r##"[1, "a", null, [true], {"k": "v"}]"##,
+            r##"[1, 'a', None, [True], {'k': 'v'}]"##,
+            Some(r##"[1, 'a', None, [True], {'k': 'v'}]"##),
+        ),
+        (
+            r##"{"b": 1, "a": ["x", 2.0], "c'": {}}"##,
+            r##"{'b': 1, 'a': ['x', 2.0], "c'": {}}"##,
+            Some(r##"{'b': 1, 'a': ['x', 2.0], "c'": {}}"##),
+        ),
+        (
+            r##"["it's", "\n"]"##,
+            r##"["it's", '\n']"##,
+            Some(r##"["it's", '\n']"##),
+        ),
+    ];
+
+    #[test]
+    fn repr_and_str_match_python() {
+        for (json_text, repr, str_form) in PYTHON_REPR_TABLE {
+            let value: Value = loads(json_text).expect("the table holds valid JSON");
+            assert_eq!(&py_repr(&value), repr, "repr({json_text})");
+            if let Some(str_form) = str_form {
+                assert_eq!(&py_str(&value), str_form, "str({json_text})");
+            }
+        }
+    }
+
+    /// `json.dumps(json.loads(<json>), sort_keys=True)` as Python a59433e6b's
+    /// interpreter wrote it (`None`: Python rejects the text): generated by
+    /// running Python, not written by hand.
+    const PYTHON_NEGATIVE_ZERO_TABLE: &[(&str, Option<&str>)] = &[
+        (r##"-0"##, Some(r##"0"##)),
+        (
+            r##"[-0, -0.0, -0e0, -0E+1, 1e-0, -0.5]"##,
+            Some(r##"[0, -0.0, -0.0, -0.0, 1.0, -0.5]"##),
+        ),
+        (r##"[-00]"##, None),
+        (
+            r##"{"a": -0, "b": "-0", "c\"-0": -0}"##,
+            Some(r##"{"a": 0, "b": "-0", "c\"-0": 0}"##),
+        ),
+        (r##" -0 "##, Some(r##"0"##)),
+        (r##"[-0]"##, Some(r##"[0]"##)),
+        (r##"{"x":-0}"##, Some(r##"{"x": 0}"##)),
+        (r##"-0.0"##, Some(r##"-0.0"##)),
+    ];
+
+    #[test]
+    fn negative_zero_integers_read_as_python_reads_them() {
+        for (json_text, dumped) in PYTHON_NEGATIVE_ZERO_TABLE {
+            let read = loads(json_text).ok();
+            assert_eq!(
+                read.as_ref().map(dumps_sorted).as_deref(),
+                *dumped,
+                "json.loads({json_text})"
+            );
+        }
+        // Nothing to rewrite: the text is borrowed as it is.
+        assert!(matches!(
+            zero_negative_integers(r#"{"a": -0.5, "b": "-0"}"#),
+            std::borrow::Cow::Borrowed(_)
+        ));
     }
 
     #[test]

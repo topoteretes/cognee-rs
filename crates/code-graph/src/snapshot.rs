@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 
 use crate::edges::CodeGraphEdge;
 use crate::error::{CodeGraphError, CodeGraphResult};
-use crate::pyjson::{is_truthy, py_repr, py_str, py_strip};
+use crate::pyjson::{is_truthy, loads, py_repr, py_str, py_strip};
 
 /// One enola fact: a JSON object from `facts.jsonl`, or one synthesized from
 /// `insights.json` / `flows.json`.
@@ -237,7 +237,7 @@ fn read_facts(facts_path: &Path) -> CodeGraphResult<(Vec<Fact>, String)> {
             if line.is_empty() {
                 continue;
             }
-            match serde_json::from_str::<Value>(line) {
+            match loads(line) {
                 Ok(Value::Object(fact)) => facts.push(fact),
                 Ok(_) => {
                     corrupt_lines += 1;
@@ -276,7 +276,7 @@ fn read_json_file(path: &Path) -> Result<Option<Value>, ()> {
     }
     let bytes = std::fs::read(path).map_err(|_| ())?;
     let text = std::str::from_utf8(&bytes).map_err(|_| ())?;
-    serde_json::from_str(text).map(Some).map_err(|_| ())
+    loads(text).map(Some).map_err(|_| ())
 }
 
 /// Reject unsupported artifact formats and surface extraction-quality
@@ -348,7 +348,7 @@ pub fn validate_receipt(
             snapshot_dir.display(),
             quality
                 .get("parse_error_sample")
-                .map(py_repr)
+                .map(py_str)
                 .unwrap_or_else(|| "None".to_string())
         );
     }
@@ -365,7 +365,7 @@ pub fn validate_receipt(
             .into_iter()
             .flatten()
             .find(is_truthy)
-            .map(|value| py_repr(&value))
+            .map(|value| py_str(&value))
             .unwrap_or_else(|| "n/a".to_string());
         tracing::info!(
             "enola parsed {} of {} source file(s) in {} (top skip causes: {}).",
@@ -545,7 +545,7 @@ fn synthesize_flow_facts(
     }
     let document = std::str::from_utf8(&content)
         .ok()
-        .and_then(|text| serde_json::from_str::<Value>(text).ok());
+        .and_then(|text| loads(text).ok());
     let Some(document) = document else {
         tracing::warn!(
             "Could not parse flows.json in {}; ignoring it.",
