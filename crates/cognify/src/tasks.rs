@@ -3662,10 +3662,43 @@ pub(crate) fn stamp_entity_provenance(
 // ---------------------------------------------------------------------------
 
 /// Name of the task that runs the code routes ahead of the standard pipeline
-/// (Python's CODE_REPO-route task, `extract_code_repo_graph`). The same task
-/// also runs the per-file CODE route, whose Python task is
-/// `extract_code_files_graph`.
+/// (Python's CODE_REPO-route task, `extract_code_repo_graph`).
+///
+/// One Rust task runs both code routes, where Python runs one task per
+/// route, so the task is named after the route that ran
+/// ([`code_routes_task_name`]): this name whenever a code-repo item is in the
+/// run (a mixed run included), and for [`build_cognify_pipeline`], which is
+/// built before the items are known; [`EXTRACT_CODE_FILES_GRAPH_TASK_NAME`]
+/// when every code-routed item is a per-file code item.
 pub const EXTRACT_CODE_REPO_GRAPH_TASK_NAME: &str = "extract_code_repo_graph";
+
+/// Name of the code routes task in a run whose code-routed items are all
+/// per-file code items (Python's CODE-route task, `extract_code_files_graph`).
+/// See [`EXTRACT_CODE_REPO_GRAPH_TASK_NAME`].
+pub const EXTRACT_CODE_FILES_GRAPH_TASK_NAME: &str = "extract_code_files_graph";
+
+/// The name of the code routes task for a run over `items`, so telemetry
+/// names the route that ran: [`EXTRACT_CODE_FILES_GRAPH_TASK_NAME`] when
+/// every code-routed item takes the per-file CODE route, else
+/// [`EXTRACT_CODE_REPO_GRAPH_TASK_NAME`] (a code-repo item, a mixed run, or
+/// no code item at all).
+pub fn code_routes_task_name(items: &[Data]) -> &'static str {
+    use crate::routing::{CognifyRoute, cognify_route_for};
+    let mut code_routes = items
+        .iter()
+        .filter_map(|item| match cognify_route_for(item) {
+            Ok(CognifyRoute::Standard) => None,
+            route => Some(route),
+        })
+        .peekable();
+    if code_routes.peek().is_some()
+        && code_routes.all(|route| matches!(route, Ok(CognifyRoute::Code)))
+    {
+        EXTRACT_CODE_FILES_GRAPH_TASK_NAME
+    } else {
+        EXTRACT_CODE_REPO_GRAPH_TASK_NAME
+    }
+}
 
 /// What [`run_code_routes`] hands the standard pipeline: the standard items,
 /// and what the code routes did with the rest.
@@ -4554,6 +4587,7 @@ async fn cognify_in_scope(
                     Arc::clone(&graph_db),
                     Arc::clone(&database),
                     &effective_config,
+                    code_routes_task_name(&data_items),
                 )?;
             }
 
@@ -7713,7 +7747,15 @@ pub fn build_cognify_pipeline(
     // `build_standard_cognify_pipeline` always names its classify task, so
     // this cannot fail; were it ever to, the plain pipeline is returned (code
     // items then fail in classify) rather than panicking in a builder.
-    if let Err(error) = add_code_routes(&mut pipeline, storage, graph_db, db, &config) {
+    // The items are not known yet: the task keeps the CODE_REPO route's name.
+    if let Err(error) = add_code_routes(
+        &mut pipeline,
+        storage,
+        graph_db,
+        db,
+        &config,
+        EXTRACT_CODE_REPO_GRAPH_TASK_NAME,
+    ) {
         tracing::error!(%error, "build_cognify_pipeline: the code routes could not be added");
     }
     pipeline
@@ -7722,6 +7764,7 @@ pub fn build_cognify_pipeline(
 /// Put the code routes in front of a standard cognify pipeline: the route
 /// task runs the code-routed items and the classify task takes its routed
 /// input, which carries the code routes' report into the standard stages'.
+/// The route task is named `task_name` (see [`code_routes_task_name`]).
 ///
 /// # Errors
 ///
@@ -7732,6 +7775,7 @@ fn add_code_routes(
     graph_db: Arc<dyn GraphDBTrait>,
     db: Arc<dyn RelationalDb>,
     config: &CognifyConfig,
+    task_name: &'static str,
 ) -> Result<(), CognifyError> {
     let classify = pipeline
         .tasks
@@ -7760,7 +7804,7 @@ fn add_code_routes(
             // route does (`graph_only=True`).
             None,
         ))
-        .with_name(EXTRACT_CODE_REPO_GRAPH_TASK_NAME),
+        .with_name(task_name),
     );
     Ok(())
 }
@@ -7833,6 +7877,140 @@ mod tests {
     use crate::graph_integration::expand_with_nodes_and_edges;
     use cognee_models::{DataPoint, Entity, EntityType};
     use cognee_storage::MockStorage;
+
+    /// A data item stamped with `system_metadata.source = <source>`, or a
+    /// standard one.
+    fn routed_item(source: Option<&str>) -> Data {
+        let mut builder = Data::builder(
+            Uuid::new_v4(),
+            "item",
+            "/storage/item",
+            "file:///item",
+            "py",
+            "text/x-python",
+            "hash",
+            Uuid::new_v4(),
+        );
+        if let Some(source) = source {
+            builder = builder.system_metadata(json!({ "source": source }).to_string());
+        }
+        builder.build()
+    }
+
+    /// SDK-1703: the code routes task is named after the route that ran.
+    #[test]
+    fn the_code_routes_task_is_named_after_the_route_that_ran() {
+        let file = || routed_item(Some("code"));
+        let repo = || routed_item(Some("code_repo"));
+        let standard = || routed_item(None);
+        let cases: &[(&str, Vec<Data>, &str)] = &[
+            (
+                "file only",
+                vec![file(), file()],
+                EXTRACT_CODE_FILES_GRAPH_TASK_NAME,
+            ),
+            (
+                "files beside documents",
+                vec![standard(), file()],
+                EXTRACT_CODE_FILES_GRAPH_TASK_NAME,
+            ),
+            ("repo only", vec![repo()], EXTRACT_CODE_REPO_GRAPH_TASK_NAME),
+            (
+                "repo beside documents",
+                vec![repo(), standard()],
+                EXTRACT_CODE_REPO_GRAPH_TASK_NAME,
+            ),
+            (
+                "mixed",
+                vec![file(), repo()],
+                EXTRACT_CODE_REPO_GRAPH_TASK_NAME,
+            ),
+            (
+                "no code item",
+                vec![standard()],
+                EXTRACT_CODE_REPO_GRAPH_TASK_NAME,
+            ),
+        ];
+        for (case, items, expected) in cases {
+            assert_eq!(code_routes_task_name(items), *expected, "{case}");
+        }
+        assert_eq!(
+            EXTRACT_CODE_FILES_GRAPH_TASK_NAME,
+            "extract_code_files_graph"
+        );
+        assert_eq!(EXTRACT_CODE_REPO_GRAPH_TASK_NAME, "extract_code_repo_graph");
+    }
+
+    /// SDK-1703: the pipeline's first task carries the name it is given
+    /// (what `cognify()` passes from [`code_routes_task_name`]), and the
+    /// public builder, which runs before the items are known, keeps
+    /// `extract_code_repo_graph`.
+    #[tokio::test]
+    async fn the_code_routes_task_takes_the_route_name_in_the_pipeline() {
+        use cognee_database::{connect, initialize};
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_ontology::NoOpOntologyResolver;
+        use cognee_test_utils::{MockLlm, MockVectorDB};
+
+        let db = connect("sqlite::memory:").await.expect("connect");
+        initialize(&db).await.expect("migrate");
+        let db: Arc<dyn RelationalDb> = Arc::new(db);
+        let storage: Arc<dyn StorageTrait> = Arc::new(MockStorage::new());
+        let graph_db: Arc<dyn GraphDBTrait> = Arc::new(cognee_graph::MockGraphDB::new());
+        let build = || {
+            build_standard_cognify_pipeline(
+                Arc::clone(&storage),
+                Arc::clone(&graph_db),
+                Arc::new(MockVectorDB::new()),
+                Arc::new(MockEmbeddingEngine::new(8)),
+                Arc::new(MockLlm::new(vec![])),
+                Arc::clone(&db),
+                Arc::new(NoOpOntologyResolver::new()),
+                CognifyConfig::default(),
+            )
+        };
+        let first_task = |pipeline: &Pipeline| pipeline.tasks[0].name.clone();
+
+        for items in [
+            vec![routed_item(Some("code"))],
+            vec![routed_item(Some("code_repo"))],
+            vec![routed_item(Some("code")), routed_item(Some("code_repo"))],
+        ] {
+            let mut pipeline = build();
+            add_code_routes(
+                &mut pipeline,
+                Arc::clone(&storage),
+                Arc::clone(&graph_db),
+                Arc::clone(&db),
+                &CognifyConfig::default(),
+                code_routes_task_name(&items),
+            )
+            .unwrap();
+            assert_eq!(
+                first_task(&pipeline).as_deref(),
+                Some(code_routes_task_name(&items))
+            );
+            assert_eq!(
+                pipeline.tasks[1].name.as_deref(),
+                Some(CLASSIFY_DOCUMENTS_TASK_NAME)
+            );
+        }
+
+        let public = build_cognify_pipeline(
+            Arc::clone(&storage),
+            Arc::clone(&graph_db),
+            Arc::new(MockVectorDB::new()),
+            Arc::new(MockEmbeddingEngine::new(8)),
+            Arc::new(MockLlm::new(vec![])),
+            Arc::clone(&db),
+            Arc::new(NoOpOntologyResolver::new()),
+            CognifyConfig::default(),
+        );
+        assert_eq!(
+            first_task(&public).as_deref(),
+            Some(EXTRACT_CODE_REPO_GRAPH_TASK_NAME)
+        );
+    }
 
     /// SDK-1694 review: a block boundary is counted over all of a data item's
     /// chunks, DLT rows included, as Python batches them before extraction
