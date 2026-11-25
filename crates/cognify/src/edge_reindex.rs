@@ -302,9 +302,13 @@ pub async fn reindex_edge_types(
     // "needs writing" in both cases.
     // Two retrieval texts that differ only in case, spacing or apostrophes
     // collapse to a single point id: `point_id_for` runs the text through
-    // `normalize_identifier`, and nothing upstream normalises
-    // `relationship_name` before it reaches the graph
-    // (`graph_integration/expansion.rs:893-898` stores the raw LLM string).
+    // `normalize_identifier`, and the texts in the graph are not all
+    // normalised. Cognify stores an extracted edge's `relationship_name`
+    // through `generate_edge_name` (SDK-1694 O2, `expand_unit` in
+    // `graph_integration/expansion.rs`), but the retrieval text is the
+    // nonblank `edge_text` first, which is free text; edges written before O2
+    // keep the model's raw label; and a custom-schema graph stores its field
+    // names as given.
     // The cognify writer had the same hazard — one run spans many chunks, so
     // two chunks spelling a relation differently collided there as well — and
     // it is now fixed to match (SDK-778): `build_edge_types` in `tasks.rs`
