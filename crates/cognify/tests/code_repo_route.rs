@@ -689,19 +689,25 @@ async fn an_unreadable_code_file_is_a_per_item_failure() {
     assert_eq!(stack.completed(&items).await, HashSet::from([good_id]));
     assert_eq!(stack.nodes_of_type("CodeModule").await.len(), 1);
 
-    // Under the default policy the item's own error fails the run.
+    // Under `FailFast` + `WholeRun` the item's own error fails the run.
     let stack = Stack::new().await;
     let mut items = stack.add_paths(&paths, None).await;
     for item in &mut items {
         item.raw_data_location = format!("{}.missing", item.raw_data_location);
     }
-    let error = stack.cognify(items, &config(false)).await.unwrap_err();
+    let error = stack
+        .cognify(
+            items,
+            &config(false).with_rollback_scope(RollbackScope::WholeRun),
+        )
+        .await
+        .unwrap_err();
     assert!(matches!(error, CognifyError::StorageError(_)), "{error}");
 }
 
 /// Stored text that is not UTF-8 fails its item as Python's strict text-mode
 /// read does (`UnicodeDecodeError`, a `ValueError`): the run errors on it
-/// under the default policy, and no code node is written for it.
+/// under `FailFast` + `WholeRun`, and no code node is written for it.
 #[tokio::test]
 async fn a_code_file_that_is_not_utf8_fails_its_item() {
     let (_root, paths) = code_files(&[("latin.py", "x = 1\n")]);
@@ -713,7 +719,13 @@ async fn a_code_file_that_is_not_utf8_fails_its_item() {
         .await
         .unwrap();
 
-    let error = stack.cognify(items, &config(false)).await.unwrap_err();
+    let error = stack
+        .cognify(
+            items,
+            &config(false).with_rollback_scope(RollbackScope::WholeRun),
+        )
+        .await
+        .unwrap_err();
     match &error {
         CognifyError::CodeGraph(inner) => {
             assert!(

@@ -414,12 +414,17 @@ pub struct CognifyConfig {
 
     /// Axis 2 of failure handling — what a failed run removes.
     ///
-    /// Default [`RollbackScope::WholeRun`]. Read at the end of the run by
-    /// [`crate::rollback`], which turns it into a sweep scope — and, under
-    /// [`RollbackScope::FailedItems`], during the run for the abort-time
-    /// partition.
+    /// `None` (the default) follows [`Self::incremental_loading`], as Python
+    /// does (SDK-1694 D4): [`RollbackScope::FailedItems`] with it on — Python
+    /// keeps the items its failed run stamped complete — and
+    /// [`RollbackScope::WholeRun`] with it off, where Python stamps nothing
+    /// and so rolls the whole run back. [`Self::effective_rollback_scope`]
+    /// resolves it; `Some` is an explicit choice. Read at the end of the run
+    /// by [`crate::rollback`], which turns it into a sweep scope — and, under
+    /// [`RollbackScope::FailedItems`], during the run, which completes each
+    /// document as it is saved.
     #[serde(default)]
-    pub rollback_scope: RollbackScope,
+    pub rollback_scope: Option<RollbackScope>,
 
     /// Whether a summarization failure leaves its data item intact.
     ///
@@ -768,7 +773,7 @@ impl Default for CognifyConfig {
             token_counter_kind: TokenCounterKind::TikToken,
             token_count_mode: TokenCountMode::Span,
             failure_stop: FailureStop::default(),
-            rollback_scope: RollbackScope::default(),
+            rollback_scope: None,
             tolerate_summarization_failures: false,
             edge_evidence_enabled: true,
             evidence_pipeline_run_id: None,
@@ -1035,7 +1040,7 @@ impl CognifyConfig {
 
     /// Set axis 2 — what a failed run removes.
     pub fn with_rollback_scope(mut self, scope: RollbackScope) -> Self {
-        self.rollback_scope = scope;
+        self.rollback_scope = Some(scope);
         self
     }
 
@@ -1071,12 +1076,23 @@ impl CognifyConfig {
         self
     }
 
+    /// The rollback scope this configuration resolves to: the one set, else
+    /// `FailedItems` with `incremental_loading` and `WholeRun` without it
+    /// (see [`Self::rollback_scope`]).
+    pub fn effective_rollback_scope(&self) -> RollbackScope {
+        self.rollback_scope.unwrap_or(if self.incremental_loading {
+            RollbackScope::FailedItems
+        } else {
+            RollbackScope::WholeRun
+        })
+    }
+
     /// The failure-handling policy this configuration resolves to, read once
     /// per run by the stages that collect failures.
     pub fn failure_policy(&self) -> FailurePolicy {
         FailurePolicy {
             stop: self.failure_stop,
-            scope: self.rollback_scope,
+            scope: self.effective_rollback_scope(),
             tolerate_summarization_failures: self.tolerate_summarization_failures,
             chunk_failure_ratio_threshold: self.chunk_failure_ratio_threshold,
             report_cap: self.failure_report_cap,
@@ -1393,6 +1409,36 @@ mod tests {
 
         // No ownership marker unless the settings name a directory
         assert!(config.run_ownership_dir.is_none());
+    }
+
+    /// SDK-1694 D4: an unset rollback scope follows `incremental_loading`, as
+    /// Python's rollback does — it keeps the items its failed run stamped,
+    /// and stamps nothing without incremental loading — and an explicit scope
+    /// wins either way.
+    #[test]
+    fn the_default_rollback_scope_follows_incremental_loading() {
+        let config = CognifyConfig::default();
+        assert_eq!(config.rollback_scope, None);
+        assert_eq!(
+            config.effective_rollback_scope(),
+            RollbackScope::FailedItems
+        );
+        assert_eq!(config.failure_policy().scope, RollbackScope::FailedItems);
+        let without = config.clone().with_incremental_loading(false);
+        assert_eq!(without.effective_rollback_scope(), RollbackScope::WholeRun);
+        assert_eq!(without.failure_policy().scope, RollbackScope::WholeRun);
+        for incremental in [true, false] {
+            for scope in [
+                RollbackScope::WholeRun,
+                RollbackScope::FailedItems,
+                RollbackScope::Nothing,
+            ] {
+                let explicit = CognifyConfig::default()
+                    .with_incremental_loading(incremental)
+                    .with_rollback_scope(scope);
+                assert_eq!(explicit.effective_rollback_scope(), scope);
+            }
+        }
     }
 
     #[test]

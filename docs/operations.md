@@ -485,17 +485,19 @@ went wrong. `CognifyResult.failures` carries it on success;
 
 What happens to what the run already wrote is decided at the end, from two
 independent settings — *when to stop* (`FailFast`, the default, or `RunToEnd`)
-and *what to sweep* (`WholeRun`, the default, `FailedItems`, or `Nothing`). The
+and *what to sweep* (`WholeRun`, `FailedItems`, or `Nothing`; unset, it is
+`FailedItems` with `incremental_loading` — the default — and `WholeRun`
+without, as Python keeps stamped items only with incremental loading). The
 full matrix is in
 [Cognify failure handling](configuration.md#cognify-failure-handling); the end
 states are:
 
-- **Default (`FailFast` + `WholeRun`).** The run stops at the first failed
-  *batch* — not the first failed file, see below — everything it created is
-  removed, the run is recorded `ERRORED` and the call returns `Err`. The store
-  converges to its pre-run state — what earlier runs completed is untouched,
-  because the sweep selects only rows naming *this* run. Python's default, in
-  execution and in end state.
+- **`WholeRun` (the default with `incremental_loading` off).** The run stops
+  at the first failed *batch* — not the first failed file, see below —
+  everything it created is removed, the run is recorded `ERRORED` and the call
+  returns `Err`. The store converges to its pre-run state — what earlier runs
+  completed is untouched, because the sweep selects only rows naming *this*
+  run. Python's end state without incremental loading.
 - **`FailedItems` below the failure ratio.** The run *completes*. Only the
   failed files' contributions are removed; the files that finished are kept,
   indexed and marked complete; and the call returns `Ok` with the failed-file

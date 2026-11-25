@@ -1133,7 +1133,7 @@ compares against Python's.
 | Builder | Field | Env var | Key | Default |
 |---|---|---|---|---|
 | `with_failure_stop` | `failure_stop` | `RAISE_INCREMENTAL_LOADING_ERRORS` / `COGNEE_RAISE_INCREMENTAL_LOADING_ERRORS` | `cognify.raise_incremental_loading_errors` (`raise_incremental_loading_errors`) | `FailFast` (unset) |
-| `with_rollback_scope` | `rollback_scope` | `COGNEE_COGNIFY_ROLLBACK_SCOPE` (`whole_run` / `failed_items` only) | `cognify.rollback_scope` | `WholeRun` |
+| `with_rollback_scope` | `rollback_scope` | `COGNEE_COGNIFY_ROLLBACK_SCOPE` (`whole_run` / `failed_items` only) | `cognify.rollback_scope` | unset: `FailedItems` with `incremental_loading`, `WholeRun` without (`effective_rollback_scope`) |
 | `with_summarization_failure_tolerance` | `tolerate_summarization_failures` | `COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES` | `cognify.tolerate_summarization_failures` | `false` |
 | `with_chunk_failure_ratio_threshold` | `chunk_failure_ratio_threshold` | `COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO` | `cognify.max_chunk_failure_ratio` | `0.05` |
 | `with_failure_report_cap` | `failure_report_cap` | `COGNEE_COGNIFY_FAILURE_REPORT_CAP` | `cognify.failure_report_cap` | `100` |
@@ -1205,7 +1205,11 @@ the gate at all: it fails no item, so there is nothing to stop for.
 complete and keeps the rest. `WholeRun` is Python's end state with
 `incremental_loading` off (nothing is stamped, so its rollback removes the
 whole run); `FailedItems` is Python's end state with it on (its rollback keeps
-the items it stamped).
+the items it stamped). **An unset `rollback_scope` follows
+`incremental_loading`** accordingly (SDK-1694 D4): `FailedItems` by default,
+`WholeRun` with `incremental_loading` off. One difference stays: below the
+failure ratio a `FailedItems` run completes and returns `Ok` with the failed
+files in its report, where Python errors the run whenever an item failed.
 
 Under `FailedItems` each file is **completed as soon as it is saved**
 (SDK-1694 O5b): the document stage saves a file once all its results are in
@@ -1265,8 +1269,8 @@ and the complete files waiting behind the stop are discarded.
 
 | Combination | End state |
 |---|---|
-| `FailFast` + `WholeRun` *(default)* | Stops dispatching at the first failure, removes everything the run created, marks the run `ERRORED`, returns `Err`. Everything earlier runs completed is untouched. Python's default |
-| `FailFast` + `FailedItems` | Stops dispatching at the first failure; the files that completed — before or after it, while their calls were in flight — are kept, indexed and marked as they complete; the failed and never-reached ones are removed and left unmarked. *Below the ratio* the run completes and returns `Ok`; *above it, or with no survivor,* it is `ERRORED` and returns `Err`, the completed files kept |
+| `FailFast` + `WholeRun` *(default without `incremental_loading`)* | Stops dispatching at the first failure, removes everything the run created, marks the run `ERRORED`, returns `Err`. Everything earlier runs completed is untouched. Python's end state without `incremental_loading` |
+| `FailFast` + `FailedItems` *(default)* | Stops dispatching at the first failure; the files that completed — before or after it, while their calls were in flight — are kept, indexed and marked as they complete; the failed and never-reached ones are removed and left unmarked. *Below the ratio* the run completes and returns `Ok`; *above it, or with no survivor,* it is `ERRORED` and returns `Err`, the completed files kept. Python's default end state |
 | `RunToEnd` + `WholeRun` | Pays for the whole run to produce the complete failure list, then removes everything the run created |
 | `RunToEnd` + `FailedItems` | Every good file is cognified and marked as it completes; only the failed files are removed, and they come back to the caller in the report. *Above the ratio* the call returns `Err`, the good files kept |
 | _either_ + `Nothing` *(code only)* | Nothing is removed. Knowingly leaves partially-cognified files in place, permanently — see above |

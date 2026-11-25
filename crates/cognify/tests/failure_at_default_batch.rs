@@ -65,7 +65,8 @@ fn the_fixture_runs_at_the_shipped_default_in_flight_cap() {
     );
 }
 
-/// The default pair — `FailFast` + `WholeRun` — at the default in-flight cap.
+/// The `FailFast` + `WholeRun` pair (the default without `incremental_loading`)
+/// at the default in-flight cap.
 ///
 /// End state is the same as the one-call-at-a-time fixture's: nothing persisted,
 /// nothing marked, `ERRORED`, `Err`. What differs is the report and the bill:
@@ -87,7 +88,7 @@ async fn the_default_pair_in_one_window_reaches_every_file_and_still_converges()
     let counting = Arc::new(CountingLlm::new(8));
     let result = harness
         .run_over(
-            &default_batch_extraction_config(),
+            &default_batch_extraction_config().with_rollback_scope(RollbackScope::WholeRun),
             &[first, bad, last],
             counting.clone(),
         )

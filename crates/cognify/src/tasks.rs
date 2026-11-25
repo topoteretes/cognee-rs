@@ -9743,9 +9743,13 @@ mod tests {
         let storage = MockStorage::new();
         let (input, _a, b, c) = three_documents_with_a_bad_middle(&storage).await;
 
-        let err = run_chunking(&input, &storage, &CognifyConfig::default())
-            .await
-            .expect_err("the default policy still aborts");
+        let err = run_chunking(
+            &input,
+            &storage,
+            &CognifyConfig::default().with_rollback_scope(RollbackScope::WholeRun),
+        )
+        .await
+        .expect_err("the default policy still aborts");
 
         let CognifyError::RunFailed { report } = err else {
             panic!("expected RunFailed, got: {err:?}");
@@ -9867,9 +9871,13 @@ mod tests {
         assert_eq!(result.failures.total_items(), 3);
         assert_eq!(result.failures.total_chunks(), result.chunks.len());
 
-        let err = run_chunking(&input, &storage, &CognifyConfig::default())
-            .await
-            .expect_err("default aborts");
+        let err = run_chunking(
+            &input,
+            &storage,
+            &CognifyConfig::default().with_rollback_scope(RollbackScope::WholeRun),
+        )
+        .await
+        .expect_err("default aborts");
         let CognifyError::RunFailed { report } = err else {
             panic!("expected RunFailed");
         };
@@ -14357,7 +14365,9 @@ mod tests {
         let graph = Arc::new(cognee_graph::MockGraphDB::new());
         let (input, _a, b, c) = three_chunk_files(dataset_id);
 
-        let config = one_call_at_a_time(CognifyConfig::default());
+        let config = one_call_at_a_time(
+            CognifyConfig::default().with_rollback_scope(RollbackScope::WholeRun),
+        );
         let err = run_extraction_with_config(&input, graph.clone(), &db, &config)
             .await
             .expect_err("the default scope still aborts the run");
@@ -14412,7 +14422,7 @@ mod tests {
         };
 
         // All four chunks in flight at once (the default cap is far above 4).
-        let config = CognifyConfig::default();
+        let config = CognifyConfig::default().with_rollback_scope(RollbackScope::WholeRun);
         let err = run_extraction_with_config(&input, graph, &db, &config)
             .await
             .expect_err("default scope aborts");
@@ -14966,7 +14976,10 @@ mod tests {
         };
 
         for (config, should_fail) in [
-            (CognifyConfig::default(), true),
+            (
+                CognifyConfig::default().with_rollback_scope(RollbackScope::WholeRun),
+                true,
+            ),
             (
                 CognifyConfig::default().with_rollback_scope(RollbackScope::FailedItems),
                 false,

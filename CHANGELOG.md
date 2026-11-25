@@ -18,6 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **The default `cognify.rollback_scope` follows `incremental_loading`
+  (SDK-1694 D4).** Unset, it is now `failed_items` with `incremental_loading`
+  on (the default) and `whole_run` with it off — Python keeps the items its
+  failed run stamped complete, and stamps nothing without incremental loading.
+  A run with a failed document therefore keeps the documents it completed
+  instead of rolling everything back; below the chunk failure ratio it
+  completes and returns `Ok`, reporting the failed documents. Set
+  `COGNEE_COGNIFY_ROLLBACK_SCOPE=whole_run` for the previous behaviour.
+  **API:** `CognifyConfig::rollback_scope` is now `Option<RollbackScope>`
+  (`None` = follow `incremental_loading`); read the resolved scope with
+  `CognifyConfig::effective_rollback_scope()`. `with_rollback_scope` is
+  unchanged.
 - **A `failed_items` cognify run completes each document as it saves it, and
   a failed run keeps what it completed (SDK-1694, stage O5b).** Python stamps
   a data item complete once its own tasks ran, and its rollback keeps the

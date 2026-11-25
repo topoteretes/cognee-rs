@@ -157,7 +157,7 @@ async fn incremental_loading_off_reprocesses_everything() {
     );
 }
 
-/// A failed run marks nothing, so the next run redoes everything it was
+/// A failed `WholeRun` run marks nothing, so the next run redoes everything it was
 /// responsible for. Without this, invariant I2 would be violated in the worst
 /// possible direction: a swept item that still looks complete is skipped
 /// forever.
@@ -168,9 +168,9 @@ async fn markers_are_not_written_for_a_failed_run() {
     let bad = harness.add_file("Bob FAILMARKER breaks here.").await;
 
     harness
-        .run(&extraction_config())
+        .run(&extraction_config().with_rollback_scope(cognee_cognify::RollbackScope::WholeRun))
         .await
-        .expect_err("the default pair errors on the first failure");
+        .expect_err("`FailFast` + `WholeRun` errors on the first failure");
 
     assert!(!harness.is_marked(good).await);
     assert!(!harness.is_marked(bad).await);

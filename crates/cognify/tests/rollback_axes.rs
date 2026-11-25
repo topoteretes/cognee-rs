@@ -28,16 +28,19 @@ use rollback_harness::{Harness, extraction_config};
 use cognee_database::PipelineRunStatus;
 use cognee_vector::VectorDB;
 
-/// The default pair — `FailFast` + `WholeRun` — leaves the stores exactly as it
-/// found them. Python's default in both execution and end state.
+/// `FailFast` + `WholeRun` — the default without `incremental_loading` —
+/// leaves the stores exactly as it found them. Python's end state without
+/// incremental loading.
 #[tokio::test]
-async fn a_failed_default_run_converges_to_its_pre_run_state() {
+async fn a_failed_whole_run_converges_to_its_pre_run_state() {
     let mut harness = Harness::new().await;
     let good = harness.add_file("Alice works at Acme.").await;
     let bad = harness.add_file("Bob FAILMARKER breaks here.").await;
     let unreached = harness.add_file("Carol also works at Acme.").await;
 
-    let result = harness.run(&extraction_config()).await;
+    let result = harness
+        .run(&extraction_config().with_rollback_scope(RollbackScope::WholeRun))
+        .await;
 
     assert!(
         matches!(result, Err(CognifyError::RunFailed { .. })),
@@ -261,8 +264,9 @@ async fn a_sweep_never_replaces_the_pipeline_error() {
     );
 }
 
-/// A persistence failure is fatal under every combination — a store that
-/// cannot be written cannot be reasoned about — and the run is swept, not left
+/// A persistence failure of the only file fails the run — under `WholeRun` as
+/// a run-fatal error, under the default `FailedItems` as that file's failure,
+/// which leaves no survivor (SDK-1694 O5b) — and the run is swept, not left
 /// half-written.
 #[tokio::test]
 async fn a_persistence_failure_is_fatal_and_swept() {

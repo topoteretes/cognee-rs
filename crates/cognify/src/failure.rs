@@ -11,14 +11,17 @@
 //! * [`FailureStop`] — *when to stop*: [`FailureStop::FailFast`] (default) stops
 //!   scheduling further work at the first stage-level failure;
 //!   [`FailureStop::RunToEnd`] keeps going and decides at the end.
-//! * [`RollbackScope`] — *what to sweep*: [`RollbackScope::WholeRun`] (default),
+//! * [`RollbackScope`] — *what to sweep*: [`RollbackScope::WholeRun`],
 //!   [`RollbackScope::FailedItems`], or — in code only, never from the
-//!   environment — [`RollbackScope::Nothing`].
+//!   environment — [`RollbackScope::Nothing`]. Unset, a cognify config uses
+//!   `FailedItems` with `incremental_loading` and `WholeRun` without it
+//!   ([`crate::CognifyConfig::effective_rollback_scope`], SDK-1694 D4).
 //!
 //! The default pair is Python's default behaviour in both execution and end
-//! state: stop at the first failure, error the run (and, under
-//! `FailedItems`, keep the documents the run completed before it stopped, as
-//! Python's per-item rollback keeps the items it stamped).
+//! state: stop at the first failure, keep the documents the run completed
+//! before it stopped, as Python's per-item rollback keeps the items it
+//! stamped, and error the run — unless the failures stay below the chunk
+//! failure ratio, where Rust completes the run and reports them.
 //!
 //! Failure policy is a property of the stage, not a user choice — with one
 //! exception. Summarization failures are fatal by default (Python parity) and
@@ -97,7 +100,10 @@ impl FailureStop {
 /// which turns it into the scope handed to the sweep.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum RollbackScope {
-    /// Remove everything this run created.
+    /// Remove everything this run created. The enum's default (and
+    /// [`FailurePolicy::default`]'s); a cognify config left unset resolves
+    /// to it only without `incremental_loading`
+    /// ([`crate::CognifyConfig::effective_rollback_scope`]).
     #[default]
     WholeRun,
 

@@ -292,8 +292,9 @@ async fn the_marker_is_removed_after_the_terminal_row_is_written() {
 }
 
 /// Python: a failed `COMPLETED` write is a run failure. The run errors, rolls
-/// back its writes and records `ERRORED`; that row is terminal, so the marker
-/// goes.
+/// back what it did not complete (here nothing: its one document was saved
+/// and stamped, so it is kept) and records `ERRORED`; that row is terminal,
+/// so the marker goes.
 #[tokio::test]
 async fn a_failed_completed_write_fails_the_run_and_writes_errored() {
     let dir = tempfile::tempdir().unwrap();
@@ -310,7 +311,11 @@ async fn a_failed_completed_write_fails_the_run_and_writes_errored() {
         vec![PipelineRunStatus::Started, PipelineRunStatus::Errored],
         "STARTED, then ERRORED in place of the COMPLETED that could not be written"
     );
-    assert_eq!(out.graph_nodes, 0, "the failed run was rolled back");
+    assert!(
+        out.graph_nodes > 0,
+        "under the default `failed_items` the document the run completed is kept, as \
+         Python's rollback keeps the items it stamped (SDK-1694 D4)"
+    );
     assert_eq!(
         marker_count(dir.path()),
         0,

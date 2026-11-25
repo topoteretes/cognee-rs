@@ -2041,7 +2041,9 @@ mod tests {
         let documents: Vec<DocumentSpec<'_>> = (1..=10)
             .map(|id| (id as u128, vec![("Alice:Person Bob:Person", None)]))
             .collect();
-        let config = CognifyConfig::default().with_max_unsaved_documents(1);
+        let config = CognifyConfig::default()
+            .with_rollback_scope(RollbackScope::WholeRun)
+            .with_max_unsaved_documents(1);
         let error = run(&test, llm.clone(), &input(&documents), &config)
             .await
             .expect_err("the save fails");
