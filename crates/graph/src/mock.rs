@@ -43,6 +43,10 @@ pub struct MockGraphDB {
     /// was supposed to survive it — ownership rows, completion markers — is
     /// still there to assert on.
     delete_nodes_error: Arc<Mutex<Option<String>>>,
+    /// Optional injected error returned from `get_node`. Lets a test make a
+    /// single-node read fail (a lookup the caller treats as optional) while
+    /// every other read and write still works.
+    get_node_error: Arc<Mutex<Option<String>>>,
     /// When set, [`GraphDBTrait::close`] never returns. Lets a test stand in for
     /// a slot whose teardown outlives the caller's patience — a large embedded
     /// checkpoint, or a pool waiting on a connection that will not come back —
@@ -68,6 +72,7 @@ impl MockGraphDB {
             add_nodes_error: Arc::new(Mutex::new(None)),
             add_edges_error: Arc::new(Mutex::new(None)),
             delete_nodes_error: Arc::new(Mutex::new(None)),
+            get_node_error: Arc::new(Mutex::new(None)),
             hang_on_close: false,
             supports_truth_state: Arc::new(AtomicBool::new(true)),
             supports_feedback_weights: Arc::new(AtomicBool::new(true)),
@@ -140,6 +145,20 @@ impl MockGraphDB {
     /// so a test can assert that re-running a failed operation converges.
     pub fn clear_delete_nodes_error(&self) {
         let mut slot = self.delete_nodes_error.lock().unwrap(); // lock poison is unrecoverable
+        *slot = None;
+    }
+
+    /// Inject an error returned from every subsequent `get_node` call as
+    /// `GraphDBError::QueryError`. `get_nodes` and the other reads are not
+    /// affected.
+    pub fn set_get_node_error(&self, msg: impl Into<String>) {
+        let mut slot = self.get_node_error.lock().unwrap(); // lock poison is unrecoverable
+        *slot = Some(msg.into());
+    }
+
+    /// Clear an error previously armed by [`MockGraphDB::set_get_node_error`].
+    pub fn clear_get_node_error(&self) {
+        let mut slot = self.get_node_error.lock().unwrap(); // lock poison is unrecoverable
         *slot = None;
     }
 
@@ -309,6 +328,10 @@ impl GraphDBTrait for MockGraphDB {
     }
 
     async fn get_node(&self, node_id: &str) -> GraphDBResult<Option<NodeData>> {
+        let injected = self.get_node_error.lock().unwrap().clone(); // lock poison is unrecoverable
+        if let Some(msg) = injected {
+            return Err(GraphDBError::QueryError(msg));
+        }
         Ok(self.nodes.lock().unwrap().get(node_id).cloned()) // lock poison is unrecoverable
     }
 
@@ -989,6 +1012,28 @@ mod tests {
 
         let node = db.get_node(&entity.base.id.to_string()).await.unwrap();
         assert!(node.is_some());
+    }
+
+    #[tokio::test]
+    async fn an_injected_get_node_error_fails_only_get_node_until_cleared() {
+        let db = MockGraphDB::new();
+        let entity = Entity::new("Alice", None, "A person", None);
+        db.add_node(&entity).await.unwrap();
+        let id = entity.base.id.to_string();
+
+        db.set_get_node_error("lookup down");
+        match db.get_node(&id).await {
+            Err(GraphDBError::QueryError(msg)) => assert_eq!(msg, "lookup down"),
+            other => panic!("expected the injected error, got {other:?}"),
+        }
+        // Other reads still work.
+        assert_eq!(
+            db.get_nodes(std::slice::from_ref(&id)).await.unwrap().len(),
+            1
+        );
+
+        db.clear_get_node_error();
+        assert!(db.get_node(&id).await.unwrap().is_some());
     }
 
     #[tokio::test]

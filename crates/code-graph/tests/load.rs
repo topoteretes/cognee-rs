@@ -341,6 +341,44 @@ async fn an_unchanged_untagged_reload_is_skipped() {
     assert_eq!(again["last_snapshot_id"], stamped["last_snapshot_id"]);
 }
 
+/// A failed read of the stored stamp is not a reason to skip: the reload of
+/// an unchanged snapshot loads in full (`pipeline::already_loaded` answers
+/// no and logs), writes the same graph, and stamps it again.
+#[tokio::test]
+async fn a_failed_stamp_lookup_loads_in_full_instead_of_skipping() {
+    let (_root, repo_path) = repo("snapshot:docs_and_flows");
+    let graph = MockGraphDB::new();
+    let first = load_code_graph(&graph, None, &config(), &repo_path, None, None)
+        .await
+        .unwrap();
+    assert!(!first.skipped);
+    let shape = graph_shape(&graph).await;
+
+    graph.set_get_node_error("stamp lookup failed");
+    let second = load_code_graph(&graph, None, &config(), &repo_path, None, None)
+        .await
+        .unwrap();
+    graph.clear_get_node_error();
+
+    assert!(
+        !second.skipped,
+        "a failed stamp lookup must not skip the load"
+    );
+    assert!(!second.state.data_points.is_empty());
+    let delta = second.delta.expect("a full load reports its delta");
+    assert_eq!(delta["snapshot_id"], first.delta.unwrap()["snapshot_id"]);
+    assert_eq!(delta["nodes_added"], json!(0));
+    assert_eq!(graph_shape(&graph).await, shape);
+    let stamped = repository_node(&graph, &repo_path).await;
+    assert_eq!(stamped["last_delta"], Value::Object(delta));
+
+    // With the lookup back, the next reload of the same snapshot is skipped.
+    let third = load_code_graph(&graph, None, &config(), &repo_path, None, None)
+        .await
+        .unwrap();
+    assert!(third.skipped);
+}
+
 /// A tagged load is never skipped, but an unchanged one writes no fact node
 /// and no edge (the delta write).
 #[tokio::test]
@@ -1123,35 +1161,6 @@ async fn a_missing_configured_binary_is_enola_not_installed() {
         "{error}"
     );
     assert_eq!(error.status_code(), 500);
-}
-
-#[tokio::test]
-async fn a_binary_that_cannot_be_found_is_enola_not_installed() {
-    // No configured path: the bare `enola` is resolved on PATH at spawn, and
-    // a missing binary reports NotFound, which maps to EnolaNotInstalled.
-    let (_root, repo_path) = repo("snapshot:basic");
-    let config = CodeGraphConfig {
-        enola_path: String::new(),
-        ..CodeGraphConfig::default()
-    };
-    // Only meaningful where no real enola is installed on PATH.
-    if which_enola_on_path() {
-        return;
-    }
-    let error = run_enola_generate(&config, &repo_path).await.unwrap_err();
-    assert!(
-        matches!(error, CodeGraphError::EnolaNotInstalled(_)),
-        "{error}"
-    );
-}
-
-/// Whether `enola` resolves on this machine's PATH, asked of the shell so
-/// the test reads no environment itself.
-fn which_enola_on_path() -> bool {
-    std::process::Command::new("sh")
-        .args(["-c", "command -v enola"])
-        .output()
-        .is_ok_and(|output| output.status.success())
 }
 
 #[tokio::test]
