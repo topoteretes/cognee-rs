@@ -387,6 +387,9 @@ pub(crate) fn pre_stamp_extraction(
 /// storage. The [`ArtifactProducers`] set names every chunk that produced each
 /// merged entity and edge, not just the one that created it — merging keeps
 /// only the first, and one ownership row per producing file needs all of them.
+/// It also names, per `(entity, type)` and per type, the chunks that declared
+/// them, and the chunk whose ontology lookup brought in each ontology-only
+/// entity and ontology edge (SDK-1694 O5a).
 ///
 /// `claimed_existing_edges` holds the edges this run produced that
 /// `existing_edges` says are already in the graph. They must NOT be written
@@ -549,14 +552,13 @@ impl Expansion {
     /// item that first wrote the edge would take it from under every later
     /// one that also produced it.
     ///
-    /// An existing edge no chunk produced, which is an ontology edge, is
-    /// dropped, as on Python's ledger path. Python's in-graph provenance
-    /// attaches a document-scoped source ref to it instead, and Rust has no
-    /// in-graph provenance. The edge keeps the ledger row its first write
-    /// recorded, which usually has a nil `data_id` (no chunk produced it) and
-    /// which a delete retires through its endpoints
-    /// (`structural_edges_owned_by`). Per-document rows for ontology and
-    /// structural edges are a later stage (SDK-1694 O5a).
+    /// An existing ontology edge is claimed the same way, by every document
+    /// whose ontology lookup brought it in (SDK-1694 O5a): Python's in-graph
+    /// provenance attaches a document-scoped source ref to it, and Rust's
+    /// ledger rows are the counterpart. Python's ledger path records nothing
+    /// for any existing edge, extracted or ontology. An existing edge nothing
+    /// in this run produced (no producers recorded, a hand-built input) is
+    /// dropped.
     ///
     /// Run once the units are merged: the check needs the final ids, and the
     /// writer may run it per document.
@@ -574,7 +576,7 @@ impl Expansion {
             let key = edge.dedup_key();
             if !existing.contains(&key) {
                 self.edges.push(edge);
-            } else if !self.producers.edge_chunks(&key).is_empty() {
+            } else if self.producers.produces_edge(&key) {
                 // One claim per key: an extracted edge and an ontology edge
                 // can share one, and both are on the list until the in-memory
                 // deduplication.
@@ -1106,6 +1108,9 @@ struct ExpansionMerger {
     stats: EdgeResolutionStats,
     timestamps: Vec<TimestampNode>,
     timestamp_index: HashMap<Uuid, usize>,
+    /// The entities whose first unit brought them in through the ontology
+    /// alone (see [`ArtifactProducers::is_ontology_first`]).
+    ontology_first: HashSet<Uuid>,
 }
 
 impl ExpansionMerger {
@@ -1143,8 +1148,15 @@ impl ExpansionMerger {
                     }
                 }
                 None => {
-                    self.node_index
-                        .insert(node.entity.base.id, self.nodes.len());
+                    let id = node.entity.base.id;
+                    // First seen through the ontology alone: its first unit
+                    // has an ontology producer and no extracting one.
+                    if expansion.producers.entity_chunks(id).is_empty()
+                        && !expansion.producers.ontology_entity_chunks(id).is_empty()
+                    {
+                        self.ontology_first.insert(id);
+                    }
+                    self.node_index.insert(id, self.nodes.len());
                     self.nodes.push(node);
                 }
             }
@@ -1172,11 +1184,15 @@ impl ExpansionMerger {
     }
 
     fn finish(self) -> Expansion {
+        let mut producers = self.producers;
+        for id in self.ontology_first {
+            producers.mark_ontology_first(id);
+        }
         Expansion {
             nodes: self.nodes,
             edges: self.edges,
             claimed_existing_edges: self.claimed_existing_edges,
-            producers: self.producers,
+            producers,
             stats: self.stats,
             timestamps: self.timestamps,
         }
@@ -1291,6 +1307,26 @@ fn expand_unit(
     let mut ontology_entities_map: IndexMap<String, GraphNodePair> = IndexMap::new();
     let mut ontology_edge_keys: HashSet<String> = HashSet::new();
     let mut ontology_edges_out: Vec<GraphEdgePair> = Vec::new();
+    // The chunk whose ontology lookup first brought in each ontology node and
+    // edge of this unit (SDK-1694 O5a): which document the ledger rows of
+    // ontology output name. Filled from the entries each lookup appends.
+    let mut ontology_node_chunks: HashMap<Uuid, Uuid> = HashMap::new();
+    let mut ontology_edge_chunks: Vec<Uuid> = Vec::new();
+    let record_ontology_output = |chunk_id: Uuid,
+                                  (types_before, entities_before): (usize, usize),
+                                  types: &IndexMap<String, EntityType>,
+                                  entities: &IndexMap<String, GraphNodePair>,
+                                  edges: &[GraphEdgePair],
+                                  node_chunks: &mut HashMap<Uuid, Uuid>,
+                                  edge_chunks: &mut Vec<Uuid>| {
+        for (_, entity_type) in types.iter().skip(types_before) {
+            node_chunks.entry(entity_type.base.id).or_insert(chunk_id);
+        }
+        for (_, pair) in entities.iter().skip(entities_before) {
+            node_chunks.entry(pair.entity.base.id).or_insert(chunk_id);
+        }
+        edge_chunks.resize(edges.len(), chunk_id);
+    };
 
     // Process all graphs — each graph carries its source chunk_id
     // `position` is the chunk's ordinal in this unit. Registry entries record
@@ -1450,6 +1486,8 @@ fn expand_unit(
                                 }
 
                                 // Process ontology subgraph nodes and edges
+                                let before =
+                                    (ontology_types_map.len(), ontology_entities_map.len());
                                 process_ontology_nodes(
                                     onto_nodes,
                                     dataset_id,
@@ -1477,6 +1515,15 @@ fn expand_unit(
                                     onto_edges,
                                     &mut ontology_edge_keys,
                                     &mut ontology_edges_out,
+                                );
+                                record_ontology_output(
+                                    chunk_id,
+                                    before,
+                                    &ontology_types_map,
+                                    &ontology_entities_map,
+                                    &ontology_edges_out,
+                                    &mut ontology_node_chunks,
+                                    &mut ontology_edge_chunks,
                                 );
 
                                 // Insert under canonical key
@@ -1627,6 +1674,7 @@ fn expand_unit(
             // Process deferred ontology individual subgraph (outside the Vacant borrow)
             if let Some(subgraph) = deferred_individual_data {
                 let (ont_nodes, ont_edges, _) = &*subgraph;
+                let before = (ontology_types_map.len(), ontology_entities_map.len());
                 process_ontology_nodes(
                     ont_nodes,
                     dataset_id,
@@ -1644,6 +1692,15 @@ fn expand_unit(
                     ont_edges,
                     &mut ontology_edge_keys,
                     &mut ontology_edges_out,
+                );
+                record_ontology_output(
+                    chunk_id,
+                    before,
+                    &ontology_types_map,
+                    &ontology_entities_map,
+                    &ontology_edges_out,
+                    &mut ontology_node_chunks,
+                    &mut ontology_edge_chunks,
                 );
             }
 
@@ -1875,6 +1932,13 @@ fn expand_unit(
             et.base.id,
             Some(dataset_id),
         );
+        // The class's lookup chunk (recorded against the type id) owns the
+        // node made for it too.
+        if let Some(chunk_id) = ontology_node_chunks.get(&et.base.id).copied() {
+            ontology_node_chunks
+                .entry(entity.base.id)
+                .or_insert(chunk_id);
+        }
         graph_nodes.push(GraphNodePair::new(entity, Some(et)));
     }
 
@@ -1890,13 +1954,33 @@ fn expand_unit(
     // keyed on the final id. The merger then only combines across units.
     let graph_nodes = first_node_per_id(graph_nodes);
 
+    // Type and ontology producers (SDK-1694 O5a). An entity the unit
+    // extracted is owned by its extracting chunks; one only the ontology
+    // brought in, by the chunk whose lookup did. Either way its owners own its
+    // type — in a unit an entity has one — and so the `is_a` edge to it.
+    for pair in &graph_nodes {
+        let entity_id = pair.entity.base.id;
+        let mut owners = producers.entity_chunks(entity_id).to_vec();
+        if owners.is_empty()
+            && let Some(chunk_id) = ontology_node_chunks.get(&entity_id).copied()
+        {
+            producers.record_ontology_entity(entity_id, chunk_id);
+            owners.push(chunk_id);
+        }
+        for entity_type in pair.entity_types() {
+            for chunk_id in &owners {
+                producers.record_entity_type(entity_id, entity_type.base.id, *chunk_id);
+            }
+        }
+    }
+    for (edge, chunk_id) in ontology_edges_out.iter().zip(&ontology_edge_chunks) {
+        producers.record_ontology_edge(edge.dedup_key(), *chunk_id);
+    }
+
     // Merge LLM-extracted edges with ontology-derived edges
     let mut graph_edges: Vec<GraphEdgePair> = edge_map.into_values().collect();
     graph_edges.extend(ontology_edges_out);
 
-    // Ontology-derived nodes and edges appended above have no producing chunk
-    // and therefore no producer entry; callers fall back to today's behavior
-    // for them.
     let timestamps = timestamp_order
         .into_iter()
         .filter_map(|id| timestamp_map.remove(&id))
@@ -2283,7 +2367,7 @@ impl RunGraph {
         timestamp_positions.sort_unstable();
         timestamp_positions.dedup();
 
-        let nodes = node_positions
+        let nodes: Vec<GraphNodePair> = node_positions
             .into_iter()
             .map(|position| {
                 let node = &mut merged.nodes[position];
@@ -2291,6 +2375,13 @@ impl RunGraph {
                 node.clone()
             })
             .collect();
+        // A run-level fact the document's own producers cannot know: whether
+        // the entity's first appearance in the run was ontology-only.
+        for node in &nodes {
+            if merged.ontology_first.contains(&node.entity.base.id) {
+                producers.mark_ontology_first(node.entity.base.id);
+            }
+        }
         DocumentGraph {
             nodes,
             edges: edge_positions
@@ -5815,12 +5906,14 @@ mod tests {
         );
     }
 
-    /// Item 8 of SDK-1694 O2: an ontology edge the graph already holds is
-    /// neither written nor claimed. No chunk produced it, and Python's ledger
-    /// records nothing for an existing edge outside
-    /// `_produced_edge_identities` either.
+    /// An ontology edge the graph already holds is not written again (O2), and
+    /// since SDK-1694 O5a it is claimed by the chunk whose ontology lookup
+    /// brought it in, as Python's in-graph provenance attaches the document's
+    /// ref to it. Its producer is recorded as ontology output, never as an
+    /// extracting chunk (which would link the chunk to it with `contains`).
     #[tokio::test]
-    async fn an_existing_ontology_edge_is_not_claimed() {
+    async fn an_existing_ontology_edge_is_claimed_by_the_chunk_that_looked_it_up() {
+        let chunk_id = Uuid::new_v4();
         let chunk = KnowledgeGraph {
             nodes: vec![node("techcorp", "TechCorp", "Organization", "")],
             edges: vec![],
@@ -5834,7 +5927,7 @@ mod tests {
             let chunk = chunk.clone();
             async move {
                 expand_extracted_graphs(
-                    vec![(Uuid::new_v4(), chunk)],
+                    vec![(chunk_id, chunk)],
                     Uuid::new_v4(),
                     &HashMap::new(),
                     &HashMap::new(),
@@ -5855,10 +5948,25 @@ mod tests {
             keys(&fresh.edges).contains(&organisation_is_a_legal_entity),
             "a fresh graph gets the ontology edge"
         );
+        assert_eq!(
+            fresh
+                .producers
+                .ontology_edge_chunks(&organisation_is_a_legal_entity),
+            [chunk_id]
+        );
+        assert!(
+            fresh
+                .producers
+                .edge_chunks(&organisation_is_a_legal_entity)
+                .is_empty()
+        );
 
         let again = expand_against(HashSet::from([organisation_is_a_legal_entity.clone()])).await;
         assert!(!keys(&again.edges).contains(&organisation_is_a_legal_entity));
-        assert!(again.claimed_existing_edges.is_empty());
+        assert_eq!(
+            keys(&again.claimed_existing_edges),
+            [organisation_is_a_legal_entity]
+        );
     }
 
     /// The run's graph merged one document at a time (SDK-1694 O4b) equals

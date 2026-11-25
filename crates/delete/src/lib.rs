@@ -1740,7 +1740,10 @@ impl DeleteService {
 
         // Structural edges (`is_part_of`, `contains`, ...) are recorded with a
         // nil `data_id`, so the queries above never see them; find them through
-        // their endpoints instead. Each has an endpoint in `nodes`, so its edge
+        // their endpoints instead. (Their per-document rows, written beside the
+        // nil row since SDK-1694 O5a, share its slug, so the slug-exclusive
+        // query above never selects them either; they leave with the item's
+        // other rows below. Reading them is per-document delete, O6.) Each has an endpoint in `nodes`, so its edge
         // leaves the graph with it: its `EdgeType` text is weighed below and its
         // legacy `Triplet_text` point goes (Rust's cognify never wrote one for a
         // structural edge, but Python's did, for every graph edge).

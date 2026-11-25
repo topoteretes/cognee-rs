@@ -129,8 +129,12 @@ use crate::tasks::{
 /// Borrowed, so a run saved as one group costs no copy; a caller that builds
 /// one group per document owns that document's artifacts and lends them.
 /// `producers` must name the producing chunks of `entities`, `edges`,
-/// `timestamps` and `claimed_existing_edges`; `chunks` are what attributes
-/// them to data items, so a group carries the chunks its artifacts came from.
+/// `timestamps` and `claimed_existing_edges`, of each entity's types and of
+/// the ontology output (SDK-1694 O5a); `chunks` are what attributes them to
+/// data items, so a group carries the chunks its artifacts came from. A
+/// group's ledger rows name only the documents of its own `chunks`: an
+/// artifact the group carries but another document produced (an earlier
+/// document's type on a shared entity) gets no row from it.
 #[derive(Clone, Copy)]
 pub(crate) struct PersistGroup<'a> {
     pub(crate) chunks: &'a [DocumentChunk],
@@ -627,8 +631,12 @@ pub(crate) async fn persist_group(
         &structural_edges,
         &dynamic_edges,
     );
+    // A runtime custom graph's `contains` row and the per-document structural
+    // row of the same edge share an id (both name the chunk's document, since
+    // SDK-1694 O5a); the custom row keeps its own, as it did before.
+    let custom_rows: HashSet<Uuid> = edges.iter().map(|row| row.id).collect();
     write_ledger(context.db, &mut tracker, nodes, edges).await?;
-    let (nodes, edges) = crate::tasks::provenance_rows(
+    let (nodes, mut edges) = crate::tasks::provenance_rows(
         context.ledger,
         group.chunks,
         group.entities,
@@ -639,6 +647,7 @@ pub(crate) async fn persist_group(
         group.producers,
         context.run_chunk_documents,
     );
+    edges.retain(|row| row.data_id.is_nil() || !custom_rows.contains(&row.id));
     let (node_rows, edge_rows) = write_ledger(context.db, &mut tracker, nodes, edges).await?;
     if node_rows > 0 {
         info!("Upserted {node_rows} provenance node records");
@@ -1777,6 +1786,8 @@ pub(crate) mod tests {
             .map(|pair| {
                 let id = pair.entity.base.id;
                 let mut groups = groups_of(data.producers.entity_chunks(id));
+                // The documents whose ontology lookup brought it in (O5a).
+                groups.extend(groups_of(data.producers.ontology_entity_chunks(id)));
                 groups.extend(
                     data.chunks
                         .iter()
@@ -1797,7 +1808,10 @@ pub(crate) mod tests {
             })
             .collect();
         let edge_groups = |edge: &GraphEdgePair| -> BTreeSet<usize> {
-            let groups = groups_of(data.producers.edge_chunks(&edge.dedup_key()));
+            let mut groups = groups_of(data.producers.edge_chunks(&edge.dedup_key()));
+            groups.extend(groups_of(
+                data.producers.ontology_edge_chunks(&edge.dedup_key()),
+            ));
             if !groups.is_empty() {
                 return groups;
             }

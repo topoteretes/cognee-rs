@@ -5,7 +5,7 @@
 
 use cognee_models::{Entity, EntityType, Timestamp};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 /// A pair of (Entity, EntityType) representing a node in the storage layer.
@@ -218,6 +218,27 @@ impl GraphEdgePair {
 /// payloads and the ledger's `attributes` column, all of which Python reads.
 /// A producer list has no Python counterpart and must not leak into any of
 /// them.
+///
+/// # Types and ontology output (SDK-1694 O5a)
+///
+/// Besides the extracted entities and edges, it records:
+///
+/// - **types**: `(entity, type) → chunks` and `type → chunks`. Within a unit
+///   an entity has the type its first declaration gave it, so every chunk
+///   that owns the entity in that unit owns that `(entity, type)` pair too
+///   (Python's `collect_chunk_ownership` hands a chunk "the entities it
+///   `contains` and their types"). After the merge an entity can carry the
+///   types of several documents; these maps say which chunk gave which.
+/// - **ontology output**: the entities and edges an ontology lookup brought
+///   in, against the chunk whose declaration triggered the lookup. Kept apart
+///   from [`Self::entity_chunks`] / [`Self::edge_chunks`], which also decide a
+///   chunk's `contains` links: Python links a chunk only to what it extracted.
+///   An ontology entity is recorded only when its unit did not also extract
+///   it. A lookup runs once per unit for a class, so these are exact per
+///   document (what the ledger keys on), not per chunk.
+/// - **ontology-first entities**: the entities whose first appearance in the
+///   run was through the ontology alone. Set by the merge, which sees the
+///   run's units in order.
 #[derive(Debug, Clone, Default)]
 pub struct ArtifactProducers {
     /// Final entity id → producing chunk ids, in first-seen order.
@@ -225,6 +246,29 @@ pub struct ArtifactProducers {
 
     /// [`GraphEdgePair::dedup_key`] → producing chunk ids, in first-seen order.
     edges: HashMap<(Uuid, Uuid, String), Vec<Uuid>>,
+
+    /// `(entity id, EntityType id)` → chunks that declared the entity with it.
+    entity_types: HashMap<(Uuid, Uuid), Vec<Uuid>>,
+
+    /// EntityType id → chunks that declared some entity with it.
+    types: HashMap<Uuid, Vec<Uuid>>,
+
+    /// Entity id → chunks whose ontology lookup brought it in, where the
+    /// chunk's unit did not extract it.
+    ontology_entities: HashMap<Uuid, Vec<Uuid>>,
+
+    /// Ontology edge key → chunks whose ontology lookup brought it in.
+    ontology_edges: HashMap<(Uuid, Uuid, String), Vec<Uuid>>,
+
+    /// Entities first seen in the run through the ontology alone.
+    ontology_first: HashSet<Uuid>,
+}
+
+/// Append `chunk_id` to `chunks` unless it is already there.
+fn push_producer(chunks: &mut Vec<Uuid>, chunk_id: Uuid) {
+    if !chunks.contains(&chunk_id) {
+        chunks.push(chunk_id);
+    }
 }
 
 impl ArtifactProducers {
@@ -249,6 +293,36 @@ impl ArtifactProducers {
         }
     }
 
+    /// Record `chunk_id` as a producer of `entity_id` declared with
+    /// `type_id`, and so of the `is_a` edge between them and of the type.
+    pub fn record_entity_type(&mut self, entity_id: Uuid, type_id: Uuid, chunk_id: Uuid) {
+        push_producer(
+            self.entity_types.entry((entity_id, type_id)).or_default(),
+            chunk_id,
+        );
+        push_producer(self.types.entry(type_id).or_default(), chunk_id);
+    }
+
+    /// Record `chunk_id` as the chunk whose ontology lookup brought in
+    /// `entity_id`, which its unit did not extract.
+    pub fn record_ontology_entity(&mut self, entity_id: Uuid, chunk_id: Uuid) {
+        push_producer(
+            self.ontology_entities.entry(entity_id).or_default(),
+            chunk_id,
+        );
+    }
+
+    /// Record `chunk_id` as the chunk whose ontology lookup brought in the
+    /// ontology edge identified by `key`.
+    pub fn record_ontology_edge(&mut self, key: (Uuid, Uuid, String), chunk_id: Uuid) {
+        push_producer(self.ontology_edges.entry(key).or_default(), chunk_id);
+    }
+
+    /// Mark `entity_id` as first seen in the run through the ontology alone.
+    pub fn mark_ontology_first(&mut self, entity_id: Uuid) {
+        self.ontology_first.insert(entity_id);
+    }
+
     /// Add every producer `other` recorded, after the ones already here.
     pub fn merge(&mut self, other: ArtifactProducers) {
         for (entity_id, chunks) in other.entities {
@@ -261,10 +335,72 @@ impl ArtifactProducers {
                 self.record_edge(key.clone(), chunk_id);
             }
         }
+        for (key, chunks) in other.entity_types {
+            let entry = self.entity_types.entry(key).or_default();
+            for chunk_id in chunks {
+                push_producer(entry, chunk_id);
+            }
+        }
+        for (type_id, chunks) in other.types {
+            let entry = self.types.entry(type_id).or_default();
+            for chunk_id in chunks {
+                push_producer(entry, chunk_id);
+            }
+        }
+        for (entity_id, chunks) in other.ontology_entities {
+            for chunk_id in chunks {
+                self.record_ontology_entity(entity_id, chunk_id);
+            }
+        }
+        for (key, chunks) in other.ontology_edges {
+            for chunk_id in chunks {
+                self.record_ontology_edge(key.clone(), chunk_id);
+            }
+        }
+        self.ontology_first.extend(other.ontology_first);
     }
 
-    /// Chunks that produced `entity_id`, or an empty slice when unknown
-    /// (ontology-derived entities have no producing chunk).
+    /// Chunks that declared `entity_id` with `type_id`, or an empty slice.
+    pub fn entity_type_chunks(&self, entity_id: Uuid, type_id: Uuid) -> &[Uuid] {
+        self.entity_types
+            .get(&(entity_id, type_id))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// Chunks that declared some entity with `type_id`, or an empty slice.
+    pub fn type_chunks(&self, type_id: Uuid) -> &[Uuid] {
+        self.types.get(&type_id).map_or(&[], Vec::as_slice)
+    }
+
+    /// Chunks whose ontology lookup brought in `entity_id` (which their unit
+    /// did not extract), or an empty slice.
+    pub fn ontology_entity_chunks(&self, entity_id: Uuid) -> &[Uuid] {
+        self.ontology_entities
+            .get(&entity_id)
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// Chunks whose ontology lookup brought in the edge `key`, or an empty
+    /// slice.
+    pub fn ontology_edge_chunks(&self, key: &(Uuid, Uuid, String)) -> &[Uuid] {
+        self.ontology_edges.get(key).map_or(&[], Vec::as_slice)
+    }
+
+    /// Whether some chunk extracted the edge `key` or brought it in through
+    /// the ontology.
+    pub fn produces_edge(&self, key: &(Uuid, Uuid, String)) -> bool {
+        !self.edge_chunks(key).is_empty() || !self.ontology_edge_chunks(key).is_empty()
+    }
+
+    /// Whether `entity_id` was first seen in the run through the ontology
+    /// alone.
+    pub fn is_ontology_first(&self, entity_id: Uuid) -> bool {
+        self.ontology_first.contains(&entity_id)
+    }
+
+    /// Chunks that extracted `entity_id`, or an empty slice when unknown. An
+    /// entity only an ontology lookup brought in has none here; see
+    /// [`Self::ontology_entity_chunks`].
     pub fn entity_chunks(&self, entity_id: Uuid) -> &[Uuid] {
         self.entities.get(&entity_id).map_or(&[], Vec::as_slice)
     }

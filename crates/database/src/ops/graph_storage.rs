@@ -962,14 +962,18 @@ fn endpoint_exclusive_to(
 /// their `data_id` column is nil.
 ///
 /// Cognify writes those rows with a nil `data_id` ("structural edges span
-/// multiple DataPoints"), so `data_id = :data` never selects them. Their owner
+/// multiple DataPoints"), so `data_id = :data` never selects them. (Since
+/// SDK-1694 O5a it also writes one row per producing document beside the nil
+/// row, with the same slug; the nil row claims that slug for every document,
+/// so slug exclusivity never selects those, and this predicate reads only the
+/// nil rows. Per-document delete, which reads them, is O6.) Their owner
 /// is recoverable from their endpoints instead: a row belongs to the data item
 /// when *either* endpoint is exclusive to it (see [`endpoint_exclusive_to`]).
 /// The delete detach-deletes every such node from the graph, and a graph edge
 /// cannot outlive either of its endpoints, so the row's edge is gone with the
 /// item whichever end was exclusive. A chunk, summary or document is
 /// exclusive to one item. An entity shared by several items is not, and an
-/// `EntityType` never is (its node row carries a nil `data_id`), so an edge
+/// `EntityType` never is (it always has a node row with a nil `data_id`), so an edge
 /// joining two such nodes keeps its row, and its claim on its retrieval text,
 /// until one of its endpoints goes.
 ///
