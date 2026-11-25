@@ -1957,7 +1957,7 @@ mod tests {
         );
         // The second document's type is an `is_a` edge, not a stored list
         // (SDK-1694 O6: `extra_types` is never serialised).
-        assert!(node.get("extra_types").is_none(), "{node:?}");
+        assert!(!node.contains_key("extra_types"), "{node:?}");
         assert_eq!(
             entity_types(&test).await,
             BTreeSet::from([
