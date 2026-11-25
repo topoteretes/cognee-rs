@@ -131,7 +131,15 @@ async fn check_against_golden(snapshot: &str, tag: &str, node_set: Option<&[Stri
     for ((id, node), wanted) in nodes.iter().zip(expected_nodes) {
         assert_eq!(id, wanted["id"].as_str().unwrap());
         let mut actual = logical(node);
-        let mut wanted = wanted["properties"].as_object().unwrap().clone();
+        // The goldens keep Python's None fields as null; the stored node, as
+        // `logical` reads it, has none.
+        let mut wanted: Map<String, Value> = wanted["properties"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter(|(_, value)| !value.is_null())
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
         if wanted["type"] == "CodeRepository" && wanted["path"] == "/tmp/shop" {
             assert_eq!(actual["path"], json!(repo_path.to_string_lossy()));
             actual.remove("path");

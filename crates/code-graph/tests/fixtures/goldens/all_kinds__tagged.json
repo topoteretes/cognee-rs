@@ -1,0 +1,811 @@
+{
+  "edges": [
+    {
+      "properties": {
+        "edge_text": "declares",
+        "relationship_name": "declares",
+        "source_node_id": "2888cc30-8c46-5ecd-9a2b-ec68e3109150",
+        "target_node_id": "8e75fdc0-0c65-5d7a-9a62-5e39ea211506"
+      },
+      "relationship_name": "declares",
+      "source": "2888cc30-8c46-5ecd-9a2b-ec68e3109150",
+      "target": "8e75fdc0-0c65-5d7a-9a62-5e39ea211506"
+    },
+    {
+      "properties": {
+        "edge_text": "instantiates",
+        "relationship_name": "instantiates",
+        "source_node_id": "f4532eff-1724-5dd6-8647-fbcd32cb7f1e",
+        "target_node_id": "8e75fdc0-0c65-5d7a-9a62-5e39ea211506"
+      },
+      "relationship_name": "instantiates",
+      "source": "f4532eff-1724-5dd6-8647-fbcd32cb7f1e",
+      "target": "8e75fdc0-0c65-5d7a-9a62-5e39ea211506"
+    },
+    {
+      "properties": {
+        "edge_text": "tests",
+        "relationship_name": "tests",
+        "source_node_id": "1eaaa9d9-bdbf-5979-a8e4-5ab6cbfcdf48",
+        "target_node_id": "f4532eff-1724-5dd6-8647-fbcd32cb7f1e"
+      },
+      "relationship_name": "tests",
+      "source": "1eaaa9d9-bdbf-5979-a8e4-5ab6cbfcdf48",
+      "target": "f4532eff-1724-5dd6-8647-fbcd32cb7f1e"
+    },
+    {
+      "properties": {
+        "edge_text": "describes",
+        "relationship_name": "describes",
+        "source_node_id": "2d8bbec7-9e31-55f4-bd51-e700d869371d",
+        "target_node_id": "8e75fdc0-0c65-5d7a-9a62-5e39ea211506"
+      },
+      "relationship_name": "describes",
+      "source": "2d8bbec7-9e31-55f4-bd51-e700d869371d",
+      "target": "8e75fdc0-0c65-5d7a-9a62-5e39ea211506"
+    },
+    {
+      "properties": {
+        "edge_text": "belongs to",
+        "relationship_name": "belongs_to",
+        "source_node_id": "bdb63ea7-7fcd-593f-a963-5ac86d7e3206",
+        "target_node_id": "8e75fdc0-0c65-5d7a-9a62-5e39ea211506"
+      },
+      "relationship_name": "belongs_to",
+      "source": "bdb63ea7-7fcd-593f-a963-5ac86d7e3206",
+      "target": "8e75fdc0-0c65-5d7a-9a62-5e39ea211506"
+    },
+    {
+      "properties": {
+        "edge_text": "flags",
+        "relationship_name": "flags",
+        "source_node_id": "3cc2b319-3f09-557c-9189-9d40215506fd",
+        "target_node_id": "0771d047-f367-5129-9d41-22ce05386702"
+      },
+      "relationship_name": "flags",
+      "source": "3cc2b319-3f09-557c-9189-9d40215506fd",
+      "target": "0771d047-f367-5129-9d41-22ce05386702"
+    }
+  ],
+  "facts": [
+    {
+      "file": "core/__init__.py",
+      "kind": "module",
+      "line": 1,
+      "name": "core",
+      "props": {
+        "language": "python"
+      },
+      "relations": [
+        {
+          "kind": "declares",
+          "target": "core.Widget"
+        }
+      ],
+      "repo": "acme/kinds"
+    },
+    {
+      "end_line": 40,
+      "file": "core/widget.py",
+      "kind": "symbol",
+      "line": 5,
+      "name": "core.Widget",
+      "props": {
+        "exported": true,
+        "symbol_kind": null
+      },
+      "relations": [],
+      "repo": "acme/kinds"
+    },
+    {
+      "file": "core/widget.py",
+      "kind": "symbol",
+      "line": 44,
+      "name": "core.build",
+      "props": {
+        "arity": 2,
+        "meta": {
+          "nested": {
+            "a": [
+              1,
+              2.0
+            ]
+          },
+          "since": "1.2"
+        },
+        "missing": null,
+        "negzero": -0.0,
+        "symbol_kind": "function",
+        "tags": [
+          "factory",
+          "public"
+        ],
+        "weight": 0.5,
+        "zero": 0
+      },
+      "relations": [
+        {
+          "kind": "instantiates",
+          "target": "core.Widget"
+        }
+      ],
+      "repo": "acme/kinds"
+    },
+    {
+      "file": "tests/test_widget.py",
+      "kind": "test_ref",
+      "line": 9,
+      "name": "tests/test_widget.py::test_build",
+      "props": {
+        "cases": 3,
+        "framework": "pytest",
+        "parametrized": false
+      },
+      "relations": [
+        {
+          "kind": "tests",
+          "target": "core.build"
+        }
+      ],
+      "repo": "acme/kinds"
+    },
+    {
+      "file": "core/widget.py",
+      "kind": "file_ref",
+      "name": "core/widget.py",
+      "props": {
+        "bytes": 2048,
+        "generated": null,
+        "language": "python"
+      },
+      "relations": [],
+      "repo": "acme/kinds"
+    },
+    {
+      "file": "docs/adr/0001.md",
+      "kind": "intent",
+      "line": 1,
+      "name": "Widgets are immutable",
+      "props": {
+        "refs": [
+          "core.Widget"
+        ],
+        "status": "accepted"
+      },
+      "relations": [
+        {
+          "kind": "describes",
+          "target": "core.Widget"
+        }
+      ],
+      "repo": "acme/kinds"
+    },
+    {
+      "kind": "extraction",
+      "name": "python extractor",
+      "props": {
+        "coverage": 0.75,
+        "files_parsed": 3,
+        "files_seen": 4,
+        "skipped": [
+          {
+            "cause": "syntax error",
+            "file": "core/broken.py"
+          }
+        ]
+      },
+      "relations": [],
+      "repo": "acme/kinds"
+    },
+    {
+      "file": "core/widget.py",
+      "kind": "association",
+      "line": 12,
+      "name": "core.Widget.parts",
+      "props": {
+        "cardinality": "many",
+        "target_model": "core.Part"
+      },
+      "relations": [
+        {
+          "kind": "belongs_to",
+          "target": "core.Widget"
+        }
+      ],
+      "repo": "acme/kinds"
+    },
+    {
+      "file": "core/widget.py",
+      "kind": "lint",
+      "line": 2,
+      "name": "unused-import core/widget.py:2",
+      "props": {
+        "fixable": true,
+        "message": "'os' imported but unused",
+        "rule": "unused-import",
+        "severity": "warning"
+      },
+      "relations": [
+        {
+          "kind": "flags",
+          "target": "core/widget.py"
+        }
+      ],
+      "repo": "acme/kinds"
+    },
+    {
+      "kind": "topic",
+      "name": "an unmapped kind",
+      "props": {},
+      "repo": "acme/kinds"
+    }
+  ],
+  "node_order": [
+    "1aef0e08-ac7a-572a-a296-a22ba22ad29e",
+    "2888cc30-8c46-5ecd-9a2b-ec68e3109150",
+    "8e75fdc0-0c65-5d7a-9a62-5e39ea211506",
+    "f4532eff-1724-5dd6-8647-fbcd32cb7f1e",
+    "1eaaa9d9-bdbf-5979-a8e4-5ab6cbfcdf48",
+    "0771d047-f367-5129-9d41-22ce05386702",
+    "2d8bbec7-9e31-55f4-bd51-e700d869371d",
+    "95a07be5-f9ec-5163-9487-df84ce1a799c",
+    "bdb63ea7-7fcd-593f-a963-5ac86d7e3206",
+    "3cc2b319-3f09-557c-9189-9d40215506fd"
+  ],
+  "nodes": [
+    {
+      "belongs_to_set": [
+        {
+          "id": "2916e07e-ec03-55c1-947e-cc4352e3e750",
+          "name": "team-a"
+        },
+        {
+          "id": "ebb7b392-7ec8-5e3a-826e-cfb65db67f77",
+          "name": "shared"
+        }
+      ],
+      "id": "0771d047-f367-5129-9d41-22ce05386702",
+      "part_of": "1aef0e08-ac7a-572a-a296-a22ba22ad29e",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "file_ref: bytes=2048, language=python",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
+        "fact_hash": "sha256:e23b4a04b6cabf1593a917066ca23d6b543d1bb716f8b805d86d11c713a7bb0e",
+        "fact_properties": {
+          "bytes": 2048,
+          "generated": null,
+          "language": "python"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "core/widget.py",
+        "id": "0771d047-f367-5129-9d41-22ce05386702",
+        "importance_weight": 0.5,
+        "kind": "file_ref",
+        "line": null,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "core/widget.py",
+        "ontology_uri": null,
+        "ontology_valid": false,
+        "repo": "acme/kinds",
+        "source_content_hash": null,
+        "source_node_set": "team-a, shared",
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
+        "topological_rank": 0,
+        "type": "CodeFileReference",
+        "version": 1
+      },
+      "type": "CodeFileReference"
+    },
+    {
+      "belongs_to_set": [
+        {
+          "id": "2916e07e-ec03-55c1-947e-cc4352e3e750",
+          "name": "team-a"
+        },
+        {
+          "id": "ebb7b392-7ec8-5e3a-826e-cfb65db67f77",
+          "name": "shared"
+        }
+      ],
+      "id": "1aef0e08-ac7a-572a-a296-a22ba22ad29e",
+      "part_of": null,
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "feedback_weight": 0.5,
+        "id": "1aef0e08-ac7a-572a-a296-a22ba22ad29e",
+        "importance_weight": 0.5,
+        "last_delta": null,
+        "last_mapping_version": null,
+        "last_receipt": null,
+        "last_snapshot_id": null,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "acme/kinds",
+        "ontology_uri": null,
+        "ontology_valid": false,
+        "path": "/tmp/shop",
+        "source_content_hash": null,
+        "source_node_set": "team-a, shared",
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
+        "topological_rank": 0,
+        "type": "CodeRepository",
+        "version": 1
+      },
+      "type": "CodeRepository"
+    },
+    {
+      "belongs_to_set": [
+        {
+          "id": "2916e07e-ec03-55c1-947e-cc4352e3e750",
+          "name": "team-a"
+        },
+        {
+          "id": "ebb7b392-7ec8-5e3a-826e-cfb65db67f77",
+          "name": "shared"
+        }
+      ],
+      "id": "1eaaa9d9-bdbf-5979-a8e4-5ab6cbfcdf48",
+      "part_of": "1aef0e08-ac7a-572a-a296-a22ba22ad29e",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "test_ref: cases=3, framework=pytest, parametrized=False",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
+        "fact_hash": "sha256:ae98002460c49554e87827535d4eec68ba69225a1045cd8702cd53755e1d8d21",
+        "fact_properties": {
+          "cases": 3,
+          "framework": "pytest",
+          "parametrized": false
+        },
+        "feedback_weight": 0.5,
+        "file_path": "tests/test_widget.py",
+        "id": "1eaaa9d9-bdbf-5979-a8e4-5ab6cbfcdf48",
+        "importance_weight": 0.5,
+        "kind": "test_ref",
+        "line": 9,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "tests/test_widget.py::test_build",
+        "ontology_uri": null,
+        "ontology_valid": false,
+        "repo": "acme/kinds",
+        "source_content_hash": null,
+        "source_node_set": "team-a, shared",
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
+        "topological_rank": 0,
+        "type": "CodeTestReference",
+        "version": 1
+      },
+      "type": "CodeTestReference"
+    },
+    {
+      "belongs_to_set": [
+        {
+          "id": "2916e07e-ec03-55c1-947e-cc4352e3e750",
+          "name": "team-a"
+        },
+        {
+          "id": "ebb7b392-7ec8-5e3a-826e-cfb65db67f77",
+          "name": "shared"
+        }
+      ],
+      "id": "2888cc30-8c46-5ecd-9a2b-ec68e3109150",
+      "part_of": "1aef0e08-ac7a-572a-a296-a22ba22ad29e",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "module: language=python",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
+        "fact_hash": "sha256:3d1418fd711f40063a27893ed6af05e610b327e742ec6e8da4ae016c204854e0",
+        "fact_properties": {
+          "language": "python"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "core/__init__.py",
+        "id": "2888cc30-8c46-5ecd-9a2b-ec68e3109150",
+        "importance_weight": 0.5,
+        "kind": "module",
+        "line": 1,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "core",
+        "ontology_uri": null,
+        "ontology_valid": false,
+        "repo": "acme/kinds",
+        "source_content_hash": null,
+        "source_node_set": "team-a, shared",
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
+        "topological_rank": 0,
+        "type": "CodeModule",
+        "version": 1
+      },
+      "type": "CodeModule"
+    },
+    {
+      "belongs_to_set": [
+        {
+          "id": "2916e07e-ec03-55c1-947e-cc4352e3e750",
+          "name": "team-a"
+        },
+        {
+          "id": "ebb7b392-7ec8-5e3a-826e-cfb65db67f77",
+          "name": "shared"
+        }
+      ],
+      "id": "2d8bbec7-9e31-55f4-bd51-e700d869371d",
+      "part_of": "1aef0e08-ac7a-572a-a296-a22ba22ad29e",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "intent: status=accepted",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
+        "fact_hash": "sha256:e0e0f60c0ecfc153c3836f1c6560bd38e5d65bd08ddee6a1b42c5f9dd34b266e",
+        "fact_properties": {
+          "refs": [
+            "core.Widget"
+          ],
+          "status": "accepted"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "docs/adr/0001.md",
+        "id": "2d8bbec7-9e31-55f4-bd51-e700d869371d",
+        "importance_weight": 0.5,
+        "kind": "intent",
+        "line": 1,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "Widgets are immutable",
+        "ontology_uri": null,
+        "ontology_valid": false,
+        "repo": "acme/kinds",
+        "source_content_hash": null,
+        "source_node_set": "team-a, shared",
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
+        "topological_rank": 0,
+        "type": "CodeIntent",
+        "version": 1
+      },
+      "type": "CodeIntent"
+    },
+    {
+      "belongs_to_set": [
+        {
+          "id": "2916e07e-ec03-55c1-947e-cc4352e3e750",
+          "name": "team-a"
+        },
+        {
+          "id": "ebb7b392-7ec8-5e3a-826e-cfb65db67f77",
+          "name": "shared"
+        }
+      ],
+      "id": "3cc2b319-3f09-557c-9189-9d40215506fd",
+      "part_of": "1aef0e08-ac7a-572a-a296-a22ba22ad29e",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "lint: fixable=True, message='os' imported but unused, rule=unused-import, severity=warning",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
+        "fact_hash": "sha256:79fbcd31e7b554a5eefebeb491a202f0bcb14a02037fdd4abea030ea95128774",
+        "fact_properties": {
+          "fixable": true,
+          "message": "'os' imported but unused",
+          "rule": "unused-import",
+          "severity": "warning"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "core/widget.py",
+        "id": "3cc2b319-3f09-557c-9189-9d40215506fd",
+        "importance_weight": 0.5,
+        "kind": "lint",
+        "line": 2,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "unused-import core/widget.py:2",
+        "ontology_uri": null,
+        "ontology_valid": false,
+        "repo": "acme/kinds",
+        "source_content_hash": null,
+        "source_node_set": "team-a, shared",
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
+        "topological_rank": 0,
+        "type": "CodeLintFinding",
+        "version": 1
+      },
+      "type": "CodeLintFinding"
+    },
+    {
+      "belongs_to_set": [
+        {
+          "id": "2916e07e-ec03-55c1-947e-cc4352e3e750",
+          "name": "team-a"
+        },
+        {
+          "id": "ebb7b392-7ec8-5e3a-826e-cfb65db67f77",
+          "name": "shared"
+        }
+      ],
+      "id": "8e75fdc0-0c65-5d7a-9a62-5e39ea211506",
+      "part_of": "1aef0e08-ac7a-572a-a296-a22ba22ad29e",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "symbol: exported=True",
+        "doc": null,
+        "end_line": 40,
+        "enola_id": null,
+        "fact_hash": "sha256:d9169ac99d1ba5eb1a68e52f58b2692e6217d119b267e454fdd28c2467267ed2",
+        "fact_properties": {
+          "exported": true,
+          "symbol_kind": null
+        },
+        "feedback_weight": 0.5,
+        "file_path": "core/widget.py",
+        "id": "8e75fdc0-0c65-5d7a-9a62-5e39ea211506",
+        "importance_weight": 0.5,
+        "kind": "symbol",
+        "line": 5,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "core.Widget",
+        "ontology_uri": null,
+        "ontology_valid": false,
+        "repo": "acme/kinds",
+        "source_content_hash": null,
+        "source_node_set": "team-a, shared",
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
+        "symbol_kind": null,
+        "topological_rank": 0,
+        "type": "CodeSymbol",
+        "version": 1
+      },
+      "type": "CodeSymbol"
+    },
+    {
+      "belongs_to_set": [
+        {
+          "id": "2916e07e-ec03-55c1-947e-cc4352e3e750",
+          "name": "team-a"
+        },
+        {
+          "id": "ebb7b392-7ec8-5e3a-826e-cfb65db67f77",
+          "name": "shared"
+        }
+      ],
+      "id": "95a07be5-f9ec-5163-9487-df84ce1a799c",
+      "part_of": "1aef0e08-ac7a-572a-a296-a22ba22ad29e",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "extraction: coverage=0.75, files_parsed=3, files_seen=4",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
+        "fact_hash": "sha256:4f3c7efcdb70aef864585e32f8b68e4c69236bab76dfe79781d2d5d529440777",
+        "fact_properties": {
+          "coverage": 0.75,
+          "files_parsed": 3,
+          "files_seen": 4,
+          "skipped": [
+            {
+              "cause": "syntax error",
+              "file": "core/broken.py"
+            }
+          ]
+        },
+        "feedback_weight": 0.5,
+        "file_path": null,
+        "id": "95a07be5-f9ec-5163-9487-df84ce1a799c",
+        "importance_weight": 0.5,
+        "kind": "extraction",
+        "line": null,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "python extractor",
+        "ontology_uri": null,
+        "ontology_valid": false,
+        "repo": "acme/kinds",
+        "source_content_hash": null,
+        "source_node_set": "team-a, shared",
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
+        "topological_rank": 0,
+        "type": "CodeExtractionAccount",
+        "version": 1
+      },
+      "type": "CodeExtractionAccount"
+    },
+    {
+      "belongs_to_set": [
+        {
+          "id": "2916e07e-ec03-55c1-947e-cc4352e3e750",
+          "name": "team-a"
+        },
+        {
+          "id": "ebb7b392-7ec8-5e3a-826e-cfb65db67f77",
+          "name": "shared"
+        }
+      ],
+      "id": "bdb63ea7-7fcd-593f-a963-5ac86d7e3206",
+      "part_of": "1aef0e08-ac7a-572a-a296-a22ba22ad29e",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "association: cardinality=many, target_model=core.Part",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
+        "fact_hash": "sha256:436dcb38852a208f53a9bbb9a64e89b5079ad01689daf789f6c64b8ff1bf1b75",
+        "fact_properties": {
+          "cardinality": "many",
+          "target_model": "core.Part"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "core/widget.py",
+        "id": "bdb63ea7-7fcd-593f-a963-5ac86d7e3206",
+        "importance_weight": 0.5,
+        "kind": "association",
+        "line": 12,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "core.Widget.parts",
+        "ontology_uri": null,
+        "ontology_valid": false,
+        "repo": "acme/kinds",
+        "source_content_hash": null,
+        "source_node_set": "team-a, shared",
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
+        "topological_rank": 0,
+        "type": "CodeAssociation",
+        "version": 1
+      },
+      "type": "CodeAssociation"
+    },
+    {
+      "belongs_to_set": [
+        {
+          "id": "2916e07e-ec03-55c1-947e-cc4352e3e750",
+          "name": "team-a"
+        },
+        {
+          "id": "ebb7b392-7ec8-5e3a-826e-cfb65db67f77",
+          "name": "shared"
+        }
+      ],
+      "id": "f4532eff-1724-5dd6-8647-fbcd32cb7f1e",
+      "part_of": "1aef0e08-ac7a-572a-a296-a22ba22ad29e",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "symbol: arity=2, negzero=-0.0, symbol_kind=function, weight=0.5, zero=0",
+        "doc": null,
+        "end_line": null,
+        "enola_id": null,
+        "fact_hash": "sha256:fcbdd2ae6c82a566848b9ee1395218ec48789f9cf8e6ad1f9cb82252ed611a95",
+        "fact_properties": {
+          "arity": 2,
+          "meta": {
+            "nested": {
+              "a": [
+                1,
+                2.0
+              ]
+            },
+            "since": "1.2"
+          },
+          "missing": null,
+          "negzero": -0.0,
+          "symbol_kind": "function",
+          "tags": [
+            "factory",
+            "public"
+          ],
+          "weight": 0.5,
+          "zero": 0
+        },
+        "feedback_weight": 0.5,
+        "file_path": "core/widget.py",
+        "id": "f4532eff-1724-5dd6-8647-fbcd32cb7f1e",
+        "importance_weight": 0.5,
+        "kind": "symbol",
+        "line": 44,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "core.build",
+        "ontology_uri": null,
+        "ontology_valid": false,
+        "repo": "acme/kinds",
+        "source_content_hash": null,
+        "source_node_set": "team-a, shared",
+        "source_pipeline": null,
+        "source_task": null,
+        "source_user": null,
+        "symbol_kind": "function",
+        "topological_rank": 0,
+        "type": "CodeSymbol",
+        "version": 1
+      },
+      "type": "CodeSymbol"
+    }
+  ],
+  "skipped": 0
+}

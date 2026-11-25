@@ -1,0 +1,8 @@
+[
+  {"title": "Charge is a hotspot", "source": "hotspots", "confidence": 0.75, "description": "billing.Charge is called from 12 places.", "suggested_actions": ["Split Charge", "Add tests"], "metrics": {"fan_in": 12, "ratio": -0.0}, "informational": false, "evidence": [{"symbol": "billing.Charge", "fact_id": "fedcba9876543210fedcba9876543210"}]},
+  {"title": "retry has no callers outside billing", "source": "dead-methods", "confidence": "high", "description": null, "evidence": [{"fact": "billing.retry"}, {"file": "billing/retry.go"}]},
+  {"title": "Cycle through a removed package", "source": "cycles", "informational": true, "evidence": [{"symbol": "ghost.Phantom"}, "not an object", {"line": 7}]},
+  {"title": "", "source": "layers"},
+  "not an insight",
+  {"title": "Bare file evidence", "source": "layers", "metrics": {"depth": 2}, "evidence": [{"file": "billing/billing.go", "fact_id": "NOT-AN-ID"}]}
+]
