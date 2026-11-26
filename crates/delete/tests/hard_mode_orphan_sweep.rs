@@ -7,7 +7,8 @@
 //!
 //! Ingests two documents with a shared entity ("TechCorp"), cognifies both,
 //! then deletes one via `DeleteScope::Data` + `DeleteMode::Hard`. Verifies:
-//! - Hard mode swept at least some orphan entities or entity types
+//! - Hard mode keeps a degree-one entity and type another document's ledger
+//!   row claims, and sweeps a planted pair no row names (SDK-1694 O9)
 //! - Graph node count decreased but is NOT empty (shared-entity doc survives)
 //! - At least one data item was deleted
 //!
@@ -139,6 +140,10 @@ async fn test_hard_mode_sweeps_orphan_entities() {
     let Some((storage, database, graph_db, vector_db, embedding_engine, llm)) =
         setup_infrastructure(&temp_dir).await
     else {
+        eprintln!(
+            "SKIPPED test_hard_mode_sweeps_orphan_entities: no LLM \
+             (set COGNEE_TEST_REPLAY=1 for the cassette, or OPENAI_* for a live run)"
+        );
         return;
     };
 
@@ -177,6 +182,7 @@ async fn test_hard_mode_sweeps_orphan_entities() {
     assert_eq!(data_items_2.len(), 1, "Expected 1 data item from doc2");
 
     let doc1_data_id = data_items_1[0].id;
+    let doc2_data_id = data_items_2[0].id;
 
     // ── Cognify both documents together ─────────────────────────────────────
     let config = CognifyConfig::default().with_summarization(false);
@@ -244,6 +250,34 @@ async fn test_hard_mode_sweeps_orphan_entities() {
     );
     println!("Pre-delete graph: {pre_delete_node_count} nodes");
 
+    // ── Plant degree-one entities the sweep must tell apart (SDK-1694 O9) ───
+    // Each has one `is_a` edge to a type of its own, so both it and its type
+    // are degree-one whatever the LLM extracted. `claimed` (and its type) has
+    // a ledger row of doc2's, as an ontology class doc2 reached would;
+    // `stray` (and its type) has no row at all.
+    let claimed = plant_degree_one_entity(&graph_db, "ClaimedClass").await;
+    let stray = plant_degree_one_entity(&graph_db, "StrayClass").await;
+    ops::graph_storage::upsert_nodes(
+        &database,
+        &[(claimed.0, "Entity"), (claimed.1, "EntityType")].map(|(slug, node_type)| {
+            cognee_database::GraphNode {
+                id: Uuid::new_v4(),
+                slug,
+                user_id: owner_id,
+                data_id: doc2_data_id,
+                dataset_id: dataset.id,
+                pipeline_run_id: None,
+                label: None,
+                node_type: node_type.into(),
+                indexed_fields: serde_json::json!(["name"]),
+                attributes: None,
+                created_at: chrono::Utc::now(),
+            }
+        }),
+    )
+    .await
+    .expect("claim the planted entity for doc2");
+
     // ── Delete doc1 with Hard mode ──────────────────────────────────────────
     let delete_svc =
         DeleteService::new(Arc::clone(&storage), database.clone() as Arc<dyn DeleteDb>)
@@ -274,35 +308,27 @@ async fn test_hard_mode_sweeps_orphan_entities() {
         result.deleted_orphan_edge_types,
     );
 
-    // ── Verify hard mode leaves no orphan entity or type ────────────────────
-    // Since SDK-1694 O6 the data-scoped delete removes the types only doc1
-    // declared itself, and since O9 the degree-one sweep keeps an entity or a
-    // type any ledger row still names, so the sweep's own counts may be zero.
-    // What must hold is the outcome: every degree-one Entity and EntityType
-    // left is still claimed.
-    let mut degree_one: Vec<Uuid> = Vec::new();
-    for node_type in ["Entity", "EntityType"] {
-        degree_one.extend(
-            graph_db
-                .get_degree_one_nodes(node_type)
-                .await
-                .expect("degree-one nodes")
-                .into_iter()
-                .filter_map(|(id, _)| Uuid::parse_str(&id).ok()),
+    // ── Verify the sweep keeps claimed nodes and removes unclaimed ones ─────
+    // Since SDK-1694 O9 the degree-one sweep keeps an entity or a type any
+    // ledger row still names (doc2's planted class survives the delete of
+    // doc1), and still removes one no row names.
+    for (id, what) in [(claimed.0, "entity"), (claimed.1, "type")] {
+        assert!(
+            graph_db.has_node(&id.to_string()).await.expect("has_node"),
+            "the hard sweep removed doc2's degree-one {what}"
         );
     }
-    let owned = DeleteDb::get_claimed_node_slugs(database.as_ref(), &degree_one, None)
-        .await
-        .expect("owned slugs");
-    let mut unowned = degree_one.clone();
-    unowned.retain(|slug| !owned.contains(slug));
+    for (id, what) in [(stray.0, "entity"), (stray.1, "type")] {
+        assert!(
+            !graph_db.has_node(&id.to_string()).await.expect("has_node"),
+            "the hard sweep kept an unclaimed degree-one {what}"
+        );
+    }
     assert!(
-        unowned.is_empty(),
-        "hard delete left degree-one nodes no ledger row claims: {unowned:?} \
-         (swept entities={}, entity_types={}, edge_types={})",
+        result.deleted_orphan_entities >= 1 && result.deleted_orphan_entity_types >= 1,
+        "the stray entity and its type are counted: entities={}, types={}",
         result.deleted_orphan_entities,
         result.deleted_orphan_entity_types,
-        result.deleted_orphan_edge_types,
     );
 
     // ── Verify graph node count decreased ───────────────────────────────────
@@ -486,4 +512,27 @@ async fn test_soft_mode_preserves_orphan_entities() {
     );
 
     println!("test_soft_mode_preserves_orphan_entities PASSED");
+}
+
+/// Add an `Entity` named `name` and an `EntityType` of its own, joined by one
+/// `is_a` edge, so both are degree-one. Returns their ids.
+async fn plant_degree_one_entity(graph_db: &Arc<dyn GraphDBTrait>, name: &str) -> (Uuid, Uuid) {
+    let (entity, entity_type) = (Uuid::new_v4(), Uuid::new_v4());
+    graph_db
+        .add_node_raw(serde_json::json!({"id": entity.to_string(), "type": "Entity", "name": name}))
+        .await
+        .expect("add the planted entity");
+    graph_db
+        .add_node_raw(serde_json::json!({
+            "id": entity_type.to_string(),
+            "type": "EntityType",
+            "name": format!("{name} type"),
+        }))
+        .await
+        .expect("add the planted type");
+    graph_db
+        .add_edge(&entity.to_string(), &entity_type.to_string(), "is_a", None)
+        .await
+        .expect("add the planted is_a edge");
+    (entity, entity_type)
 }
