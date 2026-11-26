@@ -350,6 +350,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Per-item cognify outcome (SDK-1694 O8).** `CognifyResult::items` lists
+  every data item handed to `cognify()`, in input order, as an `ItemOutcome
+  { data_id, status }`: `Completed` (processed and kept by this run),
+  `AlreadyCompleted` (skipped because an earlier run completed it),
+  `Failed`, `Unreached` (a fail-fast stop came first, or no loader matches
+  it) or `Discarded` (processed by a run that errored and did not keep it).
+  A run that errors with `CognifyError::RunFailed` carries the same list on
+  its report: `FailureReport::item_outcomes()`, or
+  `CognifyError::item_outcomes()`. It is read once the run's rollback is
+  done, so `Completed` names only kept documents. It holds ids and enums
+  only, so it adds nothing that grows with the documents (SDK-507). Hosts
+  render Python's per-item `data_ingestion_info` entries
+  (`PipelineRunCompleted` / `PipelineRunAlreadyCompleted` /
+  `PipelineRunErrored`) from it. `ItemStatus` and `ItemOutcome` are
+  `#[non_exhaustive]` (`ItemOutcome::new` builds one). A `CognifyResult`
+  struct literal needs `items: vec![]`; nothing outside the crate builds one
+  (`CognifyResult::empty()` covers that), so this is not marked breaking.
 - **`allowed_local_file_roots` (`COGNEE_ALLOWED_LOCAL_FILE_ROOTS`, SDK-1701).**
   Python's opt-in allowlist for local repository paths: empty is no
   restriction; set (even to `:`), a local repository must resolve under one

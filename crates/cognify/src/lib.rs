@@ -97,7 +97,7 @@ pub use routing::{CognifyRoute, CognifyRouteError, cognify_route_for};
 /// `crates/lib`'s `improve()` Stage 2d) can pass it without depending on
 /// `cognee-truth-subspace` directly.
 pub use cognee_truth_subspace::DEFAULT_K;
-pub use pipeline::{CognifyResult, IndexedFieldsStats};
+pub use pipeline::{CognifyResult, IndexedFieldsStats, ItemOutcome, ItemStatus};
 pub use summarization::{SummarizeOutcome, SummarizedContent, SummaryExtractor, TextSummary};
 pub use tasks::{
     AttributedDynamicGraph, CODE_GRAPH_PIPELINE_NAME, COGNIFY_DOCUMENTS_TASK_NAME,

@@ -625,6 +625,20 @@ exactly the work that was lost.
 
 The markers live under Python's one `cognify_pipeline` key.
 
+#### What became of each item
+
+`CognifyResult::items` says, per data item handed to `cognify()` and in that
+order, what the run did with it (SDK-1694 O8): `Completed` (processed and kept
+by this run), `AlreadyCompleted` (skipped by its marker), `Failed`,
+`Unreached` (a fail-fast stop came first, or no loader matches it) or
+`Discarded` (processed by a run that errored and did not keep it). A run that
+errors with `CognifyError::RunFailed` carries the same list on its report
+(`CognifyError::item_outcomes()`), read after the rollback. It is Python's
+per-item `data_ingestion_info` (`PipelineRunCompleted`,
+`PipelineRunAlreadyCompleted`, `PipelineRunErrored`) without the source fields,
+which a host reads from the item's `Data` row. Python reports no entry for an
+item its fail-fast run cancelled; Rust reports it `Unreached`.
+
 ### search (retrieval)
 
 Unified orchestration across 17 retrieval strategies selected by `SearchType`

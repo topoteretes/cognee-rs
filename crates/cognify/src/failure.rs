@@ -318,6 +318,13 @@ pub struct FailureReport {
     /// run whose only standard item failed is then not "no survivors".
     #[serde(default)]
     routed_items: usize,
+    /// What became of each data item of the run, in input order — set only on
+    /// the report a [`crate::CognifyError::RunFailed`] carries, once the run's
+    /// rollback is done (SDK-1694 O8). A run that ends `Ok` carries the list
+    /// on [`crate::CognifyResult::items`] instead. See
+    /// [`Self::item_outcomes`].
+    #[serde(default)]
+    item_outcomes: Vec<crate::pipeline::ItemOutcome>,
 }
 
 impl Default for FailureReport {
@@ -334,6 +341,7 @@ impl Default for FailureReport {
             cap: FailurePolicy::DEFAULT_REPORT_CAP,
             budget_exhausted: false,
             routed_items: 0,
+            item_outcomes: Vec::new(),
         }
     }
 }
@@ -505,6 +513,25 @@ impl FailureReport {
     /// stage has recorded the totals.
     pub fn routed_items(&self) -> usize {
         self.routed_items
+    }
+
+    /// What became of each data item of an errored run, in input order:
+    /// completed (kept), already completed by an earlier run, failed,
+    /// unreached, or discarded with the run.
+    ///
+    /// Set by [`crate::cognify`] on the report of the
+    /// [`crate::CognifyError::RunFailed`] it returns, after the rollback, so
+    /// [`crate::ItemStatus::Completed`] names only documents the run kept.
+    /// Empty on every other report, including
+    /// [`crate::CognifyResult::failures`] (read
+    /// [`crate::CognifyResult::items`] there).
+    pub fn item_outcomes(&self) -> &[crate::pipeline::ItemOutcome] {
+        &self.item_outcomes
+    }
+
+    /// Attach the run's per-item outcome (see [`Self::item_outcomes`]).
+    pub(crate) fn set_item_outcomes(&mut self, outcomes: Vec<crate::pipeline::ItemOutcome>) {
+        self.item_outcomes = outcomes;
     }
 
     /// `true` when nothing failed and nothing was left unreached.
