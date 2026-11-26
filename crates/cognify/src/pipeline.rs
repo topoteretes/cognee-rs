@@ -3,9 +3,10 @@
 //! The actual pipeline orchestration lives in [`crate::tasks`]. This module
 //! defines the output types shared across the pipeline.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use cognee_models::{Document, DocumentChunk, EdgeType, Embedding};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::failure::FailureReport;
@@ -90,6 +91,122 @@ pub struct CognifyResult {
     /// fatal the caller gets [`crate::CognifyError::RunFailed`] carrying the
     /// same report instead. See [`crate::failure`].
     pub failures: FailureReport,
+
+    /// What became of each data item handed to [`crate::cognify`], one entry
+    /// per item in input order (SDK-1694 O8): processed and completed by this
+    /// run, skipped because an earlier run completed it, failed, or never
+    /// reached. Python's per-item `data_ingestion_info` entries, which hosts
+    /// render with the item's own source fields.
+    ///
+    /// Ids and statuses only (no documents), so it stays small however large
+    /// the run. Empty for a result built outside [`crate::cognify`]. A run
+    /// that errors carries the same list on its failure report
+    /// ([`crate::CognifyError::item_outcomes`]).
+    pub items: Vec<ItemOutcome>,
+}
+
+/// What one data item's cognify run came to. See [`CognifyResult::items`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ItemStatus {
+    /// Processed by this run and completed: saved, and marked complete when
+    /// `incremental_loading` is on. Python's `PipelineRunCompleted` entry.
+    ///
+    /// It does not promise a completion marker. None is written without
+    /// `incremental_loading` (also under an explicit
+    /// [`crate::RollbackScope::FailedItems`]), and a failed marker write
+    /// only warns, so the next run may process the item again.
+    Completed,
+    /// Skipped: an earlier run completed it (the completion markers cover
+    /// it), so this run did nothing for it. Python's
+    /// `PipelineRunAlreadyCompleted` entry. Only with `incremental_loading`.
+    AlreadyCompleted,
+    /// Its processing failed ([`crate::FailureReport::failed_items`]).
+    /// Python's `PipelineRunErrored` entry. Not kept; the next run redoes it.
+    Failed,
+    /// Never processed: a fail-fast stop came first, or no loader matches
+    /// its extension ([`crate::FailureReport::unreached_items`]). Not
+    /// marked; the next run sends it again. Python has no such entry: its
+    /// fail-fast run cancels the items in flight and reports none for them.
+    Unreached,
+    /// Processed by a run that then errored and did not keep it: swept with
+    /// the run (`whole_run`, or a document `failed_items` had not completed
+    /// yet), or, under the code-only [`crate::RollbackScope::Nothing`], left
+    /// in place without a completion marker. The next run redoes it.
+    Discarded,
+}
+
+impl ItemStatus {
+    /// Whether the item's work is in the graph and done: completed by this
+    /// run or by an earlier one. Python's `data_ids` keep exactly these.
+    pub fn is_complete(self) -> bool {
+        matches!(self, Self::Completed | Self::AlreadyCompleted)
+    }
+}
+
+/// One data item's outcome: its id and [`ItemStatus`]. A
+/// [`ItemStatus::Completed`] item is saved, but not necessarily marked
+/// complete (see there).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ItemOutcome {
+    /// The data item (`Data.id`).
+    pub data_id: Uuid,
+    /// What became of it.
+    pub status: ItemStatus,
+}
+
+impl ItemOutcome {
+    /// An outcome for `data_id`.
+    pub fn new(data_id: Uuid, status: ItemStatus) -> Self {
+        Self { data_id, status }
+    }
+}
+
+/// The sets a run's per-item outcome is read from, all as data ids.
+///
+/// Built by [`crate::cognify`] once the run has ended, after any rollback, so
+/// [`ItemStatus::Completed`] names only what the run kept.
+pub(crate) struct ItemOutcomeSets<'a> {
+    /// Skipped by the completion markers before the run.
+    pub already_completed: &'a BTreeSet<Uuid>,
+    /// Completed as the run went (the completion log), kept whatever happened
+    /// to the run afterwards.
+    pub completed: &'a BTreeSet<Uuid>,
+    /// The failure report's failed and unreached items.
+    pub report: &'a FailureReport,
+    /// Whether the run ended `Ok`: then every processed item that neither
+    /// failed nor went unreached completed; otherwise only the logged ones did.
+    pub run_completed: bool,
+}
+
+/// Each of `input` (in order) with its [`ItemStatus`]. See [`ItemOutcomeSets`].
+///
+/// Precedence: already completed, then completed (a document the run kept and
+/// marked is done, whatever a later stage reported against it), then failed,
+/// then unreached; what is left completed on a run that ended `Ok` and was
+/// discarded on one that errored.
+pub(crate) fn item_outcomes(input: &[Uuid], sets: &ItemOutcomeSets<'_>) -> Vec<ItemOutcome> {
+    input
+        .iter()
+        .map(|&data_id| {
+            let status = if sets.already_completed.contains(&data_id) {
+                ItemStatus::AlreadyCompleted
+            } else if sets.completed.contains(&data_id) {
+                ItemStatus::Completed
+            } else if sets.report.failed_items().contains(&data_id) {
+                ItemStatus::Failed
+            } else if sets.report.unreached_items().contains(&data_id) {
+                ItemStatus::Unreached
+            } else if sets.run_completed {
+                ItemStatus::Completed
+            } else {
+                ItemStatus::Discarded
+            };
+            ItemOutcome::new(data_id, status)
+        })
+        .collect()
 }
 
 impl CognifyResult {
@@ -109,6 +226,7 @@ impl CognifyResult {
             prior_pipeline_run_id: None,
             pipeline_run_id: None,
             failures: FailureReport::default(),
+            items: vec![],
         }
     }
 
@@ -176,5 +294,96 @@ impl IndexedFieldsStats {
     /// Number of EdgeType.relationship_name fields indexed.
     pub fn edge_type_count(&self) -> usize {
         self.get("EdgeType", "relationship_name")
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod tests {
+    use super::*;
+    use crate::failure::{FailureStage, StageFailure};
+
+    fn ids(n: u128) -> Vec<Uuid> {
+        (1..=n).map(Uuid::from_u128).collect()
+    }
+
+    fn failure(data_id: Uuid) -> StageFailure {
+        StageFailure {
+            stage: FailureStage::GraphExtraction,
+            data_id,
+            chunk_id: None,
+            error: "boom".into(),
+            fails_item: true,
+        }
+    }
+
+    /// Every status, in input order, with its precedence: a document the run
+    /// kept is completed even when a later stage reported against it.
+    #[test]
+    fn item_outcomes_follow_input_order_and_precedence() {
+        let id = ids(6);
+        let mut report = FailureReport::default();
+        report.record(failure(id[2]));
+        report.record(failure(id[5]));
+        report.mark_unreached(id[3]);
+        let already = BTreeSet::from([id[0]]);
+        let completed = BTreeSet::from([id[1], id[5]]);
+        let sets = |run_completed| ItemOutcomeSets {
+            already_completed: &already,
+            completed: &completed,
+            report: &report,
+            run_completed,
+        };
+
+        let statuses = |run_completed| -> Vec<ItemStatus> {
+            item_outcomes(&id, &sets(run_completed))
+                .iter()
+                .map(|outcome| outcome.status)
+                .collect()
+        };
+        assert_eq!(
+            statuses(false),
+            vec![
+                ItemStatus::AlreadyCompleted,
+                ItemStatus::Completed,
+                ItemStatus::Failed,
+                ItemStatus::Unreached,
+                ItemStatus::Discarded,
+                ItemStatus::Completed,
+            ]
+        );
+        assert_eq!(statuses(true)[4], ItemStatus::Completed);
+        assert_eq!(
+            item_outcomes(&id, &sets(false))
+                .iter()
+                .map(|outcome| outcome.data_id)
+                .collect::<Vec<_>>(),
+            id
+        );
+    }
+
+    #[test]
+    fn only_completed_statuses_are_complete() {
+        assert!(ItemStatus::Completed.is_complete());
+        assert!(ItemStatus::AlreadyCompleted.is_complete());
+        for status in [
+            ItemStatus::Failed,
+            ItemStatus::Unreached,
+            ItemStatus::Discarded,
+        ] {
+            assert!(!status.is_complete(), "{status:?}");
+        }
+    }
+
+    #[test]
+    fn item_status_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_value(ItemStatus::AlreadyCompleted).unwrap(),
+            serde_json::json!("already_completed")
+        );
     }
 }

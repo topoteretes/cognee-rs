@@ -350,6 +350,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Per-item cognify outcome (SDK-1694 O8).** `CognifyResult::items` lists
+  every data item handed to `cognify()`, in input order, as an `ItemOutcome
+  { data_id, status }`: `Completed` (processed and kept by this run),
+  `AlreadyCompleted` (skipped because an earlier run completed it),
+  `Failed`, `Unreached` (a fail-fast stop came first, or no loader matches
+  it) or `Discarded` (processed by a run that errored and did not keep it).
+  A run that errors with `CognifyError::RunFailed` carries the same list on
+  its report: `FailureReport::item_outcomes()`, or
+  `CognifyError::item_outcomes()`. It is read once the run's rollback is
+  done, so `Completed` names only kept documents. It holds ids and enums
+  only, so it adds nothing that grows with the documents (SDK-507). Hosts
+  render Python's per-item `data_ingestion_info` entries
+  (`PipelineRunCompleted` / `PipelineRunAlreadyCompleted` /
+  `PipelineRunErrored`) from it. `ItemStatus` and `ItemOutcome` are
+  `#[non_exhaustive]` (`ItemOutcome::new` builds one). A `CognifyResult`
+  struct literal needs `items: vec![]`; nothing outside the crate builds one
+  (`CognifyResult::empty()` covers that), so this is not marked breaking.
+  `Completed` does not promise a completion marker: none is written without
+  `incremental_loading`, and a failed marker write only warns.
+- **`AddPipeline::with_upload_root` (SDK-1694 C5).** A host that spools
+  client uploads to disk and adds them as `DataInput::FilePath` names the
+  spool directory; a file under it records no `_cognee.source_uri`, as
+  Python records no source for an upload (`ingest_data.py:180-188`). An
+  explicit `source_uri` in the item's metadata still wins. Unset, nothing
+  changes. The closed HTTP server sets it, so `/cognify`'s
+  `data_location` is `null` for an upload instead of its spool path.
 - **`allowed_local_file_roots` (`COGNEE_ALLOWED_LOCAL_FILE_ROOTS`, SDK-1701).**
   Python's opt-in allowlist for local repository paths: empty is no
   restriction; set (even to `:`), a local repository must resolve under one

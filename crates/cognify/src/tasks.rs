@@ -367,7 +367,8 @@ pub fn classify_documents(
     info!(doc_count = documents.len(), "documents classified");
 
     // `model_classify_documents` filter_maps items whose extension maps to no
-    // document type (`md`, `json`, `xml`, `yaml`, anything unmapped). They are
+    // document type (`md`, `json`, `xml` and `yaml` map to text; source code
+    // and any other unmapped extension does not). They are
     // dropped silently, so without this they are neither failed nor unreached
     // and a completing run would mark them done — and, since markers now skip,
     // never revisit them. Record each as a file-unit failure instead.
@@ -2438,6 +2439,8 @@ pub async fn add_data_points(
         // failure it could hit is a persistence failure, which is run-fatal
         // under every configuration and propagates as its own error variant.
         failures: input.failures.clone(),
+        // Filled by `cognify()` once the run has ended.
+        items: vec![],
     })
 }
 
@@ -4539,6 +4542,11 @@ async fn cognify_in_scope(
             if data_items.is_empty() {
                 return Ok(CognifyResult::empty());
             }
+            // The items as the caller handed them, for the per-item outcome
+            // (SDK-1694 O8), which follows their order.
+            let input_ids: Vec<Uuid> = data_items.iter().map(|item| item.id).collect();
+            // What the completion markers skip below.
+            let mut already_completed: BTreeSet<Uuid> = BTreeSet::new();
 
             // ── Completion markers: skip what an earlier run finished ───────────
             // `incremental_loading` (default on) finally means something here.
@@ -4570,12 +4578,17 @@ async fn cognify_in_scope(
                     .filter(|item| !refused.contains(&item.id))
                     .cloned()
                     .collect();
+                let offered_ids: Vec<Uuid> = offered.iter().map(|item| item.id).collect();
                 let pending: HashSet<Uuid> =
                     rollback::drop_already_complete(&*database, dataset_id, offered)
                         .await?
                         .iter()
                         .map(|item| item.id)
                         .collect();
+                already_completed = offered_ids
+                    .into_iter()
+                    .filter(|id| !pending.contains(id))
+                    .collect();
                 data_items
                     .into_iter()
                     .filter(|item| pending.contains(&item.id) || refused.contains(&item.id))
@@ -4593,6 +4606,15 @@ async fn cognify_in_scope(
                 );
                 let mut result = CognifyResult::empty();
                 result.already_completed = true;
+                result.items = crate::pipeline::item_outcomes(
+                    &input_ids,
+                    &crate::pipeline::ItemOutcomeSets {
+                        already_completed: &already_completed,
+                        completed: &BTreeSet::new(),
+                        report: &FailureReport::default(),
+                        run_completed: true,
+                    },
+                );
                 // The latest completed run, so the no-op names the run that did
                 // the work.
                 result.prior_pipeline_run_id = match pipeline_run_repo
@@ -4801,12 +4823,31 @@ async fn cognify_in_scope(
                 config: &effective_config,
             };
 
+            // The per-item outcome of an errored run rides on its failure
+            // report, read after the rollback so `Completed` names only what
+            // the run kept.
+            let with_item_outcomes = |mut error: CognifyError| {
+                if let CognifyError::RunFailed { report } = &mut error {
+                    let outcomes = crate::pipeline::item_outcomes(
+                        &input_ids,
+                        &crate::pipeline::ItemOutcomeSets {
+                            already_completed: &already_completed,
+                            completed: &run_ctx.completed,
+                            report,
+                            run_completed: false,
+                        },
+                    );
+                    report.set_item_outcomes(outcomes);
+                }
+                error
+            };
+
             let outputs = match executed {
                 Ok(outputs) => outputs,
                 Err(e) => {
                     // The executor already wrote the `ERRORED` row on its way out.
                     rollback::on_run_failed(&run_ctx, &e, true).await;
-                    return Err(e);
+                    return Err(with_item_outcomes(e));
                 }
             };
 
@@ -4845,13 +4886,22 @@ async fn cognify_in_scope(
             .await;
 
             match after_completion {
-                Ok(result) => {
+                Ok(mut result) => {
                     rollback::on_run_completed(&run_ctx, &result.failures).await;
+                    result.items = crate::pipeline::item_outcomes(
+                        &input_ids,
+                        &crate::pipeline::ItemOutcomeSets {
+                            already_completed: &already_completed,
+                            completed: &run_ctx.completed,
+                            report: &result.failures,
+                            run_completed: true,
+                        },
+                    );
                     Ok(result)
                 }
                 Err(e) => {
                     rollback::on_run_failed(&run_ctx, &e, false).await;
-                    Err(e)
+                    Err(with_item_outcomes(e))
                 }
             }
         })

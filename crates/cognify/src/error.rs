@@ -109,6 +109,17 @@ impl CognifyError {
         }
     }
 
+    /// What became of each data item of a run that failed on its items
+    /// ([`Self::RunFailed`]), in input order: see
+    /// [`FailureReport::item_outcomes`]. `None` for every other error, which
+    /// names no item.
+    pub fn item_outcomes(&self) -> Option<&[crate::pipeline::ItemOutcome]> {
+        match self {
+            Self::RunFailed { report } => Some(report.item_outcomes()),
+            _ => None,
+        }
+    }
+
     /// Whether this error signals an exhausted LLM budget: the typed
     /// [`Self::PaymentRequired`], or a run that failed with a budget failure
     /// among the ones its report collected.

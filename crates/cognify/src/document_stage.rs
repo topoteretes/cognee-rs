@@ -255,6 +255,8 @@ pub(crate) async fn run_document_stage(
         prior_pipeline_run_id: None,
         pipeline_run_id: stamp.pipeline_run_id,
         failures,
+        // Filled by `cognify()` once the run has ended.
+        items: vec![],
     };
     Ok((
         result,

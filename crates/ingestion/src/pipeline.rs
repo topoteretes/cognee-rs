@@ -244,6 +244,7 @@ pub async fn process_input_preferring(
         tenant_id,
         preferred_loaders,
         None,
+        None,
     )
     .await
 }
@@ -438,7 +439,7 @@ fn upload_file_name(name: &str) -> Result<&str, IngestionError> {
 #[allow(clippy::too_many_arguments)]
 #[instrument(
     name = "ingestion.process_input",
-    skip(input, storage, loaders, stored_text)
+    skip(input, storage, loaders, stored_text, upload_root)
 )]
 async fn process_input_reusing(
     input: &DataInput,
@@ -449,6 +450,7 @@ async fn process_input_reusing(
     tenant_id: Option<Uuid>,
     preferred_loaders: &[String],
     stored_text: Option<&StoredTextLookup>,
+    upload_root: Option<&Path>,
 ) -> Result<ProcessedInput, Box<dyn std::error::Error>> {
     use tokio::sync::Mutex;
 
@@ -769,7 +771,7 @@ async fn process_input_reusing(
         .clone()
         .or(original_upload_uri)
         .unwrap_or_else(|| extract_original_location(input, &raw_data_uri));
-    let source_uri = source_uri_from_input(input);
+    let source_uri = source_uri_from_input(input, upload_root);
     let external_metadata =
         merge_external_metadata(data_item_metadata.clone(), source_uri.as_deref())?;
 
@@ -2042,7 +2044,13 @@ fn with_node_set_in_external_metadata(
 /// the item's own metadata wins; otherwise a URL or `s3://` path is its own
 /// locator and a local file is its absolute `file://` URI. Raw text, binary uploads and
 /// anything else have none.
-fn source_uri_from_input(input: &DataInput) -> Option<String> {
+///
+/// A local file under `upload_root` is a client upload the host spooled to
+/// disk ([`AddPipeline::with_upload_root`]): it has none either, as Python's
+/// upload has none (`ingest_data.py:180-188`, "an upload has no source
+/// location"). Its spool path is not where the content came from, and is
+/// gone once the request ends.
+fn source_uri_from_input(input: &DataInput, upload_root: Option<&Path>) -> Option<String> {
     if let DataInput::DataItem {
         external_metadata, ..
     } = input
@@ -2055,9 +2063,18 @@ fn source_uri_from_input(input: &DataInput) -> Option<String> {
     match unwrap_data_item(input) {
         // Python returns an `http`, `https`, `s3` or `file` locator as given.
         DataInput::Url(url) | DataInput::S3Path(url) => Some(url.clone()),
+        DataInput::FilePath(path) if is_under(path, upload_root) => None,
         DataInput::FilePath(path) => Some(file_uri(path)),
         _ => None,
     }
+}
+
+/// Whether the local file `path` (a plain path or a `file://` URI) lies under
+/// `root`. Compared component by component, without touching the disk.
+fn is_under(path: &str, root: Option<&Path>) -> bool {
+    root.is_some_and(|root| {
+        Path::new(path.strip_prefix("file://").unwrap_or(path)).starts_with(root)
+    })
 }
 
 /// The `file://` URI of a local path, as Python's `Path(p).resolve().as_uri()`
@@ -2282,11 +2299,15 @@ pub fn make_process_input_task_with_loaders(
         owner_id,
         tenant_id,
         None,
+        None,
     )
 }
 
 /// [`make_process_input_task_with_loaders`] that tries the Python loader names
-/// in `preferred_loaders` first (see [`AddParams::preferred_loaders`]).
+/// in `preferred_loaders` first (see [`AddParams::preferred_loaders`]), and
+/// treats files under `upload_root` as uploads
+/// ([`AddPipeline::with_upload_root`]).
+#[allow(clippy::too_many_arguments)]
 fn make_process_input_task_preferring(
     storage: Arc<dyn StorageTrait>,
     loaders: Arc<LoaderRegistry>,
@@ -2295,6 +2316,7 @@ fn make_process_input_task_preferring(
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
     stored_text: Option<StoredTextLookup>,
+    upload_root: Option<Arc<PathBuf>>,
 ) -> TypedTask<DataInput, ProcessedInput> {
     TypedTask::async_fn(move |input: &DataInput, _ctx| {
         let input = input.clone();
@@ -2302,6 +2324,7 @@ fn make_process_input_task_preferring(
         let loaders = Arc::clone(&loaders);
         let preferred_loaders = Arc::clone(&preferred_loaders);
         let stored_text = stored_text.clone();
+        let upload_root = upload_root.clone();
         Box::pin(async move {
             process_input_reusing(
                 &input,
@@ -2312,6 +2335,7 @@ fn make_process_input_task_preferring(
                 tenant_id,
                 &preferred_loaders,
                 stored_text.as_ref(),
+                upload_root.as_deref().map(PathBuf::as_path),
             )
             .await
             .map(Box::new)
@@ -2378,6 +2402,8 @@ struct AddParamsInjection {
     dataset_locks: Option<Arc<DatasetLocks>>,
     /// Python loader names to try first (`AddParams::preferred_loaders` keys).
     preferred_loaders: Arc<Vec<String>>,
+    /// [`AddPipeline::with_upload_root`].
+    upload_root: Option<Arc<PathBuf>>,
 }
 
 /// The keys of `preferred_loaders` in the caller's order, which is Python's
@@ -2521,6 +2547,7 @@ fn build_add_pipeline_internal(
                 dataset_name: dataset_name.to_string(),
                 target_dataset_id: add_params.target_dataset_id,
             }),
+            add_params.upload_root.clone(),
         ),
     )
     .add_task(make_persist_data_task_with_acl_and_params(
@@ -2582,6 +2609,8 @@ pub struct AddPipeline {
     llm_available: bool,
     repo_sources: crate::resolve_repo::RepoSourceSettings,
     repo_transport: Arc<dyn crate::resolve_repo::RepoTransport>,
+    // ─── Spooled uploads (SDK-1694 C5) ────────────────────────────────────
+    upload_root: Option<Arc<PathBuf>>,
 }
 
 impl AddPipeline {
@@ -2611,6 +2640,7 @@ impl AddPipeline {
             llm_available: true,
             repo_sources: crate::resolve_repo::RepoSourceSettings::closed(),
             repo_transport: crate::resolve_repo::system_git(),
+            upload_root: None,
         }
     }
 
@@ -2638,6 +2668,7 @@ impl AddPipeline {
             llm_available: true,
             repo_sources: crate::resolve_repo::RepoSourceSettings::closed(),
             repo_transport: crate::resolve_repo::system_git(),
+            upload_root: None,
         }
     }
 
@@ -2704,6 +2735,18 @@ impl AddPipeline {
     /// audio input fails with [`IngestionError::UnsupportedDocumentType`].
     pub fn with_loader_registry(mut self, loaders: Arc<LoaderRegistry>) -> Self {
         self.loaders = loaders;
+        self
+    }
+
+    /// The directory a host spooled this add's client uploads into: a
+    /// [`DataInput::FilePath`] under it is an upload, not a file of the
+    /// host's, so its row records no source location
+    /// (`external_metadata._cognee.source_uri`), as Python records none for
+    /// an upload (`ingest_data.py:180-188`). An explicit `source_uri` in the
+    /// item's metadata still wins. Unset (the default), every local file is
+    /// its own source.
+    pub fn with_upload_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.upload_root = Some(Arc::new(root.into()));
         self
     }
 
@@ -2981,6 +3024,7 @@ impl AddPipeline {
             pinned_id: params.pinned_id,
             dataset_locks: self.dataset_locks.clone(),
             preferred_loaders: Arc::new(loader_names(params.preferred_loaders.as_deref())),
+            upload_root: self.upload_root.clone(),
         };
 
         // ── Build the typed pipeline ─────────────────────────────────────
@@ -5345,20 +5389,26 @@ mod tests {
             system_metadata: None,
         };
         assert_eq!(
-            source_uri_from_input(&DataInput::Url("https://example.com/a".into())),
+            source_uri_from_input(&DataInput::Url("https://example.com/a".into()), None),
             Some("https://example.com/a".to_string())
         );
         assert_eq!(
-            source_uri_from_input(&DataInput::FilePath("file:///tmp/a.txt".into())),
+            source_uri_from_input(&DataInput::FilePath("file:///tmp/a.txt".into()), None),
             Some("file:///tmp/a.txt".to_string())
         );
-        assert_eq!(source_uri_from_input(&DataInput::Text("x".into())), None);
+        assert_eq!(
+            source_uri_from_input(&DataInput::Text("x".into()), None),
+            None
+        );
         // An explicit `source_uri` in the item's metadata wins.
         assert_eq!(
-            source_uri_from_input(&item(
-                r#"{"source_uri": " s3://b/k "}"#,
-                DataInput::Url("https://example.com/a".into())
-            )),
+            source_uri_from_input(
+                &item(
+                    r#"{"source_uri": " s3://b/k "}"#,
+                    DataInput::Url("https://example.com/a".into())
+                ),
+                None
+            ),
             Some("s3://b/k".to_string())
         );
         assert_eq!(path_to_file_uri("/tmp/a b.txt"), "file:///tmp/a%20b.txt");
@@ -5373,21 +5423,68 @@ mod tests {
         assert_eq!(relative, format!("file://{}", absolute.display()));
         // `s3://` is kept as given, as Python keeps an `s3` locator.
         assert_eq!(
-            source_uri_from_input(&DataInput::S3Path("s3://bucket/key.txt".into())),
+            source_uri_from_input(&DataInput::S3Path("s3://bucket/key.txt".into()), None),
             Some("s3://bucket/key.txt".to_string())
         );
         // A blank explicit `source_uri` does not win (`explicit.strip()`).
         assert_eq!(
-            source_uri_from_input(&item(
-                r#"{"source_uri": "   "}"#,
-                DataInput::Url("https://example.com/a".into())
-            )),
+            source_uri_from_input(
+                &item(
+                    r#"{"source_uri": "   "}"#,
+                    DataInput::Url("https://example.com/a".into())
+                ),
+                None
+            ),
             Some("https://example.com/a".to_string())
         );
         // Neither does one that is not a string.
         assert_eq!(
-            source_uri_from_input(&item(r#"{"source_uri": 7}"#, DataInput::Text("x".into()))),
+            source_uri_from_input(
+                &item(r#"{"source_uri": 7}"#, DataInput::Text("x".into())),
+                None
+            ),
             None
+        );
+    }
+
+    /// A file under the host's upload spool is an upload: no source, as
+    /// Python's upload has none (SDK-1694 C5). Outside it, or with an
+    /// explicit `source_uri`, nothing changes.
+    #[test]
+    fn a_spooled_upload_has_no_source() {
+        let root = Path::new("/tmp/cognee-uploads/req-1");
+        let spooled = |path: &str| DataInput::FilePath(path.to_string());
+        let under = "file:///tmp/cognee-uploads/req-1/0/a.txt";
+        assert_eq!(source_uri_from_input(&spooled(under), Some(root)), None);
+        assert_eq!(
+            source_uri_from_input(&spooled("/tmp/cognee-uploads/req-1/0/a.txt"), Some(root)),
+            None
+        );
+        let item = |meta: Option<&str>| DataInput::DataItem {
+            data: Box::new(spooled(under)),
+            label: Some("l".into()),
+            external_metadata: meta.map(str::to_string),
+            system_metadata: None,
+        };
+        assert_eq!(source_uri_from_input(&item(None), Some(root)), None);
+        // An explicit `source_uri` still wins.
+        assert_eq!(
+            source_uri_from_input(
+                &item(Some(r#"{"source_uri": "https://e.com/a"}"#)),
+                Some(root)
+            ),
+            Some("https://e.com/a".to_string())
+        );
+        // A sibling whose name only shares a prefix is not under the root.
+        let sibling = "file:///tmp/cognee-uploads/req-10/a.txt";
+        assert_eq!(
+            source_uri_from_input(&spooled(sibling), Some(root)),
+            Some(sibling.to_string())
+        );
+        // Without a root every local file is its own source.
+        assert_eq!(
+            source_uri_from_input(&spooled(under), None),
+            Some(under.to_string())
         );
     }
 
@@ -7103,6 +7200,7 @@ mod tests {
                 None,
                 &[],
                 Some(&lookup),
+                None,
             )
         };
 
