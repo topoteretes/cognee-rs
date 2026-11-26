@@ -50,6 +50,11 @@ pub enum CodeGraphError {
     /// (`index_vectors`).
     #[error("vector database error: {0}")]
     Vector(String),
+    /// Reading a dataset's code graph for a CODE search failed. Carries the
+    /// underlying error's text: one load is shared by every concurrent
+    /// caller ([`crate::query::CodeGraphSnapshotCache`]).
+    #[error("code graph snapshot load failed: {0}")]
+    SnapshotLoad(String),
 }
 
 impl CodeGraphError {
@@ -61,7 +66,7 @@ impl CodeGraphError {
             Self::InvalidConfig(_) => "CogneeConfigurationError",
             Self::InvalidRepoItem(_) | Self::InvalidCodeItem(_) => "ValueError",
             Self::Staging(_) => "OSError",
-            Self::Graph(_) => "GraphDatabaseError",
+            Self::Graph(_) | Self::SnapshotLoad(_) => "GraphDatabaseError",
             Self::Ledger(_) => "RelationalDatabaseError",
             Self::Embedding(_) => "EmbeddingException",
             Self::Vector(_) => "VectorDatabaseError",

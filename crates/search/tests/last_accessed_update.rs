@@ -212,6 +212,7 @@ async fn test_search_updates_last_accessed_timestamp() {
         neighborhood_depth: None,
         neighborhood_seed_top_k: None,
         include_references: false,
+        code_query: None,
     };
 
     // With tracking off, a search leaves `last_accessed` alone.

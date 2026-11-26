@@ -22,8 +22,8 @@ use cognee_search::observability::{
     COGNEE_SESSION_ENTRY_COUNT, COGNEE_SESSION_ID,
 };
 use cognee_search::recall_scope::{
-    ResolvedSources, has_dataset_filter, plan_graph, resolve_sources, run_graph, search_session,
-    search_session_context, search_trace,
+    ResolvedSources, check_code_query, has_dataset_filter, plan_graph, resolve_sources, run_code,
+    run_graph, search_session, search_session_context, search_trace,
 };
 use cognee_search::types::SearchError;
 use cognee_search::{SearchOrchestrator, SearchResponse, SearchType, maybe_with_engine_override};
@@ -71,10 +71,13 @@ pub struct RecallResult {
 ///    - An explicit `session_first` -> `[Session, Graph, ..rest]` with
 ///      `auto_fallthrough=true`.
 ///
-///    A `tools` or `code` scope fails here with [`ApiError::InvalidArgument`]
-///    before any source runs: Rust has no lane for them yet (SDK-1537).
-///    So does a `node_name` filter with an empty [`RecallOptions::node_type`]
-///    (Python `recall.py:609-613`), whatever the scope. The graph source then
+///    A `tools` scope fails here with [`ApiError::InvalidArgument`] before
+///    any source runs: Rust has no lane for it yet (SDK-1537). So does a
+///    [`RecallOptions::code_query`] when the sources do not include `code`
+///    (Python's `InvalidCodeQueryError`, `recall.py:601-608`; `code` is never
+///    implied by `auto` or `all`), and a `node_name` filter with an empty
+///    [`RecallOptions::node_type`] (Python `recall.py:609-613`), whatever the
+///    scope. The graph source then
 ///    routes only to types that apply the filter, and an explicit
 ///    `query_type` that cannot apply it fails with
 ///    [`ApiError::InvalidArgument`] when the graph source runs.
@@ -82,7 +85,11 @@ pub struct RecallResult {
 ///    appends to a flat merged list of [`RecallItem`]s. The session, trace
 ///    and session_context sources read the session cache under
 ///    [`RecallOptions::session_cache_user_id`] when set (the session's owner,
-///    from [`resolve_session_cache_user_id`]), else under `user_id`.
+///    from [`resolve_session_cache_user_id`]), else under `user_id`. The
+///    `code` source runs one CODE search ([`run_code`], Python `_run_code`,
+///    `recall.py:1093-1157`): its facts are tagged [`RecallSource::Code`], a
+///    seed the code graph cannot resolve contributes nothing, and an invalid
+///    operation or argument fails with [`ApiError::CodeQuery`].
 /// 4. Telemetry attrs: `COGNEE_RECALL_SCOPE`, `COGNEE_RECALL_SOURCE`,
 ///    `COGNEE_RESULT_COUNT`, `COGNEE_SESSION_ENTRY_COUNT` (`recall.py:515-522`).
 ///
@@ -162,6 +169,9 @@ async fn recall_with_engines(
         query_type,
     )
     .map_err(|e| ApiError::InvalidArgument(e.to_string()))?;
+    // A `code_query` needs the `code` source (Python `recall.py:601-608`).
+    check_code_query(&sources, options.as_ref())
+        .map_err(|e| ApiError::InvalidArgument(e.to_string()))?;
     // Names with an empty `node_type` are refused before any source runs, so
     // a session-only recall refuses them as a graph one does (Python
     // `recall.py:609-613`).
@@ -235,11 +245,19 @@ async fn recall_with_engines(
         let part: Vec<RecallItem> = match src {
             // `Auto` next to real sources is skipped (Python has no runner
             // for it). `resolve_sources` has already turned `SessionFirst`
-            // into `[Session, Graph]` and refused `Tools` / `Code`.
-            RecallScope::Auto
-            | RecallScope::SessionFirst
-            | RecallScope::Tools
-            | RecallScope::Code => continue,
+            // into `[Session, Graph]` and refused `Tools`.
+            RecallScope::Auto | RecallScope::SessionFirst | RecallScope::Tools => continue,
+            RecallScope::Code => run_code(
+                query_text,
+                datasets.clone(),
+                dataset_ids.clone(),
+                top_k,
+                user_id,
+                search_orchestrator,
+                options.as_ref(),
+            )
+            .await
+            .map_err(code_error)?,
             RecallScope::SessionContext => search_session_context(
                 query_text,
                 session_id,
@@ -383,6 +401,15 @@ fn graph_error(error: SearchError) -> ApiError {
     match error {
         SearchError::QueryValidation(message) => ApiError::InvalidArgument(message),
         other => ApiError::Search(other.to_string()),
+    }
+}
+
+/// A `code`-source failure: a refused operation or argument keeps its CODE
+/// error (`error_code`, `error_param`); anything else is the search's.
+fn code_error(error: SearchError) -> ApiError {
+    match error {
+        SearchError::Code(error) => ApiError::CodeQuery(error),
+        other => graph_error(other),
     }
 }
 

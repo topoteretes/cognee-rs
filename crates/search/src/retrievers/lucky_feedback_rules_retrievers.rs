@@ -210,13 +210,7 @@ impl FeelingLuckyRetriever {
             .replace([' ', '-'], "_")
             .to_ascii_uppercase();
 
-        // The Python prompt uses "CODE" for what the Rust enum calls CodingRules.
-        let mapped = match normalized.as_str() {
-            "CODE" => "CODING_RULES".to_string(),
-            other => other.to_string(),
-        };
-
-        serde_json::from_value::<SearchType>(Value::String(mapped)).ok()
+        serde_json::from_value::<SearchType>(Value::String(normalized)).ok()
     }
 
     #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
@@ -258,10 +252,15 @@ impl FeelingLuckyRetriever {
             )
             .await;
 
+        // CODE runs one exact graph operation driven by a structured
+        // `code_query`, which no free-form query carries: an answer naming it
+        // falls back, as Python's `select_search_type` excludes it.
         let selected_type = response
             .ok()
             .and_then(|completion| Self::parse_search_type(completion.content.as_str()))
-            .filter(|search_type| *search_type != SearchType::FeelingLucky);
+            .filter(|search_type| {
+                !matches!(search_type, SearchType::FeelingLucky | SearchType::Code)
+            });
 
         selected_type
             .filter(|search_type| self.retrievers.contains_key(search_type))
@@ -1132,9 +1131,15 @@ mod tests {
     }
 
     #[test]
-    fn parse_search_type_maps_code_to_coding_rules() {
+    fn parse_search_type_reads_code_as_the_code_search_type() {
+        // Python's prompt names CODE; it is its own search type now, never
+        // a stand-in for CODING_RULES.
         assert_eq!(
             FeelingLuckyRetriever::parse_search_type("CODE"),
+            Some(SearchType::Code)
+        );
+        assert_eq!(
+            FeelingLuckyRetriever::parse_search_type("coding rules"),
             Some(SearchType::CodingRules)
         );
     }
@@ -1176,6 +1181,44 @@ mod tests {
             .unwrap();
         match output {
             SearchOutput::Text(text) => assert_eq!(text, "graph result"),
+            _ => panic!("expected text output"),
+        }
+    }
+
+    /// Python's `select_search_type` excludes CODE (it needs a structured
+    /// `code_query`): a selector answering CODE gets the fallback, even when
+    /// a CODE retriever is in the pool.
+    #[tokio::test]
+    async fn feeling_lucky_never_selects_code() {
+        let llm = Arc::new(TestLlm {
+            plain_responses: Mutex::new(VecDeque::from(["CODE".to_string()])),
+            feedback_response: None,
+        });
+        let rag: SearchRetrieverRef = Arc::new(FixedRetriever {
+            kind: SearchType::RagCompletion,
+            text: "rag result".to_string(),
+        });
+        let code: SearchRetrieverRef = Arc::new(FixedRetriever {
+            kind: SearchType::Code,
+            text: "code result".to_string(),
+        });
+        let retriever = FeelingLuckyRetriever::new(
+            llm,
+            HashMap::from([(SearchType::RagCompletion, rag), (SearchType::Code, code)]),
+            Some(SearchType::RagCompletion),
+            None,
+        );
+        let output = retriever
+            .get_completion(
+                "where is create_order called?",
+                None,
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
+            .await
+            .unwrap();
+        match output {
+            SearchOutput::Text(text) => assert_eq!(text, "rag result"),
             _ => panic!("expected text output"),
         }
     }

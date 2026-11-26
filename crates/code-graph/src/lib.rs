@@ -34,6 +34,7 @@ mod mapping;
 mod models;
 mod pipeline;
 pub mod pyjson;
+pub mod query;
 mod runner;
 mod snapshot;
 mod vectors;

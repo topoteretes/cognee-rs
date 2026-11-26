@@ -376,6 +376,101 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicit `source_uri` in the item's metadata still wins. Unset, nothing
   changes. The closed HTTP server sets it, so `/cognify`'s
   `data_location` is `null` for an upload instead of its spool path.
+- **Recall's `code` scope, the CODE CLI options and `codeQuery` in recall
+  (SDK-1056 P3).** `RecallScope::Code` now runs (Python's `_run_code`,
+  `recall.py:1093-1157`): one CODE search with the new
+  `RecallOptions::code_query` (or `explore` on the query text), its facts
+  tagged `RecallSource::Code`, each Python's `ResponseCodeEntry` (the
+  normalized graph-entry shape, kind `code`, `source` on the item;
+  `recall_normalize::build_code_entry`). It is never implied by `auto` or
+  `all`; seed misses — raised for one dataset or softened per dataset —
+  contribute nothing, and an invalid operation fails with the new
+  `ApiError::CodeQuery`, which keeps Python's `error_code` / `error_param`. A
+  `code_query` without the `code` scope is refused before any source runs
+  with Python's `InvalidCodeQueryError` message
+  (`recall_scope::check_code_query`). `cognee-cli search` and `recall` gain
+  `--diagram {mermaid,dot}` and `--diagram-out PATH` next to `--code-query`
+  (a port of `cognee/cli/code_search.py`: a Mermaid `.html` page, Graphviz
+  `.svg`/`.png`/`.pdf` through `dot` on `PATH`, or raw source) and print CODE
+  results with their fenced diagrams; `recall -t CODE` runs the real CODE type
+  (no more `CODING_RULES` stand-in) and, with a CODE option, runs it in the
+  `code` source as Python's command does. The bindings' recall takes
+  `codeQuery` and the `"code"` scope (Python, TS, Java and C docs and types
+  updated), lists code entries in `normalizedResults`, and reports a refused
+  CODE operation from search or recall as a validation error naming its
+  `error_code`. A graph-lane `CODE` answer is normalized with the `code` kind,
+  not `structured`. `RecallOptions` gained a field and `RecallSource` and
+  `ApiError` a variant, so exhaustive matches need an arm;
+  `cognee::cognee_code_graph` is re-exported, and
+  `cognee_code_graph::pyjson::dumps_indented` writes Python's
+  `json.dumps(indent=...)`. The query router still does not route to `CODE`.
+  The bindings' search and `cognee-cli search` also report a
+  `SearchError::QueryValidation` (a `codeQuery` without the CODE type, a
+  `node_name` filter the type cannot apply) as a validation error, as Python
+  raises `CogneeValidationError`; they reported it as a runtime failure.
+  `SearchTuning::code_graph_cache` is now an `Option`: `None` (a config left
+  at the default `code_graph.snapshot_cache_*`) no longer resets the
+  process-wide CODE snapshot cache bounds another handle set
+  (`CodeGraphConfig::snapshot_cache_override`).
+- **CODE search: `search`, `flows`, `hubs` and `ask` (SDK-1056 P2).** The last
+  four of Python's fifteen operations now run: `search` ranks facts and flows
+  with the field-weighted BM25 of `code_search_index.py` (tokenizer, stemmer,
+  k1/b/idf as Python; scores rounded with Python's round-half-even), `flows`
+  lists, shows and traces Enola's flows (`list`, `show`, `through`), `hubs`
+  ranks facts by degree, and `ask` assembles seeds, flows, a one-hop
+  neighbourhood, file:line citations and a `coverage` block without a model.
+  `capabilities` lists all fifteen operations, sorted, as Python does. A
+  dataset without flows answers `flows` with `feature_unavailable` (param
+  `operation`) as Python's `CodeGraphUnavailableError`, a per-dataset miss, and
+  one without a code graph answers `flows` and `ask` with `no_code_graph`.
+  `CodeOperation::implemented`/`is_implemented` and
+  `CodeQueryError::not_implemented` are gone. Checked against 368 results
+  Python produced (`scripts/generate_code_search_goldens.py` gained the shop
+  graph without flows or docs, the test-heavy graph with score ties and the
+  checkout graphs of `code_retriever_navigation_test.py`).
+- **CODE search: the graph walks, overviews and diagrams (SDK-1056 P1b).**
+  `SearchType::Code` now runs `explore` (the default operation),
+  `traverse`, `find_path`, `impact_analysis`, `insights` and `architecture`
+  with Python's result shapes, bounds, type/constructor roll-up and argument
+  errors, and draws any graph-shaped result as Mermaid or Graphviz DOT source
+  (`code_query={"diagram": "mermaid" | "dot" | true}`; `architecture` draws
+  Mermaid by default, `delta` gets a null source and a note) — a port of
+  `code_graph_diagram.py` in `cognee_code_graph::query` (`render_mermaid`,
+  `render_dot`, `collect_diagram_graph`, `render_result_diagram`). The P1a
+  `feature_unavailable` refusal of diagrams is gone; only `search`, `flows`,
+  `hubs` and `ask` still answer `feature_unavailable`, and `capabilities`
+  lists the eleven operations that run. Checked against 225 results and 4
+  direct renders Python produced (`scripts/generate_code_search_goldens.py`
+  now also loads the graphs of Python's `code_retriever_test.py`).
+- **The `CODE` search type, first stage (SDK-1056 P1a).** A port of Python's
+  deterministic code-graph search (`code_retriever.py`, parity pin
+  `a59433e6b`): `SearchType::Code` (`"CODE"`), `SearchRequest::code_query`
+  (merged over `retriever_specific_config`; refused with any other type, with
+  Python's message), the `CodeRetriever` (no LLM, no session turn, a
+  `Structured` result whose `only_context` form is Python's compact,
+  key-sorted JSON context) and `SearchError::Code`, which carries Python's
+  `error_code` and `error_param`. The engine lives in
+  `cognee_code_graph::query`: the snapshot loader and indexes, Python's
+  value normalization (JSON text, nested `properties`, blank docs), the BM25
+  text index, `casefold`, and the operations `query_facts`, `neighbors`,
+  `subgraph`, `delta` and `capabilities`, checked against 80 results Python
+  produced (`scripts/generate_code_search_goldens.py`). The other ten
+  operations and diagrams are validated as in Python but fail with
+  `feature_unavailable` for now. Under per-dataset storage a seed that one of
+  several datasets cannot resolve is that dataset's result
+  (`{"seed_not_found": true, "error", "code", "param"}`), not a failed search,
+  and a merged CODE search returns one result per dataset. Parsed snapshots
+  are cached per dataset and graph engine (`code_graph.snapshot_cache_max_entries`
+  / `CODE_GRAPH_CACHE_MAX_ENTRIES`, default 16; `code_graph.snapshot_cache_ttl_secs`
+  / `CODE_GRAPH_CACHE_TTL_SECONDS`, default 60) and invalidated by every
+  code-graph load and, unlike Python, by every delete, forget and graph prune.
+  `cognee-cli search -t CODE` now runs it (with `--code-query`) instead of
+  the `CODING_RULES` stand-in, and the bindings take `codeQuery` (`CODE` is in
+  the Python, TS, Java and C search-type lists). `FEELING_LUCKY` no longer
+  reads a selector's `CODE` answer as `CODING_RULES`: as in Python's
+  `select_search_type`, CODE is never auto-selected and the answer falls back.
+  `SearchRequest` gained a field, so struct literals need `code_query: None`.
+
 - **`allowed_local_file_roots` (`COGNEE_ALLOWED_LOCAL_FILE_ROOTS`, SDK-1701).**
   Python's opt-in allowlist for local repository paths: empty is no
   restriction; set (even to `:`), a local repository must resolve under one

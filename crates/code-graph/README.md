@@ -219,6 +219,119 @@ completion stamps, so the next `cognify()` re-extracts the cluster (Python's
 `mark_dataset_code_repos_for_rebuild`; this SDK's data-item delete already
 clears every row's stamps in the dataset).
 
+## Querying the graph: the CODE search engine
+
+`cognee_code_graph::query` is the engine behind the `CODE` search type
+(`cognee-search`'s `CodeRetriever`): deterministic queries over a dataset's
+code graph, with no LLM, embedding or vector search. A port of Python's
+`cognee/modules/retrieval/code_retriever.py`, `code_search_index.py` and
+`code_graph_diagram.py` at the same pin.
+
+| Piece | Rust | Python |
+|---|---|---|
+| Read the code subgraph | `load_code_graph_snapshot` (`get_filtered_graph_data` over the 14 fact types and `CodeRepository`) | `CodeRetriever._snapshot` |
+| Indexes, adjacency, flows | `CodeGraphSnapshot` | `_CodeGraphSnapshot` |
+| Backend values as JSON | `normalize_value`, `normalize_properties`, `scalar_text`, `json_key` | `_normalize_value`, `_normalize_properties`, `_scalar_text`, `_json_key` |
+| Text search | `CodeSearchIndex`, `tokenize`, `query_terms`, `CodeGraphSnapshot::text_matches` | `code_search_index.py`, `_text_matches` |
+| Snapshot cache | `CodeGraphSnapshotCache`, `code_graph_snapshot_cache`, `invalidate_code_graph_snapshots` | `_CodeGraphSnapshotCache`, `invalidate_code_graph_snapshot_cache` |
+| Operation and diagram validation | `CodeRequest::parse` | `CodeRetriever.__init__`, `_diagram_format` |
+| Run an operation | `run_code_operation` | `CodeRetriever.get_retrieved_objects` |
+| Diagrams | `render_result_diagram`, `collect_diagram_graph`, `render_mermaid`, `render_dot` | `code_graph_diagram.py` |
+| Errors | `CodeQueryError` (`code`, `param`, `class`) | `CodeSearchValidationError`, `CodeSeedNotFoundError`, `CodeGraphUnavailableError` |
+
+**Snapshot.** Nodes are normalized as Python reads them: a string that starts
+with `{` or `[` and parses is JSON (Ladybug returns stored dicts as text), a
+nested `properties` object (or its JSON text) is flattened under the
+top-level keys, and a `doc` that is null or blank is dropped. Repository and
+flow nodes are held aside; everything else is indexed once (by type, name,
+file, repo, enola id and property, declarations, docs, test code, flow
+members) and the text index is built on first use. Sort orders compare
+Python's `str()` of each field and casefold names (`pyjson::casefold`, Python's
+`str.casefold`, not `to_lowercase`).
+
+**Operations.** All fifteen of Python's operations run here, with Python's
+keys, ordering, defaults, bounds and argument-error precedence:
+
+| Operation | What it answers | Bounds (default, max) |
+|---|---|---|
+| `query_facts` | facts matching structured filters, paged | `limit` 100, 500 |
+| `explore` (the default) | one seed's neighbourhood, both ways; `focus` carries its relations | `max_depth` 1, 2; `max_nodes` 100, 500 |
+| `traverse` | a walk from several seeds, forward by default; a reverse walk from a type also starts from its methods and constructor (`type_rollup`) | `max_depth` 5, 20; `max_nodes` 100, 500 |
+| `find_path` | the shortest forward path, neighbours in node order; a type target is reached through its members too (`target_rollup`, reported as `matched_to`) | `max_depth` 10, 20 |
+| `impact_analysis` | dependents by depth, `total_dependents` past the display cap, `cross_repo_impact`, a summary line, optional `forward_dependencies` | `max_depth` 3, 10; `max_nodes` 200, 500 |
+| `insights` | explainer findings with their evidence, by confidence, paged; `by_source` | `limit` 50, 500 |
+| `architecture` | modules and the routes, storage and services they declare, other edges rolled up to module edges with a `count`; best-connected first | `max_nodes` 80, 300 |
+| `neighbors`, `subgraph` | every edge of one fact; the graph around up to 20 seeds | see `capabilities.limits` |
+| `delta`, `capabilities` | the last ingestion's changes; what the build and graph hold (`operations` is all fifteen, sorted, and `limits` the navigation bounds) | — |
+| `search` | facts and flows ranked against free text (`text`, `query`, `q`); `kinds` (symbol, route, flow, module, storage, service by default; `all`), `repo`, `file_prefix`, `include_tests` | `limit` 10, 50 |
+| `flows` | Enola's flows: `list` (ranked, `mechanism`, `include_side`), `show` (one flow and its stages, by id, Enola id or name), `through` (the flows whose calls reach a symbol, with `via` and `distance`) | `limit` 20, 50 |
+| `hubs` | the most connected facts, containment edges left out; test code neither listed nor counted unless `include_tests` | `limit` 20, 100 |
+| `ask` | evidence for a question: seeds, up to three flows, the seeds' one-hop neighbourhood (callers, callees, route links, the rest), file:line citations, `coverage` (docs, flows, unresolved calls, cuts, notes) and `next` follow-up queries | `max_seeds` 5, 10; `max_nodes` 60, 200; `max_citations` 25, 60 |
+
+The default operation, as in Python, is `explore`.
+
+**Text search.** `query::text_index` is `code_search_index.py`: the
+tokenizer (alphanumeric runs split at camelCase and acronym boundaries,
+lowercased, stopwords and one-letter tokens dropped), the light suffix
+stemmer (`validate`, `validation`, `validator` -> `valid`) and the
+field-weighted BM25 index (name 3, doc 2, file 1, summary 1; k1 1.2, b 0.75;
+idf `ln(1 + (N - df + 0.5) / (df + 0.5))`; per-field term frequency capped at
+255). Sums run in Python's order, so scores are the same floats; an exact
+name (+5) or short name (+2.5) match adds a bonus, and scores are rounded to
+four places with `pyjson::py_round`, Python's `round` (ties of the binary
+value go to even). Python memoizes `_run_terms` with an `lru_cache`; here the
+index is built once per snapshot, which is what that cache speeds up. A
+dataset without a code graph answers `flows` and `ask` with `no_code_graph`,
+one without flows answers `flows` with `feature_unavailable` (param
+`operation`): both are per-dataset misses, as in Python.
+
+**Diagrams.** `diagram` (`true` or `"mermaid"`, `"dot"`, `false`) attaches
+`{"format", "source", "nodes", "edges"}` to the result as its last key, the
+source rendered byte for byte as Python's `code_graph_diagram.py` renders it:
+a Mermaid `flowchart LR` (YAML front-matter title, entity-escaped labels,
+shapes by fact kind, one subgraph per repository when there are several,
+`x<count>` on rolled-up edges, the focus/seeds/path highlighted) or a
+Graphviz `digraph` with the same grouping. `architecture` draws Mermaid
+unless told `false`; `delta` has no graph, so its diagram has a null
+`source` and a `note`; the five undrawable operations (`capabilities`,
+`search`, `flows`, `hubs`, `ask`) reject a diagram with `invalid_argument`.
+
+**Errors.** Every error carries Python's message, `error_code`
+(`unknown_operation`, `invalid_argument`, `not_found`, `ambiguous`,
+`no_code_graph`, `feature_unavailable`) and `error_param`.
+`CodeQueryError::is_seed_miss` is Python's `CodeSeedNotFoundError` family: a
+multi-dataset search reports such an error as that dataset's result.
+
+**Cache.** One process-wide cache (`code_graph_snapshot_cache`), keyed by the
+dataset scope (`cognee_models::dataset_scope::current_dataset`, empty outside
+one) and the graph engine, bounded by `code_graph.snapshot_cache_max_entries`
+(16) and `code_graph.snapshot_cache_ttl_secs` (60). Loads are single-flight
+per key; an invalidation that overlaps a load makes its callers load again.
+`add_code_graph_data_points` and `add_code_graph_edges` invalidate the
+dataset they wrote (from the ledger owner, else the current dataset scope,
+else every entry), whatever their outcome, as Python's `finally` does. Two
+divergences, both towards fresher answers: invalidating a dataset also
+invalidates the unscoped entries (the shared store holds every dataset), and
+`cognee-delete` invalidates on every delete or forget, where Python
+invalidates only when a code repository is deleted from a surviving dataset;
+`prune` with `graph` clears the cache too.
+
+**Goldens.** `tests/code_query_goldens.rs` runs 225 cases (every
+implemented operation and its seed misses, ambiguities, bounds and argument
+errors, every validation message, the adapter quirks above, 36 diagrams in
+both formats) over `tests/fixtures/code_search/graph.json` and the graphs of
+Python's `code_retriever_test.py` (`graph_widget.json`, `graph_insights.json`,
+`graph_architecture.json`, `graph_bare_constructor.json`), and compares
+results (key order included), context text and errors with what Python's
+retriever returned (`goldens.json`); `diagrams.json` holds Python's
+`render_mermaid` / `render_dot` output for direct calls (every shape and
+escape). All are written by `scripts/generate_code_search_goldens.py`,
+which loads Python's retriever from a checkout at the pin (a `git archive` of
+`cognee/modules/retrieval/` is enough) with nothing but the standard
+library.
+`tests/code_query_ingested.rs` queries a graph this crate's writer loaded and
+checks the writer's invalidation.
+
 ## Nodes
 
 There are 15 node types. `CodeRepository` is one. The other 14 are

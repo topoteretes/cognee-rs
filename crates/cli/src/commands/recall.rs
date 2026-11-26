@@ -3,7 +3,7 @@ use std::sync::Arc;
 use cognee::api::{ScopeInput, normalize_scope, recall};
 use cognee::database::IngestDb;
 use cognee::search::graph_warmup::GraphWarmup;
-use cognee::search::{SearchBuilder, SearchType};
+use cognee::search::{RecallSource, SearchBuilder, SearchType};
 use cognee::session::SessionStore;
 use cognee::{ComponentManager, PipelineContext};
 use uuid::Uuid;
@@ -29,13 +29,21 @@ pub fn run(args: RecallArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
     })?;
     drop(settings);
     let tenant_id = crate::commands::parse_tenant_id(args.tenant_id.as_deref())?;
-    let scope = recall_scope(&args.scope)?;
 
     // When `--query-type` is omitted, recall auto-routes the search type.
     let (query_type, auto_route): (Option<SearchType>, bool) = match args.query_type {
         Some(qt) => (Some(map_query_type(qt)), false),
         None => (None, true),
     };
+    // `--code-query` / `--diagram` / `--diagram-out` need `-t CODE`, and run
+    // the query in recall's dedicated `code` source, which no other scope
+    // implies (Python's recall command, `recall_command.py:95`, `:137-141`).
+    let code_query = crate::code_search::build_code_query(
+        &args.code.options(),
+        query_type == Some(SearchType::Code),
+    )?;
+    let scope = effective_scope(&args.scope, code_query.is_some())?;
+    let diagram_out = args.code.diagram_out.clone();
 
     crate::teardown::run_command(Arc::clone(&cm), async {
         let vector_db = cm
@@ -119,18 +127,28 @@ pub fn run(args: RecallArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
                 node_type: args.node_type,
                 node_name: (!args.node_name.is_empty()).then_some(args.node_name),
                 verbose: args.verbose.then_some(true),
+                code_query,
                 ..Default::default()
             }),
         )
         .await
         .map_err(|error| match error {
             // The caller's own input, refused before any source runs (an
-            // unsupported scope, node names with an empty `--node-type`).
+            // unsupported scope, node names with an empty `--node-type`,
+            // a code query without the code scope), or a CODE operation or
+            // argument the code source refused.
             cognee::api::ApiError::InvalidArgument(message) => CliError::Validation(message),
+            cognee::api::ApiError::CodeQuery(error) => CliError::Validation(error.to_string()),
             other => CliError::Runtime(format!("Recall failed: {other}")),
         })?;
 
         render_output(&result, args.output_format, args.verbose)?;
+        // After the results, as Python's `handle_diagram_out` runs.
+        for line in
+            crate::code_search::handle_diagram_out(&items_json(&result), diagram_out.as_deref())?
+        {
+            println!("{line}");
+        }
         Ok(())
     })
 }
@@ -146,6 +164,19 @@ fn recall_scope(scope: &[String]) -> Result<Option<Vec<cognee::api::RecallScope>
         .map_err(|error| CliError::Validation(format!("Invalid --scope: {error}")))
 }
 
+/// The scope recall runs: `code` alone when a CODE option built a code
+/// query (Python's recall command sets `scope=["code"]`,
+/// `recall_command.py:137-141`), else the `--scope` flags.
+fn effective_scope(
+    scope: &[String],
+    has_code_query: bool,
+) -> Result<Option<Vec<cognee::api::RecallScope>>, CliError> {
+    if has_code_query {
+        return Ok(Some(vec![cognee::api::RecallScope::Code]));
+    }
+    recall_scope(scope)
+}
+
 fn map_query_type(query_type: QueryTypeArg) -> SearchType {
     match query_type {
         QueryTypeArg::GraphCompletion => SearchType::GraphCompletion,
@@ -153,7 +184,9 @@ fn map_query_type(query_type: QueryTypeArg) -> SearchType {
         QueryTypeArg::RagCompletion => SearchType::RagCompletion,
         QueryTypeArg::Chunks => SearchType::Chunks,
         QueryTypeArg::Summaries => SearchType::Summaries,
-        QueryTypeArg::Code => SearchType::CodingRules,
+        // The real CODE type: the graph source runs it pinned, or, with a
+        // CODE option, the `code` source does.
+        QueryTypeArg::Code => SearchType::Code,
         QueryTypeArg::Cypher => SearchType::Cypher,
         QueryTypeArg::Temporal => SearchType::Temporal,
     }
@@ -172,6 +205,65 @@ fn verbose_response(
         }),
         _ => Ok(None),
     }
+}
+
+/// Every item as its wire form (`source`, `content`, `score`): what
+/// `--diagram-out` searches for the diagram.
+fn items_json(result: &cognee::api::RecallResult) -> serde_json::Value {
+    serde_json::to_value(&result.items).unwrap_or(serde_json::Value::Null)
+}
+
+/// Whether an item holds CODE results: the `code` source's facts, or the
+/// graph source's answer when it ran the CODE type.
+fn is_code_item(item: &cognee::search::RecallItem, search_type_used: Option<SearchType>) -> bool {
+    match item.source {
+        RecallSource::Code => true,
+        RecallSource::Graph => search_type_used == Some(SearchType::Code),
+        _ => false,
+    }
+}
+
+/// The pretty listing: CODE items through the code printer (Python's
+/// `_print_graph_results` for the CODE type -> `print_code_results`), the
+/// others one line each as before. Code items whose contents hold no
+/// operation result fall back to the generic lines.
+fn pretty_output(result: &cognee::api::RecallResult) -> String {
+    if result.items.is_empty() {
+        return "No results found for your query.\n".to_string();
+    }
+    let (code, other): (Vec<_>, Vec<_>) = result
+        .items
+        .iter()
+        .partition(|item| is_code_item(item, result.search_type_used));
+    let code_contents =
+        serde_json::Value::Array(code.iter().map(|item| item.content.clone()).collect());
+    let rendered = (!code.is_empty())
+        .then(|| crate::code_search::render_code_results(&code_contents))
+        .flatten();
+    let listed: Vec<&cognee::search::RecallItem> = match rendered {
+        Some(_) => other,
+        None => result.items.iter().collect(),
+    };
+    let mut out = String::new();
+    if !listed.is_empty() {
+        out.push_str(&format!("Found {} result(s):\n", listed.len()));
+        for (index, item) in listed.iter().enumerate() {
+            out.push_str(&format!(
+                "{}. [{}] {}\n",
+                index + 1,
+                item.source.as_str(),
+                item.content
+            ));
+        }
+    }
+    if let Some(text) = rendered {
+        out.push_str(&format!(
+            "\nFound {} result(s) using CODE:\n{}\n{text}",
+            code.len(),
+            "=".repeat(60)
+        ));
+    }
+    out
 }
 
 /// The `--output-format json` document: the item contents, or under
@@ -209,16 +301,7 @@ fn render_output(
                 println!("{}", item.content);
             }
         }
-        OutputFormatArg::Pretty => {
-            if result.items.is_empty() {
-                println!("No results found for your query.");
-            } else {
-                println!("Found {} result(s):", result.items.len());
-                for (index, item) in result.items.iter().enumerate() {
-                    println!("{}. [{}] {}", index + 1, item.source.as_str(), item.content);
-                }
-            }
-        }
+        OutputFormatArg::Pretty => print!("{}", pretty_output(result)),
     }
     if let Some(response) = verbose_response(result, verbose)? {
         println!("Search response:\n{}", render(&response)?);
@@ -308,6 +391,140 @@ mod tests {
         assert_eq!(
             json_output(&no_graph, true).expect("renders"),
             serde_json::json!(["answer"])
+        );
+    }
+
+    /// `test_recall_command_routes_code_query_through_the_code_scope`: a
+    /// CODE option runs the `code` source alone, whatever `--scope` says;
+    /// `--scope code` is a valid scope of its own.
+    #[test]
+    fn a_code_query_runs_the_code_scope() {
+        assert_eq!(
+            effective_scope(&owned(&["graph"]), true).unwrap(),
+            Some(vec![RecallScope::Code])
+        );
+        assert_eq!(
+            effective_scope(&owned(&["graph", "code"]), false).unwrap(),
+            Some(vec![RecallScope::Graph, RecallScope::Code])
+        );
+        assert_eq!(effective_scope(&[], false).unwrap(), None);
+        assert_eq!(map_query_type(QueryTypeArg::Code), SearchType::Code);
+    }
+
+    /// The recall and search parsers take the CODE options.
+    #[test]
+    fn recall_and_search_parse_the_code_options() {
+        use clap::Parser;
+
+        use crate::cli::{Cli, Commands};
+        use crate::code_search::DiagramFormatArg;
+        let cli = Cli::try_parse_from([
+            "cognee-cli",
+            "recall",
+            "",
+            "-t",
+            "CODE",
+            "--code-query",
+            r#"{"operation": "architecture"}"#,
+            "--diagram",
+            "dot",
+            "--diagram-out",
+            "out/arch.svg",
+        ])
+        .expect("parses");
+        let Commands::Recall(args) = cli.command else {
+            panic!("a recall command");
+        };
+        assert_eq!(
+            args.code.code_query.as_deref(),
+            Some(r#"{"operation": "architecture"}"#)
+        );
+        assert_eq!(args.code.diagram, Some(DiagramFormatArg::Dot));
+        assert_eq!(
+            args.code.diagram_out.as_deref(),
+            Some(std::path::Path::new("out/arch.svg"))
+        );
+
+        let cli = Cli::try_parse_from(["cognee-cli", "search", "q", "--diagram", "mermaid"])
+            .expect("parses");
+        let Commands::Search(args) = cli.command else {
+            panic!("a search command");
+        };
+        assert_eq!(args.code.diagram, Some(DiagramFormatArg::Mermaid));
+        assert!(
+            Cli::try_parse_from(["cognee-cli", "search", "q", "--diagram", "svg"]).is_err(),
+            "only mermaid and dot"
+        );
+    }
+
+    fn code_item(operation: &str) -> cognee::search::RecallItem {
+        cognee::search::RecallItem {
+            source: RecallSource::Code,
+            content: serde_json::json!({
+                "kind": "code",
+                "text": "x",
+                "raw": {
+                    "operation": operation,
+                    "diagram": {"format": "mermaid", "source": "flowchart LR\n", "nodes": 0, "edges": 0},
+                },
+            }),
+            score: 1.0,
+        }
+    }
+
+    /// Code facts go through the code printer, the other sources keep their
+    /// one-line listing.
+    #[test]
+    fn pretty_output_prints_code_results_with_their_diagram() {
+        let mut result = result_with_response();
+        result.items.push(code_item("architecture"));
+        let text = pretty_output(&result);
+        assert!(
+            text.starts_with("Found 1 result(s):\n1. [graph] \"answer\"\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "Found 1 result(s) using CODE:\n{}\nResult 1: architecture\n",
+                "=".repeat(60)
+            )),
+            "{text}"
+        );
+        assert!(text.contains("```mermaid\nflowchart LR\n```"), "{text}");
+
+        // A graph answer of the CODE type is a code result too.
+        let graph_code = cognee::api::RecallResult {
+            items: vec![cognee::search::RecallItem {
+                source: RecallSource::Graph,
+                content: serde_json::json!({"operation": "explore", "seeds": []}),
+                score: 1.0,
+            }],
+            search_type_used: Some(SearchType::Code),
+            auto_routed: false,
+            search_response: None,
+        };
+        assert!(pretty_output(&graph_code).starts_with("\nFound 1 result(s) using CODE:"));
+
+        let empty = cognee::api::RecallResult {
+            items: Vec::new(),
+            ..graph_code
+        };
+        assert_eq!(pretty_output(&empty), "No results found for your query.\n");
+        // Without code results the listing is unchanged.
+        assert_eq!(
+            pretty_output(&result_with_response()),
+            "Found 1 result(s):\n1. [graph] \"answer\"\n"
+        );
+    }
+
+    #[test]
+    fn diagram_out_finds_the_diagram_in_the_items() {
+        let mut result = result_with_response();
+        result.items.push(code_item("architecture"));
+        let items = items_json(&result);
+        assert_eq!(
+            crate::code_search::first_diagram(&items).map(|diagram| diagram["format"].clone()),
+            Some(serde_json::json!("mermaid"))
         );
     }
 

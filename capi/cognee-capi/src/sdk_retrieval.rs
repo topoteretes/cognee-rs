@@ -73,6 +73,11 @@ use crate::sdk_ops::parse_c_str_or_fire;
 ///   "embeddingConfig"        — object of `embedding.*` settings, likewise;
 ///                              dimensions other than the configured model's
 ///                              → CG_ERR_SDK_VALIDATION
+///   "codeQuery"              — with "searchType": "CODE" only: the code-graph
+///                              operation and its snake_case arguments
+///                              (Python's `code_query`); a refused operation
+///                              or argument → CG_ERR_SDK_VALIDATION naming its
+///                              error_code
 ///
 /// `userId` from opts is ignored; `user_id` in `SearchRequest` is always set
 /// from the handle's `owner_id` so dataset-name resolution works correctly.
@@ -137,10 +142,10 @@ pub unsafe extern "C" fn cg_sdk_search(
 ///   "sessionId"   — string
 ///   "scope"       — string or string array:
 ///                   "auto" | "graph" | "session" | "session_first" |
-///                   "session_context" | "trace" | "all"
+///                   "session_context" | "trace" | "code" | "all"
 ///                   ("graph_context" is a deprecated alias of "graph";
-///                   "tools" and "code" are accepted but fail validation as
-///                   not supported yet)
+///                   "code" is never implied by "auto" or "all"; "tools" is
+///                   accepted but fails validation as not supported yet)
 ///                   (absent/null → "auto" default applied by recall(); an
 ///                   empty array runs no source and returns no items)
 ///   "neighborhoodDepth", "neighborhoodSeedTopK", "includeReferences" — as for
@@ -157,6 +162,9 @@ pub unsafe extern "C" fn cg_sdk_search(
 ///                   node-set names only
 ///   "llmConfig", "embeddingConfig" — as for `cg_sdk_search`; the whole recall
 ///                   runs with them, routing included
+///   "codeQuery"   — object: the operation the "code" scope runs (Python's
+///                   `code_query`); only valid when "scope" includes "code".
+///                   Its facts are items with "source": "code"
 ///
 /// Async (D4, R1): the callback fires on a tokio worker thread.
 ///
@@ -165,7 +173,7 @@ pub unsafe extern "C" fn cg_sdk_search(
 ///   "searchTypeUsed" — null or SCREAMING_SNAKE_CASE string
 ///   "autoRouted"     — boolean
 ///   "searchResponse" — null or SearchResponse value
-///   "normalizedResults" — array of typed entries, one per graph item
+///   "normalizedResults" — array of typed entries, one per graph or code item
 ///
 /// # Safety
 /// `sdk` must be a valid `CgSdk*` or NULL.  `query` must be a valid

@@ -2632,6 +2632,135 @@
     "err": "TypeMismatch",
     "key": "code_graph.enola_timeout_secs"
   },
+  "code_graph.snapshot_cache_max_entries <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "code_graph.snapshot_cache_max_entries"
+  },
+  "code_graph.snapshot_cache_max_entries <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "code_graph.snapshot_cache_max_entries"
+  },
+  "code_graph.snapshot_cache_max_entries <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "code_graph.snapshot_cache_max_entries"
+  },
+  "code_graph.snapshot_cache_max_entries <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "code_graph.snapshot_cache_max_entries"
+  },
+  "code_graph.snapshot_cache_max_entries <- -1": {
+    "err": "TypeMismatch",
+    "key": "code_graph.snapshot_cache_max_entries"
+  },
+  "code_graph.snapshot_cache_max_entries <- 0": {
+    "ok": {
+      "code_graph.snapshot_cache_max_entries": 0
+    }
+  },
+  "code_graph.snapshot_cache_max_entries <- 1": {
+    "ok": {
+      "code_graph.snapshot_cache_max_entries": 1
+    }
+  },
+  "code_graph.snapshot_cache_max_entries <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "code_graph.snapshot_cache_max_entries"
+  },
+  "code_graph.snapshot_cache_max_entries <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "code_graph.snapshot_cache_max_entries"
+  },
+  "code_graph.snapshot_cache_max_entries <- 70000": {
+    "ok": {
+      "code_graph.snapshot_cache_max_entries": 70000
+    }
+  },
+  "code_graph.snapshot_cache_max_entries <- [1]": {
+    "err": "TypeMismatch",
+    "key": "code_graph.snapshot_cache_max_entries"
+  },
+  "code_graph.snapshot_cache_max_entries <- false": {
+    "err": "TypeMismatch",
+    "key": "code_graph.snapshot_cache_max_entries"
+  },
+  "code_graph.snapshot_cache_max_entries <- null": {
+    "err": "TypeMismatch",
+    "key": "code_graph.snapshot_cache_max_entries"
+  },
+  "code_graph.snapshot_cache_max_entries <- true": {
+    "err": "TypeMismatch",
+    "key": "code_graph.snapshot_cache_max_entries"
+  },
+  "code_graph.snapshot_cache_max_entries <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "code_graph.snapshot_cache_max_entries"
+  },
+  "code_graph.snapshot_cache_ttl_secs <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "code_graph.snapshot_cache_ttl_secs"
+  },
+  "code_graph.snapshot_cache_ttl_secs <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "code_graph.snapshot_cache_ttl_secs"
+  },
+  "code_graph.snapshot_cache_ttl_secs <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "code_graph.snapshot_cache_ttl_secs"
+  },
+  "code_graph.snapshot_cache_ttl_secs <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "code_graph.snapshot_cache_ttl_secs"
+  },
+  "code_graph.snapshot_cache_ttl_secs <- -1": {
+    "ok": {
+      "code_graph.snapshot_cache_ttl_secs": -1.0
+    }
+  },
+  "code_graph.snapshot_cache_ttl_secs <- 0": {
+    "ok": {
+      "code_graph.snapshot_cache_ttl_secs": 0.0
+    }
+  },
+  "code_graph.snapshot_cache_ttl_secs <- 1": {
+    "ok": {
+      "code_graph.snapshot_cache_ttl_secs": 1.0
+    }
+  },
+  "code_graph.snapshot_cache_ttl_secs <- 1.5": {
+    "ok": {
+      "code_graph.snapshot_cache_ttl_secs": 1.5
+    }
+  },
+  "code_graph.snapshot_cache_ttl_secs <- 5000000000": {
+    "ok": {
+      "code_graph.snapshot_cache_ttl_secs": 5000000000.0
+    }
+  },
+  "code_graph.snapshot_cache_ttl_secs <- 70000": {
+    "ok": {
+      "code_graph.snapshot_cache_ttl_secs": 70000.0
+    }
+  },
+  "code_graph.snapshot_cache_ttl_secs <- [1]": {
+    "err": "TypeMismatch",
+    "key": "code_graph.snapshot_cache_ttl_secs"
+  },
+  "code_graph.snapshot_cache_ttl_secs <- false": {
+    "err": "TypeMismatch",
+    "key": "code_graph.snapshot_cache_ttl_secs"
+  },
+  "code_graph.snapshot_cache_ttl_secs <- null": {
+    "err": "TypeMismatch",
+    "key": "code_graph.snapshot_cache_ttl_secs"
+  },
+  "code_graph.snapshot_cache_ttl_secs <- true": {
+    "err": "TypeMismatch",
+    "key": "code_graph.snapshot_cache_ttl_secs"
+  },
+  "code_graph.snapshot_cache_ttl_secs <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "code_graph.snapshot_cache_ttl_secs"
+  },
   "cognee_tracing_enabled <- \"\"": {
     "err": "TypeMismatch",
     "key": "cognee_tracing_enabled"

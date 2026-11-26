@@ -9,7 +9,9 @@
 //! `cognee/memory/entries.py:207-258`) for:
 //!   * `auto` resolution per `(session_id, datasets, query_type)`,
 //!   * the explicit `session_first` short-circuit,
-//!   * `tools` / `code` refused before any source runs (SDK-1537),
+//!   * `tools` refused before any source runs (SDK-1537),
+//!   * the opt-in `code` source and its `code_query` (SDK-1056,
+//!     `recall.py:601-608`, `:1093-1157`),
 //!   * scope-driven source fan-out across `graph` / `session` / `trace` /
 //!     `session_context`
 //!     (`graph_context` is a deprecated alias of `graph`),
@@ -565,14 +567,14 @@ async fn test_scope_session_first_miss_runs_graph() {
 }
 
 // ---------------------------------------------------------------------------
-// tools / code: accepted names, not supported yet (SDK-1040 D1)
+// tools: an accepted name, not supported yet (SDK-1040 D1)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_scope_tools_and_code_fail_before_any_source_runs() {
-    for (scope, name) in [
-        (vec![RecallScope::Session, RecallScope::Tools], "tools"),
-        (vec![RecallScope::Code, RecallScope::Graph], "code"),
+async fn test_scope_tools_fails_before_any_source_runs() {
+    for scope in [
+        vec![RecallScope::Session, RecallScope::Tools],
+        vec![RecallScope::Code, RecallScope::Tools],
     ] {
         let h = build_harness().await;
         seed_qa(&*h.store, "what is rust", "a systems language").await;
@@ -598,12 +600,169 @@ async fn test_scope_tools_and_code_fail_before_any_source_runs() {
         match err {
             ApiError::InvalidArgument(message) => assert_eq!(
                 message,
-                format!(
-                    "Recall scope '{name}' is not supported yet in the Rust SDK \
-                     (tracked in SDK-1537)."
-                )
+                "Recall scope 'tools' is not supported yet in the Rust SDK \
+                 (tracked in SDK-1537)."
             ),
             other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// code: the opt-in deterministic code-graph source (SDK-1056 P3)
+// ---------------------------------------------------------------------------
+
+/// The stub graph retriever next to a CODE retriever over a mock code graph
+/// holding `orders.create_order`.
+async fn code_orchestrator() -> SearchOrchestrator {
+    use cognee_graph::GraphDBTrait;
+    let graph = cognee_graph::MockGraphDB::new();
+    graph
+        .add_nodes_raw(vec![serde_json::json!({
+            "id": "create", "type": "CodeSymbol", "name": "orders.create_order",
+            "repo": "shop", "file_path": "orders.py", "symbol_kind": "function"
+        })])
+        .await
+        .expect("seed the code graph");
+    let mut registry = SearchTypeRegistry::new();
+    registry.register(Arc::new(StubRetriever(SearchType::GraphCompletion)));
+    registry.register(Arc::new(cognee_search::CodeRetriever::new(Arc::new(graph))));
+    SearchOrchestrator::new(registry)
+}
+
+fn code_query(value: serde_json::Value) -> Option<RecallOptions> {
+    let serde_json::Value::Object(map) = value else {
+        panic!("a code query is an object");
+    };
+    Some(RecallOptions {
+        code_query: Some(map),
+        ..Default::default()
+    })
+}
+
+async fn recall_code(
+    orchestrator: &SearchOrchestrator,
+    query: &str,
+    scope: Option<Vec<RecallScope>>,
+    options: Option<RecallOptions>,
+) -> Result<cognee::api::recall::RecallResult, ApiError> {
+    recall(
+        query,
+        Some(SearchType::GraphCompletion),
+        None,
+        None,
+        10,
+        false,
+        None,
+        Some(USER_ID),
+        orchestrator,
+        None,
+        None,
+        scope,
+        options,
+    )
+    .await
+}
+
+/// `test_code_scope_runs_code_lane_and_tags_source` and
+/// `test_graph_and_code_lanes_both_contribute`: `code` alone tags its facts
+/// `code`; next to `graph` both contribute, in scope order, and the graph
+/// search is still the one reported.
+#[tokio::test]
+async fn test_scope_code_runs_the_code_source() {
+    let orchestrator = code_orchestrator().await;
+
+    let result = recall_code(
+        &orchestrator,
+        "create_order",
+        Some(vec![RecallScope::Code]),
+        None,
+    )
+    .await
+    .expect("code recall");
+    assert_eq!(result.items.len(), 1);
+    assert_eq!(result.items[0].source, RecallSource::Code);
+    assert_eq!(result.items[0].content["raw"]["operation"], "explore");
+    assert_eq!(result.items[0].content["kind"], "code");
+    // The graph source did not run.
+    assert_eq!(result.search_type_used, None);
+
+    let result = recall_code(
+        &orchestrator,
+        "create_order",
+        Some(vec![RecallScope::Graph, RecallScope::Code]),
+        code_query(serde_json::json!({"operation": "neighbors", "name": "create_order"})),
+    )
+    .await
+    .expect("graph and code recall");
+    let sources: Vec<RecallSource> = result.items.iter().map(|item| item.source).collect();
+    assert_eq!(sources, [RecallSource::Graph, RecallSource::Code]);
+    assert_eq!(result.items[1].content["raw"]["operation"], "neighbors");
+    assert_eq!(result.search_type_used, Some(SearchType::GraphCompletion));
+}
+
+/// `test_seed_not_found_contributes_nothing`: a seed the code graph cannot
+/// resolve is no facts, while the other sources still answer.
+#[tokio::test]
+async fn test_scope_code_seed_miss_contributes_nothing() {
+    let orchestrator = code_orchestrator().await;
+    let result = recall_code(
+        &orchestrator,
+        "Xyz",
+        Some(vec![RecallScope::Code, RecallScope::Graph]),
+        None,
+    )
+    .await
+    .expect("a seed miss is not an error");
+    let sources: Vec<RecallSource> = result.items.iter().map(|item| item.source).collect();
+    assert_eq!(sources, [RecallSource::Graph]);
+}
+
+/// An invalid operation is the caller's bug: it fails the recall with the
+/// CODE error and its stable code.
+#[tokio::test]
+async fn test_scope_code_invalid_operation_fails() {
+    let orchestrator = code_orchestrator().await;
+    let err = recall_code(
+        &orchestrator,
+        "x",
+        Some(vec![RecallScope::Code]),
+        code_query(serde_json::json!({"operation": "teleport"})),
+    )
+    .await
+    .expect_err("an unknown operation fails");
+    match err {
+        ApiError::CodeQuery(error) => {
+            assert_eq!(error.code.as_str(), "unknown_operation");
+            assert_eq!(error.param.as_deref(), Some("operation"));
+        }
+        other => panic!("expected CodeQuery, got {other:?}"),
+    }
+}
+
+/// `test_code_query_without_code_scope_is_rejected`: a `code_query` needs
+/// the `code` scope; neither an explicit `graph`, `auto` nor `all` carries
+/// it, and nothing runs.
+#[tokio::test]
+async fn test_code_query_without_code_scope_is_rejected() {
+    let orchestrator = code_orchestrator().await;
+    let all = normalize_scope(Some(ScopeInput::from("all"))).expect("all normalizes");
+    for scope in [Some(vec![RecallScope::Graph]), None, Some(all)] {
+        let err = recall_code(
+            &orchestrator,
+            "create_order",
+            scope.clone(),
+            code_query(serde_json::json!({"operation": "explore"})),
+        )
+        .await
+        .expect_err("refused");
+        match err {
+            ApiError::InvalidArgument(message) => assert_eq!(
+                message,
+                "code_query requires the 'code' scope — pass scope=['code'] or \
+                 scope=['graph', 'code'] ('code' is never implied by 'auto' or 'all')."
+            ),
+            other => panic!("expected InvalidArgument for {scope:?}, got {other:?}"),
         }
     }
 }

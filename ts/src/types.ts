@@ -203,7 +203,7 @@ export interface CogneeCognifyResult {
 // Phase 4 types
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** All 17 search type wire names (SCREAMING_SNAKE_CASE, matching Rust serde). */
+/** All 18 search type wire names (SCREAMING_SNAKE_CASE, matching Rust serde). */
 export type SearchTypeString =
   | "SUMMARIES"
   | "CHUNKS"
@@ -221,14 +221,16 @@ export type SearchTypeString =
   | "CODING_RULES"
   | "CHUNKS_LEXICAL"
   | "GRAPH_REPORT"
-  | "HYBRID_COMPLETION";
+  | "HYBRID_COMPLETION"
+  | "CODE";
 
 /**
  * Recall scope wire names (snake_case). "all" expands to "graph", "session",
  * "trace" and "session_context", keeping a co-supplied "session_first".
- * "graph_context" is a deprecated alias of "graph". The runtime also accepts
- * "tools" and "code", which fail with a `VALIDATION_ERROR` as not supported
- * yet, so they are left out of this type.
+ * "code" runs the deterministic code-graph source (see `codeQuery`); it is
+ * never implied by "auto" or "all". "graph_context" is a deprecated alias of
+ * "graph". The runtime also accepts "tools", which fails with a
+ * `VALIDATION_ERROR` as not supported yet, so it is left out of this type.
  */
 export type RecallScopeString =
   | "auto"
@@ -237,6 +239,7 @@ export type RecallScopeString =
   | "session_first"
   | "session_context"
   | "trace"
+  | "code"
   | "graph_context"
   | "all";
 
@@ -323,6 +326,13 @@ export interface CogneeSearchOptions {
    * lane, defaulting to the chunk lane's own top-k.
    */
   retrieverSpecificConfig?: Record<string, unknown>;
+  /**
+   * With `searchType: "CODE"` only: the code-graph operation and its
+   * arguments (Python's `code_query`), e.g.
+   * `{ operation: "neighbors", name: "create_order" }`. Merged over
+   * `retrieverSpecificConfig`; any other search type refuses it.
+   */
+  codeQuery?: Record<string, unknown>;
   /** User UUID override (defaults to the handle's owner). */
   userId?: string;
 }
@@ -406,6 +416,17 @@ export interface CogneeRecallOptions {
   llmConfig?: Record<string, unknown>;
   /** As `CogneeSearchOptions.embeddingConfig`. */
   embeddingConfig?: Record<string, unknown>;
+  /**
+   * The operation the "code" scope runs, as `CogneeSearchOptions.codeQuery`
+   * (Python's `code_query`), e.g.
+   * `{ operation: "impact_analysis", name: "UserService" }`. Without it the
+   * scope runs `explore` with the query text as seed. Only valid when
+   * `scope` includes "code" (a `VALIDATION_ERROR` otherwise). Its facts are
+   * items with `source: "code"`; a seed the code graph cannot resolve
+   * contributes nothing, and a refused operation or argument is a
+   * `VALIDATION_ERROR` naming its `error_code`.
+   */
+  codeQuery?: Record<string, unknown>;
 }
 
 /**
@@ -495,13 +516,15 @@ export interface CogneeSearchResponse {
 /**
  * A single recall result item. Mirrors `cognee_search::RecallItem` (Serialize).
  *
- * `source` is one of `"session"`, `"graph"`, `"trace"`, `"session_context"`
- * or `"system"` (snake_case, matching the `RecallSource` serde rename).
- * `content` is a heterogeneous JSON value whose shape depends on the source;
- * a `"session_context"` item carries `{ content, context_profile }`.
+ * `source` is one of `"session"`, `"graph"`, `"trace"`, `"session_context"`,
+ * `"code"` or `"system"` (snake_case, matching the `RecallSource` serde
+ * rename). `content` is a heterogeneous JSON value whose shape depends on the
+ * source; a `"session_context"` item carries `{ content, context_profile }`,
+ * and a `"code"` item a `CogneeNormalizedResult` without its `source` (kind
+ * `"code"`, the operation result under `raw`).
  */
 export interface CogneeRecallItem {
-  source: "session" | "graph" | "trace" | "session_context" | "system";
+  source: "session" | "graph" | "trace" | "session_context" | "code" | "system";
   content: Record<string, unknown>;
   score: number;
 }
@@ -517,8 +540,9 @@ export interface CogneeRecallResult {
   /** The raw graph search response, or null if no graph leg ran. */
   searchResponse: CogneeSearchResponse | null;
   /**
-   * One typed entry per graph-source item in `items` (same order); session
-   * and trace items are not included. Additive: `items` is unchanged.
+   * One typed entry per graph-source and code-source item in `items` (same
+   * order); session and trace items are not included. Additive: `items` is
+   * unchanged.
    */
   normalizedResults: CogneeNormalizedResult[];
 }
@@ -539,9 +563,9 @@ export type CogneeResultKind =
   | "unknown";
 
 /**
- * A normalized graph recall result. Mirrors
+ * A normalized graph or code recall result. Mirrors
  * `cognee_search::recall_normalize::NormalizedResult` (snake_case keys, as in
- * Python's `SearchResultItem`).
+ * Python's `SearchResultItem`); a code entry is Python's `ResponseCodeEntry`.
  */
 export interface CogneeNormalizedResult {
   kind: CogneeResultKind;
@@ -560,7 +584,7 @@ export interface CogneeNormalizedResult {
   metadata: Record<string, unknown>;
   raw: Record<string, unknown>;
   structured: unknown | null;
-  source: "graph";
+  source: "graph" | "code";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

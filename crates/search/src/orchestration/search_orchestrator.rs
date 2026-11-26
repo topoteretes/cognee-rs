@@ -1036,6 +1036,9 @@ impl SearchOrchestrator {
             request.neighborhood_depth,
             request.neighborhood_seed_top_k,
         )?;
+        // `code_query` goes with CODE only (Python's `search()`,
+        // `api/v1/search/search.py:282-286`).
+        request.validate_code_query()?;
         // A bad `response_schema` is refused before any dataset is searched,
         // not when the first structured completion is asked for.
         if let Some(schema) = &request.response_schema {
@@ -1434,6 +1437,11 @@ impl SearchOrchestrator {
         // a lazy `Map` over `&Uuid` inside the stream defeats rustc's `Send`
         // inference in the HTTP handlers that await this (`implementation of
         // FnOnce is not general enough` in cognee-cloud-rs).
+        // A CODE seed that one dataset cannot resolve says nothing about the
+        // others: over several datasets it is that dataset's result, not a
+        // failed search (Python's `_report_code_seed_miss`,
+        // `modules/search/methods/search.py:523-565`).
+        let soften_code_seed_misses = search_type == SearchType::Code && datasets.len() > 1;
         let runs: Vec<_> = datasets
             .iter()
             .copied()
@@ -1507,6 +1515,17 @@ impl SearchOrchestrator {
                         dataset_tenant_id,
                         response,
                         error: Some(reason),
+                    });
+                }
+                Err(SearchError::Code(error))
+                    if soften_code_seed_misses && error.is_seed_miss() =>
+                {
+                    results.push(DatasetSearchResult {
+                        dataset_id: Some(dataset_id),
+                        dataset_name,
+                        dataset_tenant_id,
+                        response: code_seed_miss_response(request, dataset_id, &error),
+                        error: Some(error.python_str()),
                     });
                 }
                 Err(other) => {
@@ -2246,6 +2265,43 @@ impl SearchOrchestrator {
     }
 }
 
+/// One dataset's answer to a CODE search whose seed it cannot resolve (or
+/// whose graph cannot answer): Python's `SearchResultPayload` with no result
+/// object or context and the completion
+/// `{"seed_not_found": true, "error": str(error), "code": ..., "param": ...}`
+/// (`param` only when the error names one), the shape that case shipped
+/// with.
+fn code_seed_miss_response(
+    request: &SearchRequest,
+    dataset_id: uuid::Uuid,
+    error: &cognee_code_graph::query::CodeQueryError,
+) -> SearchResponse {
+    let mut completion = serde_json::Map::new();
+    completion.insert("seed_not_found".into(), serde_json::Value::Bool(true));
+    completion.insert(
+        "error".into(),
+        serde_json::Value::String(error.python_str()),
+    );
+    completion.insert(
+        "code".into(),
+        serde_json::Value::String(error.code.as_str().to_string()),
+    );
+    if let Some(param) = &error.param {
+        completion.insert("param".into(), serde_json::Value::String(param.clone()));
+    }
+    let mut response = prepare_search_result(
+        SearchType::Code,
+        SearchOutput::Structured(serde_json::Value::Object(completion)),
+        None,
+        Some(vec![dataset_id]),
+        false,
+        request.use_combined_context(),
+        request.verbose(),
+    );
+    response.datasets = Some(vec![dataset_id]);
+    response
+}
+
 /// The evidence references for the artifacts `context` placed into a
 /// completion: empty unless `params.include_references` is on (Python's
 /// `_context_evidence`, `get_retriever_output.py:59-71`).
@@ -2397,7 +2453,11 @@ pub fn merge_dataset_results(
             merged.system_prompt = response.system_prompt;
         }
     }
-    merged.result = merge_outputs(outputs);
+    merged.result = if request.search_type == SearchType::Code {
+        merge_code_outputs(outputs)
+    } else {
+        merge_outputs(outputs)
+    };
     merged.datasets = Some(datasets);
     merged
 }
@@ -2446,6 +2506,25 @@ impl MergeValue for SearchPrompt {
 
 impl MergeValue for serde_json::Value {
     fn absorb(&mut self, _other: Self) {}
+}
+
+/// A CODE search over several datasets: one structured result per dataset,
+/// in dataset order, as Python's search returns the list of per-dataset
+/// results. (Every other structured answer keeps the first dataset's.)
+fn merge_code_outputs(outputs: Vec<SearchOutput>) -> SearchOutput {
+    SearchOutput::Structured(serde_json::Value::Array(
+        outputs
+            .into_iter()
+            .map(|output| match output {
+                SearchOutput::Structured(value) => value,
+                SearchOutput::Text(text) => serde_json::Value::String(text),
+                // A dataset with nothing to search answers an empty
+                // placeholder.
+                SearchOutput::Items(items) if items.is_empty() => serde_json::Value::Null,
+                other => serde_json::to_value(other).unwrap_or(serde_json::Value::Null),
+            })
+            .collect(),
+    ))
 }
 
 /// One output from several datasets' outputs, in dataset order.
@@ -2683,6 +2762,7 @@ mod tests {
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
             include_references: false,
+            code_query: None,
         }
     }
 
@@ -4069,6 +4149,7 @@ mod tests {
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
             include_references: false,
+            code_query: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -4116,6 +4197,7 @@ mod tests {
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
             include_references: false,
+            code_query: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -4168,6 +4250,7 @@ mod tests {
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
             include_references: false,
+            code_query: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -4247,6 +4330,7 @@ mod tests {
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
             include_references: false,
+            code_query: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -4906,6 +4990,7 @@ mod tests {
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
             include_references: false,
+            code_query: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -4957,6 +5042,7 @@ mod tests {
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
             include_references: false,
+            code_query: None,
         };
 
         let _ = orchestrator.search(&request).await.unwrap();
@@ -5057,6 +5143,7 @@ mod tests {
                 neighborhood_depth: None,
                 neighborhood_seed_top_k: None,
                 include_references: false,
+                code_query: None,
             },
             SearchRequest {
                 query_text: "second".to_string(),
@@ -5085,6 +5172,7 @@ mod tests {
                 neighborhood_depth: None,
                 neighborhood_seed_top_k: None,
                 include_references: false,
+                code_query: None,
             },
         ];
 
@@ -5132,6 +5220,7 @@ mod tests {
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
             include_references: false,
+            code_query: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -5236,6 +5325,7 @@ mod tests {
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
             include_references: false,
+            code_query: None,
         }
     }
 
@@ -6921,6 +7011,7 @@ mod tests {
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
             include_references: false,
+            code_query: None,
         };
 
         let result = orchestrator.search(&request).await;

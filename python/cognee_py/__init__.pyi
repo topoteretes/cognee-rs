@@ -91,6 +91,7 @@ class SearchType(str, Enum):
     CHUNKS_LEXICAL: str
     GRAPH_REPORT: str
     HYBRID_COMPLETION: str
+    CODE: str
 
     def __str__(self) -> str: ...
     def __format__(self, format_spec: str) -> str: ...

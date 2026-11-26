@@ -112,8 +112,9 @@ session history when given a `--session-id`) and graph-backed. Results are
 returned to the caller (printed to stdout by the CLI).
 
 The `scope` picks the sources: `graph`, `session`, `trace`,
-`session_context`, `all`, or `auto` (the default). `all` is `graph`,
-`session`, `trace` and `session_context`, in that order. With a session id and
+`session_context`, `code`, `all`, or `auto` (the default). `all` is `graph`,
+`session`, `trace` and `session_context`, in that order; `code` is opt-in and
+never implied by `auto` or `all`. With a session id and
 no query type, `auto` reads the session and then the graph: with no dataset
 filter a session hit skips the graph, with one both contribute. Without a
 session id, or with a query type, `auto` reads the graph only. `session_first`
@@ -125,11 +126,28 @@ Python's message, both lists in Python `repr` form (`Unknown recall scope(s):
 `session_context` returns the session's active guidance block (the lessons
 `improve()` stored) as one entry, `{content, context_profile}`, rendered
 read-only for the `context_profile` option (`qa`, the default, or `agent`);
-it is empty without a session id or stored guidance. `tools` and `code` are
-valid names that fail with "not supported yet" before any source runs
-(SDK-1537). The `tools_trigger` option
-(`always` | `on_empty`) is validated, and has no effect until the `tools`
-source exists.
+it is empty without a session id or stored guidance. `tools` is a valid name
+that fails with "not supported yet" before any source runs (SDK-1537). The
+`tools_trigger` option (`always` | `on_empty`) is validated, and has no effect
+until the `tools` source exists.
+
+`code` runs one deterministic `CODE` search over the recall's datasets
+(Python's `_run_code`): the `code_query` option's operation, or `explore` with
+the query text as seed, with the recall's `top_k`, datasets and tenant (no
+node scope, session or prompt). Its facts come back as `code` items, each
+Python's `ResponseCodeEntry`: the normalized graph-entry shape with kind
+`code`, the operation result under `raw`, the dataset's id and name, and the
+`source` on the item. A seed the code graph cannot resolve, a dataset without
+a code graph and flows on a graph without them contribute nothing (alone or,
+softened per dataset, next to datasets that answer), so a `["graph", "code"]`
+recall still answers from the graph; an unknown operation or an invalid
+argument fails the recall with the CODE error and its `error_code`. A
+`code_query` whose sources do not include `code` is refused before any source
+runs with Python's `InvalidCodeQueryError` message (`code_query requires the
+'code' scope — pass scope=['code'] or scope=['graph', 'code'] ('code' is never
+implied by 'auto' or 'all').`). The router does not pick `CODE` yet: Python
+routes a question naming a code symbol to it, and Rust leaves that to the
+graph source's other types.
 
 The `session`, `trace` and `session_context` sources read the session cache,
 which is keyed by the session's owner. By default they read the caller's own
@@ -164,12 +182,16 @@ context and graph.
 The CLI and the bindings expose these options. `cognee-cli recall` takes
 `--scope` (repeatable), `--context-profile`, `--tools-trigger`, `--node-type`,
 `--node-name` (repeatable) and `--verbose` (which also prints the graph
-search's response after the items). The bindings' recall opts take
-`scope`, `contextProfile`, `toolsTrigger`, `nodeType`, `nodeName`,
-`nodeNameFilterOperator` and `verbose` (the Python binding also accepts the
-snake_case spellings). An unknown scope or `tools_trigger`, a `tools` / `code`
-scope and node names with an empty `node_type` are validation errors on every
-surface.
+search's response after the items); with `-t CODE`, `--code-query`,
+`--diagram` and `--diagram-out` run the query in the `code` source, as
+Python's command does. The bindings' recall opts take `scope`,
+`contextProfile`, `toolsTrigger`, `nodeType`, `nodeName`,
+`nodeNameFilterOperator`, `verbose` and `codeQuery` (the Python binding also
+accepts the snake_case spellings); their `normalizedResults` list the graph
+and code entries in item order. An unknown scope or `tools_trigger`, a
+`tools` scope, a `codeQuery` without the `code` scope, a CODE operation the
+code graph refuses and node names with an empty `node_type` are validation
+errors on every surface.
 
 A recall (and a search) can run with its own LLM and embedding model, as
 Python's `llm_config` / `embedding_config` arguments do. In Rust that is the
@@ -641,12 +663,13 @@ item its fail-fast run cancelled; Rust reports it `Unreached`.
 
 ### search (retrieval)
 
-Unified orchestration across 17 retrieval strategies selected by `SearchType`
+Unified orchestration across 18 retrieval strategies selected by `SearchType`
 ([`crates/search/src/types/search_type.rs`](../crates/search/src/types/search_type.rs)):
 `GraphCompletion`, `GraphCompletionCot`, `GraphCompletionContextExtension`,
 `GraphCompletionDecomposition`, `GraphSummaryCompletion`, `GraphReport`, `RagCompletion`, `Chunks`,
 `Summaries`, `Temporal`, `Cypher`, `NaturalLanguage`, `FeelingLucky`, `Feedback`,
-`CodingRules`, `ChunksLexical`, `HybridCompletion` (default; combines vector search over
+`CodingRules`, `ChunksLexical`, `Code` (deterministic code-graph operations, see
+below), `HybridCompletion` (default; combines vector search over
 chunks/summaries/entities/edge-facts and
 1-hop graph-neighborhood expansion around matched entities, then answers via
 LLM completion). A hybrid search falls back to `GraphCompletion` when it sets
@@ -684,6 +707,34 @@ bound it, and `wide_search_top_k`, `node_name` (in the vector search) and
 `neighborhood_depth` do not apply. Unlike Python it skips `Triplet_text`, whose
 ids are never graph nodes. `GraphRetrieverCore::search_batch` sends a lone
 query to the single-query search instead, as `get_triplets_batch` does.
+
+`Code` (`CodeRetriever`, Python's `CodeRetriever`) runs one exact operation
+over the dataset's code graph — the one `cognify`'s code routes and
+`remember(content_type="code")` write — with no LLM, embedding or vector
+search. The request's `code_query` names the operation and its arguments and
+is merged over `retriever_specific_config`; `code_query` with any other search
+type is refused (`code_query requires query_type=SearchType.CODE.`). All
+fifteen of Python's operations run: `query_facts`, `explore` (the default),
+`traverse`, `find_path`, `impact_analysis`, `insights`, `architecture`,
+`neighbors`, `subgraph`, `delta`, `capabilities`, and the text and flow
+operations `search` (field-weighted BM25 over names, docstrings, paths and
+flow summaries, scores rounded as Python rounds them), `flows` (`list`,
+`show`, `through`), `hubs` and `ask` (seeds, flows, a one-hop neighbourhood,
+file:line citations and a `coverage` block, with no model involved); a
+dataset without flows answers `flows` with `feature_unavailable`, a per-dataset
+miss. `diagram` (`true`/`"mermaid"`,
+`"dot"`) adds the result drawn as Mermaid or Graphviz DOT source under
+`result["diagram"]`, byte-identical to Python's; `architecture` draws Mermaid
+unless `diagram` is `false`. The result is structured JSON
+(an `only_context` search returns it as compact, key-sorted JSON text), and
+errors are `SearchError::Code` with Python's `error_code` / `error_param`
+(the bindings report them as validation errors naming the `error_code`).
+Over several datasets (per-dataset storage) a seed one dataset cannot resolve
+is that dataset's result, `{"seed_not_found": true, ...}`, not a failed
+search, and `search` returns one result per dataset. The code graph is read
+through a process-wide snapshot cache (`code_graph.snapshot_cache_*`) that
+code-graph loads and deletes invalidate. See
+[`crates/code-graph/README.md`](../crates/code-graph/README.md#querying-the-graph-the-code-search-engine).
 
 `GraphCompletionDecomposition` (`GraphCompletionDecompositionRetriever`, Python's
 retriever of the same name) is its main caller. One structured LLM call splits the

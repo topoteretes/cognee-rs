@@ -1,0 +1,159 @@
+[
+  {
+    "name": "escapes",
+    "nodes": [
+      {
+        "id": "a",
+        "kind": "route",
+        "name": "GET /items?q=\"x\"<y>#1&2",
+        "repo": "r"
+      },
+      {
+        "id": "b",
+        "kind": "module",
+        "name": ".",
+        "repo": "r"
+      }
+    ],
+    "edges": [
+      {
+        "source_id": "a",
+        "target_id": "b",
+        "type": "declares",
+        "count": 3
+      }
+    ],
+    "highlight_ids": [
+      "b"
+    ],
+    "title": "a \"quoted\" # title: Vec<T>",
+    "mermaid": "---\ntitle: \"a \\\"quoted\\\" # title: Vec‹T›\"\n---\nflowchart LR\n    n0>\"GET /items?q=#quot;x#quot;#lt;y#gt;#35;1#38;2\"]\n    n1[[\"(root)\"]]\n    n0 -- \"declares x3\" --> n1\n    classDef highlight stroke:#d64545,stroke-width:3px\n    class n1 highlight\n",
+    "dot": "digraph code_graph {\n    rankdir=LR;\n    node [fontname=\"Helvetica\"];\n    label=\"a \\\"quoted\\\" # title: Vec<T>\"; labelloc=t;\n    n0 [label=\"GET /items?q=\\\"x\\\"<y>#1&2\" shape=cds];\n    n1 [label=\"(root)\" shape=component color=\"#d64545\" penwidth=3];\n    n0 -> n1 [label=\"declares x3\"];\n}\n"
+  },
+  {
+    "name": "every_shape_two_repos",
+    "nodes": [
+      {
+        "id": "m",
+        "kind": "module",
+        "name": "pkg",
+        "repo": "z"
+      },
+      {
+        "id": "s",
+        "kind": "symbol",
+        "name": "pkg.f\nsecond line",
+        "repo": "z"
+      },
+      {
+        "id": "r",
+        "kind": "route",
+        "name": "GET /",
+        "repo": ""
+      },
+      {
+        "id": "st",
+        "kind": "storage",
+        "name": "t",
+        "repo": "a"
+      },
+      {
+        "id": "d",
+        "kind": "dependency",
+        "name": "dep",
+        "repo": "a"
+      },
+      {
+        "id": "sv",
+        "kind": "service",
+        "name": "svc",
+        "repo": "a"
+      },
+      {
+        "id": "i",
+        "kind": "insight",
+        "name": "finding",
+        "repo": "a"
+      },
+      {
+        "id": "in",
+        "kind": "intent",
+        "name": "intent",
+        "repo": "a"
+      },
+      {
+        "id": "rp",
+        "kind": "repository",
+        "name": "repo",
+        "repo": "a"
+      },
+      {
+        "id": "x",
+        "kind": "lint",
+        "name": null,
+        "repo": "a"
+      },
+      {
+        "id": "y",
+        "name": "",
+        "repo": null
+      }
+    ],
+    "edges": [
+      {
+        "source_id": "m",
+        "target_id": "s",
+        "type": "declares",
+        "count": 1
+      },
+      {
+        "source_id": "s",
+        "target_id": "r",
+        "type": "",
+        "count": true
+      },
+      {
+        "source_id": "r",
+        "target_id": "missing",
+        "type": "calls"
+      },
+      {
+        "source_id": "d",
+        "target_id": "sv",
+        "type": "back\\slash \"q\"",
+        "count": 2
+      },
+      {
+        "source_id": "i",
+        "target_id": "in"
+      }
+    ],
+    "highlight_ids": [
+      "s",
+      "nope",
+      "s",
+      "x"
+    ],
+    "title": "back\\slash\nline",
+    "mermaid": "---\ntitle: \"back\\\\slash line\"\n---\nflowchart LR\n    subgraph repo0[\"(no repo)\"]\n        n2>\"GET /\"]\n        n10[\"y\"]\n    end\n    subgraph repo1[\"a\"]\n        n3[(\"t\")]\n        n4{{\"dep\"}}\n        n5[/\"svc\"/]\n        n6{\"finding\"}\n        n7[/\"intent\"\\]\n        n8[[\"repo\"]]\n        n9[\"x\"]\n    end\n    subgraph repo2[\"z\"]\n        n0[[\"pkg\"]]\n        n1([\"pkg.f second line\"])\n    end\n    n0 -- \"declares\" --> n1\n    n1 --> n2\n    n4 -- \"back\\slash #quot;q#quot; x2\" --> n5\n    n6 --> n7\n    classDef highlight stroke:#d64545,stroke-width:3px\n    class n1,n1,n9 highlight\n",
+    "dot": "digraph code_graph {\n    rankdir=LR;\n    node [fontname=\"Helvetica\"];\n    label=\"back\\\\slash line\"; labelloc=t;\n    subgraph cluster_0 {\n        label=\"(no repo)\";\n        n2 [label=\"GET /\" shape=cds];\n        n10 [label=\"y\" shape=box];\n    }\n    subgraph cluster_1 {\n        label=\"a\";\n        n3 [label=\"t\" shape=cylinder];\n        n4 [label=\"dep\" shape=hexagon];\n        n5 [label=\"svc\" shape=box3d];\n        n6 [label=\"finding\" shape=diamond];\n        n7 [label=\"intent\" shape=parallelogram];\n        n8 [label=\"repo\" shape=folder];\n        n9 [label=\"x\" shape=box color=\"#d64545\" penwidth=3];\n    }\n    subgraph cluster_2 {\n        label=\"z\";\n        n0 [label=\"pkg\" shape=component];\n        n1 [label=\"pkg.f second line\" shape=ellipse color=\"#d64545\" penwidth=3];\n    }\n    n0 -> n1 [label=\"declares\"];\n    n1 -> n2;\n    n4 -> n5 [label=\"back\\\\slash \\\"q\\\" x2\"];\n    n6 -> n7;\n}\n"
+  },
+  {
+    "name": "empty_untitled",
+    "nodes": [],
+    "edges": [],
+    "highlight_ids": [],
+    "title": null,
+    "mermaid": "flowchart LR\n",
+    "dot": "digraph code_graph {\n    rankdir=LR;\n    node [fontname=\"Helvetica\"];\n}\n"
+  },
+  {
+    "name": "empty_title",
+    "nodes": [],
+    "edges": [],
+    "highlight_ids": [],
+    "title": "",
+    "mermaid": "flowchart LR\n",
+    "dot": "digraph code_graph {\n    rankdir=LR;\n    node [fontname=\"Helvetica\"];\n}\n"
+  }
+]

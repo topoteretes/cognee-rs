@@ -66,6 +66,7 @@ impl RecallResultKind {
             S::CodingRules => Self::CodingRule,
             S::Chunks | S::ChunksLexical => Self::Chunk,
             S::Summaries => Self::Summary,
+            S::Code => Self::Code,
             S::FeelingLucky | S::GraphReport | S::Feedback => Self::Unknown,
         }
     }
@@ -182,6 +183,45 @@ pub fn build_graph_entry(
         raw,
         structured: None,
         source: "graph",
+    }
+}
+
+/// The `source` discriminator of a code entry.
+pub const CODE_SOURCE: &str = "code";
+
+/// Build one entry of recall's `"code"` lane from one CODE operation result:
+/// Python's `ResponseCodeEntry(**item.model_dump(), source="code")`
+/// (`api/v1/recall/recall.py:1154-1156`), where `item` is
+/// `normalize_search_payload`'s item for the dataset's payload.
+///
+/// The same shape as a graph entry ([`build_graph_entry`]) — kind `code`,
+/// search type `CODE`, the result under `raw` — with only the `source`
+/// discriminator different (`RecallResponse.py:29-37`). A CODE result is a
+/// plain dict, never a validated `response_model`, so it is never the
+/// `structured` kind.
+pub fn build_code_entry(
+    result: Value,
+    dataset_id: Option<String>,
+    dataset_name: Option<String>,
+) -> NormalizedResult {
+    NormalizedResult {
+        source: CODE_SOURCE,
+        ..build_graph_entry(result, SearchType::Code, dataset_id, dataset_name)
+    }
+}
+
+impl NormalizedResult {
+    /// A code item's content: the entry without its `source`, which the
+    /// recall item carries ([`crate::recall_scope::RecallSource::Code`]), as
+    /// a `session_context` item's content leaves its own out.
+    pub fn item_content(&self) -> Value {
+        // Serializing strings, numbers and JSON maps cannot fail; an
+        // unreachable failure yields an empty object rather than a panic.
+        let mut content = serde_json::to_value(self).unwrap_or_else(|_| Value::Object(Map::new()));
+        if let Value::Object(map) = &mut content {
+            map.remove("source");
+        }
+        content
     }
 }
 
@@ -473,6 +513,43 @@ pub fn entry_evidence(
 mod tests {
     use super::*;
     use SearchType as CoreSearchType;
+
+    /// Python `ResponseCodeEntry(**normalize_search_payload(payload)[0]
+    /// .model_dump(), source="code").model_dump()` for a CODE payload whose
+    /// completion is `{"operation": "neighbors", "anchor": {"id": "a"}}`:
+    /// kind `code`, the result under `raw`, `text` its `json.dumps`, and
+    /// `source` last. The item content is the same without `source`.
+    #[test]
+    fn code_entry_is_a_graph_entry_tagged_code() {
+        let result = json!({"operation": "neighbors", "anchor": {"id": "a", "name": "é"}});
+        let entry = build_code_entry(
+            result.clone(),
+            Some("11111111-1111-4111-8111-111111111111".to_string()),
+            Some("shop".to_string()),
+        );
+        let wire = serde_json::to_string(&entry).unwrap();
+        assert_eq!(
+            wire,
+            "{\"kind\":\"code\",\"search_type\":\"CODE\",\
+             \"text\":\"{\\\"operation\\\": \\\"neighbors\\\", \\\"anchor\\\": {\\\"id\\\": \\\"a\\\", \\\"name\\\": \\\"é\\\"}}\",\
+             \"system_prompt\":null,\"score\":null,\
+             \"dataset_id\":\"11111111-1111-4111-8111-111111111111\",\"dataset_name\":\"shop\",\
+             \"metadata\":{},\"raw\":{\"operation\":\"neighbors\",\"anchor\":{\"id\":\"a\",\"name\":\"é\"}},\
+             \"structured\":null,\"source\":\"code\"}"
+        );
+        let content = entry.item_content();
+        assert_eq!(content.get("source"), None);
+        assert_eq!(content["kind"], json!("code"));
+        assert_eq!(content["raw"], result);
+        // A result naming itself is read as Python's `_text_from_dict` reads it.
+        let named = build_code_entry(
+            json!({"operation": "ask", "summary": "two hits"}),
+            None,
+            None,
+        );
+        assert_eq!(named.text, "two hits");
+        assert_eq!(named.dataset_id, None);
+    }
 
     /// Python `ResponseSessionContextEntry.model_dump()`: `source`, `content`,
     /// `context_profile`, in that order, and the item content round-trips.

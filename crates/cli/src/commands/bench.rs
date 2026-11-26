@@ -851,6 +851,7 @@ fn bench_search_request(
         neighborhood_depth: None,
         neighborhood_seed_top_k: None,
         include_references: false,
+        code_query: None,
     }
 }
 

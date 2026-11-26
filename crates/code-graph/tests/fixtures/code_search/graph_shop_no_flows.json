@@ -1,0 +1,501 @@
+{
+  "nodes": [
+    [
+      "repo",
+      {
+        "name": "shop",
+        "type": "CodeRepository",
+        "path": "/src/shop",
+        "last_snapshot_id": "snap-shop-2",
+        "last_delta": {
+          "nodes_added": 3,
+          "nodes_updated": 1,
+          "nodes_unchanged": 12,
+          "edges_added": 4,
+          "edges_removed": 0,
+          "nodes_removed": 0,
+          "samples_added": [
+            "orders/api.create_order"
+          ],
+          "snapshot_id": "snap-shop-2"
+        },
+        "last_receipt": "{\"enola_version\": \"0.5.1\", \"format_version\": 1}"
+      }
+    ],
+    [
+      "repo-payments",
+      {
+        "name": "payments",
+        "type": "CodeRepository",
+        "path": "payments"
+      }
+    ],
+    [
+      "m-auth",
+      {
+        "name": "auth",
+        "type": "CodeModule",
+        "file_path": "auth",
+        "repo": "shop"
+      }
+    ],
+    [
+      "m-orders",
+      {
+        "name": "orders",
+        "type": "CodeModule",
+        "file_path": "orders",
+        "repo": "shop"
+      }
+    ],
+    [
+      "validate",
+      {
+        "name": "auth/tokens.validate_token",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "auth/tokens.py",
+        "line": 12,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python",
+          "doc": "Validates a bearer token and returns its claims."
+        },
+        "end_line": 30,
+        "description": "Validates a bearer token and returns its claims.",
+        "doc": "Validates a bearer token and returns its claims.",
+        "enola_id": "22222222222222222222222222222222"
+      }
+    ],
+    [
+      "parse",
+      {
+        "name": "auth/tokens.parse_header",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "auth/tokens.py",
+        "line": 40,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python"
+        }
+      }
+    ],
+    [
+      "session",
+      {
+        "name": "auth/session.SessionStore",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "auth/session.py",
+        "line": 5,
+        "repo": "shop",
+        "symbol_kind": "class",
+        "fact_properties": {
+          "symbol_kind": "class",
+          "language": "python",
+          "doc": "Keeps user sessions in Redis."
+        },
+        "description": "Keeps user sessions in Redis."
+      }
+    ],
+    [
+      "create",
+      {
+        "name": "orders/api.create_order",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "orders/api.py",
+        "line": 8,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python",
+          "doc": "Creates an order after checking the caller's token."
+        },
+        "description": "Creates an order after checking the caller's token.",
+        "doc": "Creates an order after checking the caller's token.",
+        "enola_id": "11111111111111111111111111111111"
+      }
+    ],
+    [
+      "place",
+      {
+        "name": "orders/service.place_order",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "orders/service.py",
+        "line": 20,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python",
+          "doc": "Places an order and charges the card."
+        },
+        "description": "Places an order and charges the card.",
+        "doc": "Places an order and charges the card.",
+        "enola_id": "33333333333333333333333333333333"
+      }
+    ],
+    [
+      "save",
+      {
+        "name": "orders/repository.save",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "orders/repository.py",
+        "line": 3,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python"
+        }
+      }
+    ],
+    [
+      "charge",
+      {
+        "name": "billing.charge_card",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "billing/stripe.py",
+        "line": 7,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python",
+          "doc": "Charges a card through the payment provider."
+        },
+        "description": "Charges a card through the payment provider.",
+        "doc": "Charges a card through the payment provider.",
+        "enola_id": "44444444444444444444444444444444"
+      }
+    ],
+    [
+      "report",
+      {
+        "name": "orders/report.render_report",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "orders/report.py",
+        "line": 2,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python",
+          "doc": "Renders the monthly sales report."
+        },
+        "description": "Renders the monthly sales report.",
+        "doc": "Renders the monthly sales report."
+      }
+    ],
+    [
+      "camel",
+      {
+        "name": "web/auth.validateToken",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "web/auth.ts",
+        "line": 4,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python"
+        }
+      }
+    ],
+    [
+      "test",
+      {
+        "name": "tests/test_tokens.test_validate_token",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "tests/test_tokens.py",
+        "line": 3,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python"
+        }
+      }
+    ],
+    [
+      "cli",
+      {
+        "name": "cli.main",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "cli.py",
+        "line": 1,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python"
+        },
+        "enola_id": "77777777777777777777777777777777"
+      }
+    ],
+    [
+      "route",
+      {
+        "name": "POST /orders",
+        "type": "ApiEndpoint",
+        "file_path": "orders/api.py",
+        "line": 7,
+        "repo": "shop",
+        "enola_id": "66666666666666666666666666666666",
+        "fact_properties": {
+          "method": "POST",
+          "auth": {
+            "required": true,
+            "scheme": "bearer"
+          }
+        }
+      }
+    ],
+    [
+      "table",
+      {
+        "name": "orders_table",
+        "type": "StorageResource",
+        "file_path": "orders/repository.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "noise",
+      {
+        "name": "ordinary text",
+        "type": "DocumentChunk",
+        "text": "token"
+      }
+    ],
+    [
+      "order-model",
+      {
+        "name": "orders/models.Order",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "orders/models.py",
+        "line": 4,
+        "repo": "shop",
+        "symbol_kind": "class",
+        "fact_properties": {
+          "symbol_kind": "class",
+          "language": "python"
+        }
+      }
+    ],
+    [
+      "order-storage",
+      {
+        "name": "orders/models.Order",
+        "type": "StorageResource",
+        "file_path": "orders/models.py",
+        "line": 4,
+        "repo": "shop",
+        "fact_properties": {
+          "table": "orders"
+        }
+      }
+    ],
+    [
+      "charge-payments",
+      {
+        "name": "billing.charge_card",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "billing/card.py",
+        "line": 11,
+        "repo": "payments",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python",
+          "doc": "Charges a card for the payments service."
+        },
+        "description": "Charges a card for the payments service.",
+        "doc": "Charges a card for the payments service."
+      }
+    ],
+    [
+      "list",
+      {
+        "id": "list",
+        "name": "orders/api.list_orders",
+        "type": "CodeSymbol",
+        "properties": "{\"kind\": \"symbol\", \"file_path\": \"orders/api.py\", \"line\": 30, \"end_line\": 41, \"repo\": \"shop\", \"symbol_kind\": \"function\", \"doc\": null, \"fact_properties\": {\"symbol_kind\": \"function\", \"language\": \"python\", \"decorators\": [\"get\"]}}"
+      }
+    ],
+    [
+      "strasse",
+      {
+        "name": "geo/Straße.lookup",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "geo/straße.py",
+        "line": 1,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python",
+          "doc": "   "
+        },
+        "description": "   ",
+        "doc": "   "
+      }
+    ],
+    [
+      "dep",
+      {
+        "name": "requests",
+        "type": "ExternalDependency",
+        "repo": "shop"
+      }
+    ],
+    [
+      "nodeset",
+      {
+        "name": "shop",
+        "type": "NodeSet"
+      }
+    ]
+  ],
+  "edges": [
+    [
+      "route",
+      "create",
+      "handled_by",
+      {}
+    ],
+    [
+      "create",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "create",
+      "place",
+      "calls",
+      {}
+    ],
+    [
+      "place",
+      "save",
+      "calls",
+      {}
+    ],
+    [
+      "place",
+      "save",
+      "calls",
+      {
+        "relationship_name": "calls",
+        "source_node_id": "place",
+        "target_node_id": "save",
+        "edge_text": "place calls save",
+        "weight": 2
+      }
+    ],
+    [
+      "place",
+      "charge",
+      "calls",
+      {}
+    ],
+    [
+      "validate",
+      "parse",
+      "calls",
+      {}
+    ],
+    [
+      "test",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "cli",
+      "report",
+      "calls",
+      {}
+    ],
+    [
+      "save",
+      "table",
+      "depends_on",
+      {
+        "properties": "{\"access\": \"write\"}"
+      }
+    ],
+    [
+      "validate",
+      "m-auth",
+      "declares",
+      {}
+    ],
+    [
+      "parse",
+      "m-auth",
+      "declares",
+      {}
+    ],
+    [
+      "create",
+      "m-orders",
+      "declares",
+      {}
+    ],
+    [
+      "place",
+      "m-orders",
+      "declares",
+      {}
+    ],
+    [
+      "list",
+      "m-orders",
+      "declares",
+      {}
+    ],
+    [
+      "m-orders",
+      "dep",
+      "imports",
+      {}
+    ],
+    [
+      "create",
+      "repo",
+      "part_of",
+      {}
+    ],
+    [
+      "create",
+      "nodeset",
+      "belongs_to_set",
+      {}
+    ],
+    [
+      "charge-payments",
+      "charge",
+      "calls",
+      {}
+    ]
+  ]
+}

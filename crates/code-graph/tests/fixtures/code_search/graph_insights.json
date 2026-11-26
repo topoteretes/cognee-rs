@@ -1,0 +1,149 @@
+{
+  "nodes": [
+    [
+      "repo-a",
+      {
+        "name": "repo-a",
+        "type": "CodeRepository",
+        "path": "/src/repo-a",
+        "last_snapshot_id": "sha256:abc",
+        "last_receipt": {
+          "format_version": 1,
+          "enola_version": "0.4.12",
+          "quality": {
+            "files_seen": 6,
+            "files_parsed": 5,
+            "parse_errors": 0
+          }
+        }
+      }
+    ],
+    [
+      "db",
+      {
+        "name": "app/db.Database",
+        "type": "CodeSymbol",
+        "file_path": "app/db.py",
+        "line": 4,
+        "end_line": 40,
+        "repo": "repo-a",
+        "symbol_kind": "class",
+        "enola_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    [
+      "api",
+      {
+        "name": "app/api.handler",
+        "type": "CodeSymbol",
+        "file_path": "app/api.py",
+        "repo": "repo-a",
+        "symbol_kind": "function",
+        "enola_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    ],
+    [
+      "hot",
+      {
+        "name": "Call-graph hotspot: app/db.Database",
+        "type": "CodeInsight",
+        "repo": "repo-a",
+        "description": "A pinch point.",
+        "fact_properties": {
+          "source": "hotspots",
+          "confidence": 0.7,
+          "metrics": {
+            "fan_in": 9
+          }
+        }
+      }
+    ],
+    [
+      "cyc",
+      {
+        "name": "Dependency cycle: app/api -> app/db -> app/api",
+        "type": "CodeInsight",
+        "repo": "repo-a",
+        "fact_properties": {
+          "source": "cycles",
+          "confidence": 1.0
+        }
+      }
+    ],
+    [
+      "info",
+      {
+        "name": "Domain findings do not apply to this repository",
+        "type": "CodeInsight",
+        "repo": "repo-a",
+        "fact_properties": {
+          "source": "domain",
+          "confidence": 1.0,
+          "informational": true
+        }
+      }
+    ],
+    [
+      "plain",
+      {
+        "name": "A finding with no score",
+        "type": "CodeInsight",
+        "repo": "repo-a",
+        "fact_properties": {
+          "source": "hotspots"
+        }
+      }
+    ],
+    [
+      "odd",
+      {
+        "name": "An odd finding",
+        "type": "CodeInsight",
+        "repo": "repo-b",
+        "fact_properties": {
+          "source": 7,
+          "confidence": 0,
+          "informational": "yes"
+        }
+      }
+    ],
+    [
+      "extraction",
+      {
+        "name": "python:calls",
+        "type": "CodeExtractionAccount",
+        "repo": "repo-a",
+        "fact_properties": {
+          "extractor": "python",
+          "language": "python"
+        }
+      }
+    ]
+  ],
+  "edges": [
+    [
+      "hot",
+      "db",
+      "evidences",
+      {}
+    ],
+    [
+      "cyc",
+      "api",
+      "evidences",
+      {}
+    ],
+    [
+      "cyc",
+      "db",
+      "evidences",
+      {}
+    ],
+    [
+      "api",
+      "db",
+      "calls",
+      {}
+    ]
+  ]
+}

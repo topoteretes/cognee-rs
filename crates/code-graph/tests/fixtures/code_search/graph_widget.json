@@ -1,0 +1,157 @@
+{
+  "nodes": [
+    [
+      "repo-a",
+      {
+        "name": "repo-a",
+        "type": "CodeRepository",
+        "path": "/src/repo-a"
+      }
+    ],
+    [
+      "00000000-0000-0000-0000-000000000001",
+      {
+        "name": "pkg.Widget",
+        "type": "CodeSymbol",
+        "properties": "{\"file_path\": \"pkg/widget.py\", \"line\": 10, \"repo\": \"repo-a\", \"symbol_kind\": \"class\", \"fact_properties\": {\"exported\": true, \"language\": \"python\"}}"
+      }
+    ],
+    [
+      "method",
+      {
+        "name": "pkg.Widget.run",
+        "type": "CodeSymbol",
+        "file_path": "pkg/widget.py",
+        "line": 20,
+        "repo": "repo-a",
+        "symbol_kind": "method",
+        "fact_properties": {
+          "exported": false
+        }
+      }
+    ],
+    [
+      "constructor",
+      {
+        "name": "pkg.NewWidget",
+        "type": "CodeSymbol",
+        "file_path": "pkg/widget.py",
+        "line": 5,
+        "repo": "repo-a",
+        "symbol_kind": "function"
+      }
+    ],
+    [
+      "entry",
+      {
+        "name": "pkg.entry",
+        "type": "CodeSymbol",
+        "file_path": "pkg/main.py",
+        "line": 7,
+        "repo": "repo-a",
+        "symbol_kind": "function"
+      }
+    ],
+    [
+      "handler",
+      {
+        "name": "api.handler",
+        "type": "CodeSymbol",
+        "file_path": "api/handler.py",
+        "line": 9,
+        "repo": "repo-b",
+        "symbol_kind": "function"
+      }
+    ],
+    [
+      "route",
+      {
+        "name": "GET /widgets",
+        "type": "ApiEndpoint",
+        "file_path": "api/routes.py",
+        "line": 3,
+        "repo": "repo-b",
+        "fact_properties": {
+          "method": "GET"
+        }
+      }
+    ],
+    [
+      "database",
+      {
+        "name": "widget_db",
+        "type": "StorageResource",
+        "file_path": "pkg/storage.py",
+        "repo": "repo-a"
+      }
+    ],
+    [
+      "helper-a",
+      {
+        "name": "shared.Helper",
+        "type": "CodeSymbol",
+        "file_path": "a/helper.py",
+        "repo": "repo-a",
+        "symbol_kind": "class"
+      }
+    ],
+    [
+      "helper-b",
+      {
+        "name": "shared.Helper",
+        "type": "CodeSymbol",
+        "file_path": "b/helper.py",
+        "repo": "repo-b",
+        "symbol_kind": "class"
+      }
+    ],
+    [
+      "noise",
+      {
+        "name": "ordinary text",
+        "type": "DocumentChunk",
+        "text": "not code"
+      }
+    ]
+  ],
+  "edges": [
+    [
+      "00000000-0000-0000-0000-000000000001",
+      "method",
+      "has_method",
+      {}
+    ],
+    [
+      "entry",
+      "method",
+      "calls",
+      {
+        "weight": 1
+      }
+    ],
+    [
+      "handler",
+      "entry",
+      "calls",
+      {}
+    ],
+    [
+      "route",
+      "handler",
+      "handled_by",
+      {}
+    ],
+    [
+      "method",
+      "database",
+      "depends_on",
+      {}
+    ],
+    [
+      "noise",
+      "entry",
+      "mentions",
+      {}
+    ]
+  ]
+}

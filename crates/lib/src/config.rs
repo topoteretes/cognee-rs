@@ -660,8 +660,8 @@ impl Settings {
         }
     }
 
-    /// The retriever tuning a `SearchBuilder` is built with (the `search` and
-    /// `search.hybrid` sections).
+    /// The retriever tuning a `SearchBuilder` is built with (the `search`,
+    /// `search.hybrid` and `code_graph.snapshot_cache_*` settings).
     pub fn search_tuning(&self) -> cognee_search::SearchTuning {
         let search = self.section::<cognee_components::SearchSettings>();
         let hybrid = self.section::<cognee_components::HybridSearchSettings>();
@@ -691,6 +691,9 @@ impl Settings {
                 DEFAULT_SYSTEM_PROMPT_PATH,
             ))
             .then(|| self.default_system_prompt_path.trim().to_string()),
+            // `code_graph.snapshot_cache_*`: the CODE search snapshot cache,
+            // changed only by a config that moves them off the defaults.
+            code_graph_cache: self.code_graph().snapshot_cache_override(),
         }
     }
 

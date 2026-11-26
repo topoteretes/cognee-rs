@@ -69,6 +69,7 @@ use crate::mapping::{
     CODE_GRAPH_MAPPING_VERSION, fact_node_id, fact_repo, is_mappable_fact, resolve_fallback_repo,
 };
 use crate::models::{CODE_INDEX_FIELDS, CodeNode, CodeNodeType, CodeRepository, code_metadata};
+use crate::query::invalidate_code_graph_snapshots;
 use crate::snapshot::{Fact, ParsedSnapshot, Receipt};
 use crate::vectors::{CodeGraphVectors, index_code_graph_vectors};
 
@@ -567,7 +568,21 @@ pub async fn add_code_graph_data_points(
     if data_points.is_empty() {
         return Ok(CodeGraphLoadState::default());
     }
+    let outcome = write_code_graph_data_points(graph, ledger, data_points, vectors).await;
+    // Storage can fail after a partial graph write: invalidate on an error
+    // too, so no pre-write snapshot survives that ambiguous outcome (Python's
+    // `finally: _invalidate_code_graph_snapshot(ctx)`).
+    invalidate_code_graph_snapshots(ledger.map(|ledger| ledger.owner.dataset_id));
+    outcome
+}
 
+/// [`add_code_graph_data_points`] without the CODE snapshot invalidation.
+async fn write_code_graph_data_points(
+    graph: &dyn GraphDBTrait,
+    ledger: Option<&CodeGraphLedger<'_>>,
+    data_points: Vec<CodeNode>,
+    vectors: Option<&CodeGraphVectors>,
+) -> CodeGraphResult<CodeGraphLoadState> {
     let mut point_ids: Vec<String> = Vec::with_capacity(data_points.len());
     let mut seen_ids: HashSet<Uuid> = HashSet::with_capacity(data_points.len());
     for point in &data_points {
@@ -1323,7 +1338,26 @@ pub(crate) async fn write_code_graph_edges(
     if state.data_points.is_empty() {
         return Ok(None);
     }
+    let outcome = write_edges_sweep_and_stamp(
+        graph, ledger, state, snapshot, repo_path, repo_scope, node_set,
+    )
+    .await;
+    // Direct edge writes, sweeps and ledger writes may partially succeed:
+    // invalidate whatever the outcome, as Python's `finally` does.
+    invalidate_code_graph_snapshots(ledger.map(|ledger| ledger.owner.dataset_id));
+    outcome
+}
 
+/// [`write_code_graph_edges`] without the CODE snapshot invalidation.
+async fn write_edges_sweep_and_stamp(
+    graph: &dyn GraphDBTrait,
+    ledger: Option<&CodeGraphLedger<'_>>,
+    state: &CodeGraphLoadState,
+    snapshot: &ParsedSnapshot,
+    repo_path: Option<&str>,
+    repo_scope: Option<&str>,
+    node_set: Option<&[String]>,
+) -> CodeGraphResult<Option<Map<String, Value>>> {
     // Resolved ahead by `extract_code_graph` (off the runtime), else here.
     let resolved;
     let edges: &[CodeGraphEdge] = match snapshot.edges.as_deref() {

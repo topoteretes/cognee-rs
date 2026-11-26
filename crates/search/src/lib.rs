@@ -1,4 +1,4 @@
-//! Unified search orchestration across 17 retrieval strategies (GraphCompletion, RagCompletion, Chunks, and more).
+//! Unified search orchestration across 18 retrieval strategies (GraphCompletion, RagCompletion, Chunks, and more).
 
 /// Per-call LLM and embedding engines (Python's `llm_config` /
 /// `embedding_config` context variables).
@@ -59,8 +59,8 @@ pub use recall_scope::{
     normalize_scope, resolve_sources,
 };
 pub use retrievers::{
-    ChunksRetriever, CodingRulesRetriever, CompletionRetriever, CypherSearchRetriever,
-    DatasetScoping, FeedbackRetriever, FeelingLuckyRetriever,
+    ChunksRetriever, CodeRetriever, CodingRulesRetriever, CompletionRetriever,
+    CypherSearchRetriever, DatasetScoping, FeedbackRetriever, FeelingLuckyRetriever,
     GraphCompletionContextExtensionRetriever, GraphCompletionCotRetriever,
     GraphCompletionRetriever, GraphSummaryCompletionRetriever, HybridBudget, HybridRetriever,
     LexicalRetriever, LexicalScorer, NaturalLanguageRetriever, SearchRetriever, SearchRetrieverRef,

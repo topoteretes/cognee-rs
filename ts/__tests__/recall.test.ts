@@ -170,7 +170,7 @@ describe("recall ops (Tier-A — no LLM)", () => {
       );
     }, 10_000);
 
-    it.each(["tools", "code"])(
+    it.each(["tools"])(
       "refuses the not-yet-supported scope '%s' with VALIDATION_ERROR",
       async (scope) => {
         let caught: unknown;
@@ -189,6 +189,22 @@ describe("recall ops (Tier-A — no LLM)", () => {
       },
       10_000
     );
+
+    it("refuses a codeQuery without the code scope with VALIDATION_ERROR", async () => {
+      let caught: unknown;
+      try {
+        await native.cogneeRecall(handle, "create_order", {
+          scope: "all",
+          codeQuery: { operation: "explore" },
+        });
+      } catch (err) {
+        caught = err;
+      }
+      expect(errorCode(caught)).toBe("VALIDATION_ERROR");
+      expect(String((caught as Error).message)).toContain(
+        "code_query requires the 'code' scope"
+      );
+    }, 10_000);
 
     it("refuses an embeddingConfig of another width with VALIDATION_ERROR", async () => {
       let caught: unknown;

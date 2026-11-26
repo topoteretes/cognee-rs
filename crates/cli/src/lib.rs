@@ -9,6 +9,7 @@
 //! were on the binary — see `commands/mod.rs` and `cli.rs`.
 
 pub mod cli;
+pub mod code_search;
 pub mod commands;
 pub mod config_store;
 pub mod error;

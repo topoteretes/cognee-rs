@@ -1791,11 +1791,24 @@ a repository and loads its snapshot as code nodes and typed edges.
 | `ENOLA_PATH` | `code_graph.enola_path` (`enola_path`) | _(empty)_ |
 | — | `code_graph.enola_timeout_secs` | `600` |
 | `COGNEE_REPOS_DIR` | `code_graph.clones_dir` (`repos_root_directory`) | _(empty: `~/.cognee/repos`)_ |
+| `CODE_GRAPH_CACHE_MAX_ENTRIES` | `code_graph.snapshot_cache_max_entries` | `16` |
+| `CODE_GRAPH_CACHE_TTL_SECONDS` | `code_graph.snapshot_cache_ttl_secs` | `60` |
 
 Whether remote repositories may be cloned is the cognee-wide
 `allow_http_requests` setting, and which local repository paths may be read
 is `allowed_local_file_roots`: see
 [Outbound requests & local paths](#outbound-requests--local-paths).
+
+`code_graph.snapshot_cache_max_entries` and `code_graph.snapshot_cache_ttl_secs`
+bound the process-wide cache of parsed code graphs the `CODE` search type
+reads (one entry per dataset and graph engine; least recently used evicted
+first). An entry is served for the time limit unless a code-graph load or a
+delete of its dataset invalidates it first. As in Python, a count below 1 or a
+time limit that is not a positive number falls back to the default. The
+cache is shared by every handle in the process (Python reads the bounds once,
+at import): a handle whose config moves them off the defaults applies them
+when its search orchestrator is built, and a handle left at the defaults
+does not reset bounds another handle set.
 
 `code_graph.enola_path` names the enola binary. When it is set, the file must
 exist, or the load fails with `EnolaNotInstalledError`. When it is empty,

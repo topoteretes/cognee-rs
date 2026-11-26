@@ -119,6 +119,22 @@ pub async fn prune_system_with_storage(
     session_store: Option<&dyn SessionStore>,
     dataset_storage: Option<&dyn DatasetStorageLifecycle>,
 ) -> Result<PruneResult, ApiError> {
+    let outcome = prune_stores(target, graph_db, vector_db, session_store, dataset_storage).await;
+    if target.graph {
+        // The CODE search's parsed snapshots described the dropped graph
+        // (whatever the outcome: a failed prune may have dropped part of it).
+        cognee_code_graph::query::clear_code_graph_snapshot_cache();
+    }
+    outcome
+}
+
+async fn prune_stores(
+    target: &PruneTarget,
+    graph_db: Option<&dyn GraphDBTrait>,
+    vector_db: Option<&dyn VectorDB>,
+    session_store: Option<&dyn SessionStore>,
+    dataset_storage: Option<&dyn DatasetStorageLifecycle>,
+) -> Result<PruneResult, ApiError> {
     let mut result = PruneResult::default();
 
     if dataset_storage.is_some() && target.graph != target.vector {

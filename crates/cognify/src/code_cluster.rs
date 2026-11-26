@@ -148,6 +148,7 @@ fn replay(error: &CognifyError) -> CognifyError {
             CodeGraphError::Staging(message) => CodeGraphError::Staging(message.clone()),
             CodeGraphError::Embedding(message) => CodeGraphError::Embedding(message.clone()),
             CodeGraphError::Vector(message) => CodeGraphError::Vector(message.clone()),
+            CodeGraphError::SnapshotLoad(message) => CodeGraphError::SnapshotLoad(message.clone()),
             CodeGraphError::Graph(error) => {
                 return CognifyError::GraphDatabaseError(error.to_string());
             }

@@ -205,6 +205,8 @@ const ENV_VARS: &[&str] = &[
     // `code_graph.*` (cognee-code-graph, SDK-1053).
     "ENOLA_PATH",
     "COGNEE_REPOS_DIR",
+    "CODE_GRAPH_CACHE_MAX_ENTRIES",
+    "CODE_GRAPH_CACHE_TTL_SECONDS",
     "COGNEE_DEBUG_LLM_REQUEST",
     "LLM_VISION_MODEL",
     "TRANSCRIPTION_MODEL",

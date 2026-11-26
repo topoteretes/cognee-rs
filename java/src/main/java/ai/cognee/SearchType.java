@@ -18,7 +18,8 @@ public enum SearchType {
     CODING_RULES,
     CHUNKS_LEXICAL,
     GRAPH_REPORT,
-    HYBRID_COMPLETION;
+    HYBRID_COMPLETION,
+    CODE;
 
     /** Wire string (identical to {@link #name()}). */
     public String wire() {

@@ -13,12 +13,12 @@ use crate::graph_warmup::GraphWarmup;
 use crate::orchestration::{SearchOrchestrator, SearchTypeRegistry, SessionSearchMode};
 use crate::query_router::RoutingConstraints;
 use crate::retrievers::{
-    ChunksRetriever, CodingRulesRetriever, CompletionRetriever, CypherSearchRetriever,
-    FeedbackRetriever, FeelingLuckyRetriever, GraphCompletionContextExtensionRetriever,
-    GraphCompletionCotRetriever, GraphCompletionDecompositionRetriever, GraphCompletionRetriever,
-    GraphReportRetriever, GraphSummaryCompletionRetriever, HybridBudget, HybridRetriever,
-    LexicalRetriever, NaturalLanguageRetriever, SearchRetrieverRef, SummariesRetriever,
-    TemporalHybridRetriever,
+    ChunksRetriever, CodeRetriever, CodingRulesRetriever, CompletionRetriever,
+    CypherSearchRetriever, FeedbackRetriever, FeelingLuckyRetriever,
+    GraphCompletionContextExtensionRetriever, GraphCompletionCotRetriever,
+    GraphCompletionDecompositionRetriever, GraphCompletionRetriever, GraphReportRetriever,
+    GraphSummaryCompletionRetriever, HybridBudget, HybridRetriever, LexicalRetriever,
+    NaturalLanguageRetriever, SearchRetrieverRef, SummariesRetriever, TemporalHybridRetriever,
 };
 use crate::types::SearchType;
 use crate::user_preferences::PreferenceConfig;
@@ -56,6 +56,13 @@ pub struct SearchTuning {
     /// Feedback-weight influence of a graph search whose request leaves
     /// `feedback_influence` unset (`default_feedback_influence`). Default 0.
     pub default_feedback_influence: f32,
+    /// New bounds for the process-wide CODE snapshot cache
+    /// (`code_graph.snapshot_cache_max_entries` / `_ttl_secs`), applied by
+    /// [`SearchBuilder::build`]. `None` (the default) leaves the cache as it
+    /// is, so building a handle with the default config never resets bounds
+    /// another handle set. Python reads them once per process, at import;
+    /// here the last handle built with `Some` bounds sets them.
+    pub code_graph_cache: Option<cognee_code_graph::query::SnapshotCacheLimits>,
 }
 
 impl Default for SearchTuning {
@@ -70,6 +77,7 @@ impl Default for SearchTuning {
             default_system_prompt_path: None,
             personalization: PreferenceConfig::default(),
             default_feedback_influence: 0.0,
+            code_graph_cache: None,
         }
     }
 }
@@ -444,6 +452,16 @@ impl SearchBuilder {
             )),
         );
 
+        // Not in FEELING_LUCKY's pool: a CODE search needs a `code_query`
+        // naming its operation, which no auto-selected search carries.
+        retrievers.insert(
+            SearchType::Code,
+            // Python wires CODE to `CodeRetriever(config=retriever_specific_config)`
+            // (`get_search_type_retriever_instance.py:162`); the config is read
+            // per search from `SearchParams::code_config`.
+            Arc::new(CodeRetriever::new(graph_db)),
+        );
+
         retrievers
     }
 
@@ -455,6 +473,11 @@ impl SearchBuilder {
     /// uses its own engines everywhere. A retriever added with
     /// [`Self::register_retriever`] keeps the engines it was built with.
     pub fn build(mut self) -> SearchOrchestrator {
+        // The cache is process-wide (the code-graph writer invalidates it):
+        // only a tuning that names bounds changes them.
+        if let Some(limits) = self.tuning.code_graph_cache {
+            cognee_code_graph::query::configure_code_graph_snapshot_cache(limits);
+        }
         self.engines.llm = Arc::new(RoutedLlm::new(self.engines.llm));
         self.engines.embedding_engine =
             Arc::new(RoutedEmbedding::new(self.engines.embedding_engine));
@@ -873,6 +896,7 @@ mod tests {
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
             include_references: false,
+            code_query: None,
         }
     }
 
@@ -987,6 +1011,41 @@ mod tests {
         let warmup = crate::graph_warmup::GraphWarmup::new(pipeline_runs, Default::default());
         let orchestrator = builder().with_graph_warmup(Arc::new(warmup)).build();
         assert!(orchestrator.graph_warmup().is_some());
+    }
+
+    /// A tuning without CODE cache bounds leaves the process-wide cache as
+    /// another handle configured it; one with bounds sets them.
+    #[test]
+    fn only_a_tuning_with_cache_bounds_changes_the_code_snapshot_cache() {
+        use cognee_code_graph::query::{
+            SnapshotCacheLimits, code_graph_snapshot_cache, configure_code_graph_snapshot_cache,
+        };
+        // Generous bounds, so a CODE search running alongside keeps its
+        // snapshots.
+        let configured = SnapshotCacheLimits {
+            max_entries: 64,
+            ttl: std::time::Duration::from_secs(120),
+        };
+        let with_bounds = |limits| {
+            builder().with_tuning(super::SearchTuning {
+                code_graph_cache: Some(limits),
+                ..super::SearchTuning::default()
+            })
+        };
+        with_bounds(configured).build();
+        assert_eq!(code_graph_snapshot_cache().limits(), configured);
+
+        builder().build();
+        assert_eq!(code_graph_snapshot_cache().limits(), configured);
+
+        let other = SnapshotCacheLimits {
+            max_entries: 32,
+            ..configured
+        };
+        with_bounds(other).build();
+        assert_eq!(code_graph_snapshot_cache().limits(), other);
+
+        configure_code_graph_snapshot_cache(SnapshotCacheLimits::default());
     }
 
     /// The orchestrator's routing constraints come from the builder's LLM
@@ -1308,6 +1367,7 @@ mod tests {
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
             include_references: false,
+            code_query: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -1388,6 +1448,7 @@ mod tests {
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
             include_references: false,
+            code_query: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -1442,6 +1503,7 @@ mod tests {
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
             include_references: false,
+            code_query: None,
         };
 
         let result = orchestrator.search(&request).await;
@@ -1521,6 +1583,8 @@ mod tests {
             (SearchType::ChunksLexical, false),
             (SearchType::GraphReport, false),
             (SearchType::HybridCompletion, true),
+            // Python's `CodeRetriever.supports_session_turn_preparation = False`.
+            (SearchType::Code, false),
         ];
         assert_eq!(expected.len(), retrievers.len());
         for (search_type, prepares) in expected {

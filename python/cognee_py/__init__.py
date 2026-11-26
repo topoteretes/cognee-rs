@@ -59,6 +59,7 @@ class SearchType(str, Enum):
     CHUNKS_LEXICAL = "CHUNKS_LEXICAL"
     GRAPH_REPORT = "GRAPH_REPORT"
     HYBRID_COMPLETION = "HYBRID_COMPLETION"
+    CODE = "CODE"
 
 
 from cognee_py._native import (

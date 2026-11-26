@@ -9,7 +9,9 @@ Single-user, local command-line interface over the cognee pipeline (`add` → `c
 - `add-and-cognify` — ingest then cognify in one call.
 - `search` — query the knowledge graph (graph/RAG completion, chunks, summaries, code, cypher, temporal).
 - `remember` — one-call store (add + cognify + improve).
-- `recall` — smart memory query with auto-routed search type.
+- `recall` — smart memory query with auto-routed search type; `--scope code` adds the deterministic code-graph source.
+
+`search -t CODE` and `recall -t CODE` take `--code-query`, `--diagram {mermaid,dot}` and `--diagram-out PATH` (`code_search` module, a port of Python's `cognee/cli/code_search.py`): the pretty output prints each code-graph result and its fenced diagram, and `--diagram-out` writes a Mermaid `.html` page, a Graphviz `.svg`/`.png`/`.pdf` (via `dot` on `PATH`) or the raw source.
 - `forget` — remove a data item, a dataset, or everything you own.
 - `improve` — enrich existing memory and bridge sessions into the permanent graph.
 - `delete` — lower-level deletion with soft/hard modes and dry-run, scoped to the acting user's datasets in `--tenant-id` (ACL enforcement is provided by the cloud CLI).
@@ -20,7 +22,7 @@ Single-user, local command-line interface over the cognee pipeline (`add` → `c
 
 ## Library target
 
-In addition to the `cognee-cli` binary, the crate exposes a `cognee_cli` library target re-exporting the `cli`, `commands`, `config_store`, and `error` modules, so downstream binaries can reuse the command handlers and argument structs unchanged.
+In addition to the `cognee-cli` binary, the crate exposes a `cognee_cli` library target re-exporting the `cli`, `code_search`, `commands`, `config_store`, and `error` modules, so downstream binaries can reuse the command handlers and argument structs unchanged.
 
 Part of [cognee-rs](https://github.com/topoteretes/cognee-rs) — see the [project README](../../README.md) for an architecture overview and how the pieces fit together.
 

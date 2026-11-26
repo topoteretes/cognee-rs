@@ -224,6 +224,10 @@ pub use add::{
     make_persist_data_task, make_process_input_task, persist_data, process_input,
 };
 
+/// Re-exported for the CODE search's consumers outside this crate (the CLI's
+/// result printer and diagram writer): the operation list and the
+/// Python-compatible JSON forms.
+pub use cognee_code_graph;
 pub use cognee_core;
 pub use cognee_database;
 pub use cognee_delete;
