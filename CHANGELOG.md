@@ -367,6 +367,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `#[non_exhaustive]` (`ItemOutcome::new` builds one). A `CognifyResult`
   struct literal needs `items: vec![]`; nothing outside the crate builds one
   (`CognifyResult::empty()` covers that), so this is not marked breaking.
+  `Completed` does not promise a completion marker: none is written without
+  `incremental_loading`, and a failed marker write only warns.
+- **`AddPipeline::with_upload_root` (SDK-1694 C5).** A host that spools
+  client uploads to disk and adds them as `DataInput::FilePath` names the
+  spool directory; a file under it records no `_cognee.source_uri`, as
+  Python records no source for an upload (`ingest_data.py:180-188`). An
+  explicit `source_uri` in the item's metadata still wins. Unset, nothing
+  changes. The closed HTTP server sets it, so `/cognify`'s
+  `data_location` is `null` for an upload instead of its spool path.
 - **`allowed_local_file_roots` (`COGNEE_ALLOWED_LOCAL_FILE_ROOTS`, SDK-1701).**
   Python's opt-in allowlist for local repository paths: empty is no
   restriction; set (even to `:`), a local repository must resolve under one
