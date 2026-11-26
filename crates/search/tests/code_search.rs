@@ -16,7 +16,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cognee_graph::{
-    DatasetGraphResolver, DatasetRoutedGraphDB, GraphDBResult, GraphDBTrait, MockGraphDB,
+    DatasetGraphResolver, DatasetRoutedGraphDB, GraphDBError, GraphDBResult, GraphDBTrait,
+    MockGraphDB,
 };
 use cognee_search::{
     CodeRetriever, SearchError, SearchOrchestrator, SearchOutput, SearchRequest, SearchType,
@@ -39,6 +40,32 @@ impl DatasetGraphResolver for Datasets {
 
     fn cached_graphs(&self) -> Vec<Arc<dyn GraphDBTrait>> {
         self.0.values().cloned().collect()
+    }
+}
+
+/// Per-dataset graphs where one dataset's store cannot be opened.
+struct OneBroken {
+    graphs: HashMap<Uuid, Arc<dyn GraphDBTrait>>,
+    broken: Uuid,
+}
+
+#[async_trait]
+impl DatasetGraphResolver for OneBroken {
+    async fn graph_for_dataset(&self, dataset_id: Uuid) -> GraphDBResult<Arc<dyn GraphDBTrait>> {
+        if dataset_id == self.broken {
+            return Err(GraphDBError::ConnectionError(
+                "store unreachable".to_string(),
+            ));
+        }
+        Ok(Arc::clone(&self.graphs[&dataset_id]))
+    }
+
+    fn cached_graph(&self, dataset_id: Uuid) -> Option<Arc<dyn GraphDBTrait>> {
+        self.graphs.get(&dataset_id).cloned()
+    }
+
+    fn cached_graphs(&self) -> Vec<Arc<dyn GraphDBTrait>> {
+        self.graphs.values().cloned().collect()
     }
 }
 
@@ -409,4 +436,51 @@ async fn walks_soften_seed_misses_and_draw_per_dataset() {
         })
         .collect();
     assert_eq!(shown, vec![json!(1), json!(2)]);
+}
+
+/// A dataset without a code graph — per-dataset storage provisions an empty
+/// store on first use, as Python's `get_graph_engine` does — is Python's
+/// `CodeSeedNotFoundError(no_code_graph)` from the operation, softened into
+/// that dataset's result by `_report_code_seed_miss`
+/// (`search.py:523-565`). A store that cannot be read is no seed miss:
+/// Python's `get_graph_engine` / `get_filtered_graph_data` error propagates
+/// out of `_snapshot` (`code_retriever.py:1378-1388`) and fails the search.
+#[tokio::test]
+async fn an_empty_dataset_is_a_miss_and_an_unreadable_one_fails_the_search() {
+    let (a, empty, broken) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let resolver = OneBroken {
+        graphs: HashMap::from([
+            (
+                a,
+                graph(vec![symbol("create", "orders.create_order", "shop")]).await,
+            ),
+            (empty, graph(vec![]).await),
+        ]),
+        broken,
+    };
+    let routed: Arc<dyn GraphDBTrait> = Arc::new(DatasetRoutedGraphDB::new(Arc::new(resolver)));
+    let mut registry = SearchTypeRegistry::new();
+    registry.register(Arc::new(CodeRetriever::new(routed)));
+    let orchestrator = SearchOrchestrator::new(registry).with_per_dataset_storage(true);
+
+    let ask = json!({"operation": "ask", "question": "create order"});
+    let results = orchestrator
+        .search_datasets(&code_request(ask.clone(), "", &[a, empty]))
+        .await
+        .unwrap();
+    assert_eq!(results[0].error, None);
+    let SearchOutput::Structured(miss) = &results[1].response.result else {
+        panic!("structured: {:?}", results[1].response.result);
+    };
+    assert_eq!(miss["seed_not_found"], json!(true));
+    assert_eq!(miss["code"], json!("no_code_graph"));
+
+    let error = orchestrator
+        .search_datasets(&code_request(ask, "", &[a, broken]))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, SearchError::GraphError(message) if message.contains("store unreachable")),
+        "{error:?}"
+    );
 }

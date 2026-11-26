@@ -121,6 +121,17 @@ class SearchTypeTest {
     }
 
     @Test
+    void recallOptionsSerializeTheCodeScopeAndQuery() {
+        RecallOptions opts = new RecallOptions()
+                .scope(List.of("graph", "code"))
+                .codeQuery(Map.of("operation", "neighbors", "name", "create_order"));
+        JsonNode n = Json.tree(opts.toJson());
+        assertEquals("code", n.path("scope").get(1).asText());
+        assertEquals("neighbors", n.path("codeQuery").path("operation").asText());
+        assertEquals("create_order", n.path("codeQuery").path("name").asText());
+    }
+
+    @Test
     void searchAndRecallOptionsSerializeTheEngineConfigs() {
         Map<String, Object> llm = Map.of("llm_model", "gpt-4o");
         Map<String, Object> embedding = Map.of("embedding_dimensions", 384);

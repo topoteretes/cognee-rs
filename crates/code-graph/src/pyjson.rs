@@ -117,6 +117,57 @@ fn write_object(map: &Map<String, Value>, out: &mut String) {
     out.push('}');
 }
 
+/// `json.dumps(value, indent=indent)`: the keys in their own order (Python
+/// keeps a dict's insertion order, as serde_json's `preserve_order` does),
+/// one member per line indented by `indent` spaces per level, `","` at line
+/// ends and `": "` after keys, `ensure_ascii=True` escaping and
+/// `float.__repr__` floats. An empty list or dict stays `[]` / `{}`, as
+/// Python writes them. The CLI prints a CODE result with it
+/// (`cognee/cli/code_search.py:216`, `json.dumps(payload, indent=2)`).
+pub fn dumps_indented(value: &Value, indent: usize) -> String {
+    let mut out = String::new();
+    write_indented(value, indent, 0, &mut out);
+    out
+}
+
+fn write_indented(value: &Value, indent: usize, depth: usize, out: &mut String) {
+    let newline = |out: &mut String, depth: usize| {
+        out.push('\n');
+        out.push_str(&" ".repeat(indent * depth));
+    };
+    match value {
+        Value::Array(items) if !items.is_empty() => {
+            out.push('[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                newline(out, depth + 1);
+                write_indented(item, indent, depth + 1, out);
+            }
+            newline(out, depth);
+            out.push(']');
+        }
+        Value::Object(map) if !map.is_empty() => {
+            out.push('{');
+            for (index, (key, item)) in map.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                newline(out, depth + 1);
+                write_string(key, out);
+                out.push_str(": ");
+                write_indented(item, indent, depth + 1, out);
+            }
+            newline(out, depth);
+            out.push('}');
+        }
+        Value::Array(_) => out.push_str("[]"),
+        Value::Object(_) => out.push_str("{}"),
+        scalar => write_value(scalar, out),
+    }
+}
+
 /// `json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",",
 /// ":"))`: the compact, key-sorted form Python's CODE retriever uses as its
 /// context text and as a sort key for JSON values (`code_retriever._json_key`).
@@ -651,6 +702,26 @@ mod tests {
         ] {
             assert_eq!(casefold(text), folded, "{text}");
         }
+    }
+
+    #[test]
+    fn dumps_indented_matches_python_indent() {
+        // python3 -c 'import json; print(json.dumps({"b": [1, {"x": "é",
+        //   "y": []}], "a": {}, "f": 1.5e-07, "t": True, "n": None}, indent=2))'
+        let value = json!({
+            "b": [1, {"x": "é", "y": []}],
+            "a": {},
+            "f": 1.5e-7,
+            "t": true,
+            "n": null,
+        });
+        assert_eq!(
+            dumps_indented(&value, 2),
+            "{\n  \"b\": [\n    1,\n    {\n      \"x\": \"\\u00e9\",\n      \"y\": []\n    }\n  ],\n  \
+             \"a\": {},\n  \"f\": 1.5e-07,\n  \"t\": true,\n  \"n\": null\n}"
+        );
+        assert_eq!(dumps_indented(&json!([]), 2), "[]");
+        assert_eq!(dumps_indented(&json!("x"), 2), "\"x\"");
     }
 
     #[test]

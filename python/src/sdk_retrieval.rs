@@ -118,6 +118,11 @@ impl PyCognee {
     ///   call (a setting left out takes its default). An embedding model whose
     ///   dimensions differ from the configured one raises
     ///   ``CogneeValidationError``
+    /// - ``code_query`` / ``codeQuery`` — with ``search_type="CODE"`` only: the
+    ///   code-graph operation and its snake_case arguments, e.g.
+    ///   ``{"operation": "neighbors", "name": "create_order"}``; a refused
+    ///   operation or argument raises ``CogneeValidationError`` naming its
+    ///   ``error_code``
     ///
     /// ``userId`` / ``user_id`` in opts is ignored; the owner is always taken
     /// from the handle so dataset-name resolution works correctly.
@@ -145,7 +150,7 @@ impl PyCognee {
     /// - ``autoRouted`` — bool indicating whether auto-routing was used
     /// - ``searchResponse`` — ``None`` or the raw ``SearchResponse`` value
     /// - ``normalizedResults`` — typed entries (kind, text, score, metadata, raw)
-    ///   for the graph items, in order
+    ///   for the graph and code items, in order
     ///
     /// Supported ``opts`` keys (both ``snake_case`` and ``camelCase`` accepted):
     ///
@@ -156,10 +161,11 @@ impl PyCognee {
     /// - ``session_id`` / ``sessionId`` — session UUID string
     /// - ``scope`` — ``str`` or ``list[str]``:
     ///   ``"auto"`` | ``"graph"`` | ``"session"`` | ``"session_first"`` |
-    ///   ``"session_context"`` | ``"trace"`` | ``"all"``
-    ///   (``"graph_context"`` is a deprecated alias of ``"graph"``;
-    ///   ``"tools"`` and ``"code"`` are accepted names that raise
-    ///   ``CogneeValidationError`` as not supported yet)
+    ///   ``"session_context"`` | ``"trace"`` | ``"code"`` | ``"all"``
+    ///   (``"graph_context"`` is a deprecated alias of ``"graph"``; ``"code"``
+    ///   is never implied by ``"auto"`` or ``"all"``; ``"tools"`` is an
+    ///   accepted name that raises ``CogneeValidationError`` as not supported
+    ///   yet)
     /// - ``neighborhood_depth`` / ``neighborhoodDepth``,
     ///   ``neighborhood_seed_top_k`` / ``neighborhoodSeedTopK``,
     ///   ``include_references`` / ``includeReferences`` — as for ``search``
@@ -177,6 +183,10 @@ impl PyCognee {
     ///   ``embeddingConfig`` — as for ``search``; the whole recall runs with
     ///   them, routing included (an LLM without a key answers completion
     ///   types with context only)
+    /// - ``code_query`` / ``codeQuery`` — the operation the ``"code"`` scope
+    ///   runs, as for ``search``; only valid when ``scope`` includes
+    ///   ``"code"``. Its facts are items with ``source == "code"``; a seed the
+    ///   code graph cannot resolve contributes nothing
     #[pyo3(signature = (query, opts=None))]
     fn recall<'py>(
         &self,

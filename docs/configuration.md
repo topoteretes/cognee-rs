@@ -1805,7 +1805,10 @@ reads (one entry per dataset and graph engine; least recently used evicted
 first). An entry is served for the time limit unless a code-graph load or a
 delete of its dataset invalidates it first. As in Python, a count below 1 or a
 time limit that is not a positive number falls back to the default. The
-bounds apply when a search orchestrator is built.
+cache is shared by every handle in the process (Python reads the bounds once,
+at import): a handle whose config moves them off the defaults applies them
+when its search orchestrator is built, and a handle left at the defaults
+does not reset bounds another handle set.
 
 `code_graph.enola_path` names the enola binary. When it is set, the file must
 exist, or the load fails with `EnolaNotInstalledError`. When it is empty,

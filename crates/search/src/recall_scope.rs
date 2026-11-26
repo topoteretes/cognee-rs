@@ -95,6 +95,13 @@ pub struct RecallOptions {
     /// no effect until the `tools` lane exists (SDK-1537), because a recall
     /// whose sources include `tools` is refused by [`resolve_sources`].
     pub tools_trigger: ToolsTrigger,
+    /// The operation and arguments the `code` lane runs (Python's
+    /// `code_query`, `recall.py:465`, docstring at `:522-531`), in the format
+    /// of [`SearchRequest::code_query`], e.g.
+    /// `{"operation": "impact_analysis", "name": "UserService"}`. `None` runs
+    /// `explore` with the query text as seed. Only valid when the recall's
+    /// sources include `code` ([`check_code_query`]); other lanes ignore it.
+    pub code_query: Option<serde_json::Map<String, serde_json::Value>>,
     /// The profile the `session_context` lane renders (Python's
     /// `context_profile`, `recall.py:453`): `"qa"` or `"agent"`. `None` is
     /// [`DEFAULT_CONTEXT_PROFILE`]. Not validated, as in Python: an unknown
@@ -220,6 +227,9 @@ pub enum RecallSource {
     /// The session's active context block, from [`search_session_context`]
     /// (Python `_fetch_session_context`, `recall.py:384-424`).
     SessionContext,
+    /// A deterministic code-graph fact from the `code` lane, [`run_code`]
+    /// (Python's `ResponseCodeEntry`, `RecallResponse.py:29-37`).
+    Code,
 }
 
 impl RecallSource {
@@ -231,6 +241,7 @@ impl RecallSource {
             RecallSource::Trace => "trace",
             RecallSource::System => "system",
             RecallSource::SessionContext => "session_context",
+            RecallSource::Code => "code",
         }
     }
 }
@@ -247,9 +258,10 @@ impl RecallSource {
 ///
 /// `SessionFirst` is a strategy, not a source: [`resolve_sources`] turns it
 /// into `[Session, Graph, ..]` with a session hit short-circuiting the graph.
-/// `Tools` and `Code` are accepted names whose lanes Rust does not have yet:
-/// [`resolve_sources`] refuses them with [`SearchError::NotSupported`]
-/// (SDK-1537).
+/// `Code` runs the deterministic code-graph lane ([`run_code`]); like
+/// `Tools` it is opt-in only, never implied by `auto` or `all`. `Tools` is an
+/// accepted name whose lane Rust does not have yet: [`resolve_sources`]
+/// refuses it with [`SearchError::NotSupported`] (SDK-1537).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RecallScope {
@@ -308,24 +320,22 @@ impl RecallScope {
 
     /// Map an already-resolved `RecallScope` to the `RecallSource` its lane
     /// tags results with. `None` for the sentinels (`Auto`, `SessionFirst`)
-    /// and for the scopes without a Rust lane yet (`Tools`, `Code`).
+    /// and for the scope without a Rust lane yet (`Tools`).
     pub fn as_source(&self) -> Option<RecallSource> {
         match self {
-            RecallScope::Auto
-            | RecallScope::SessionFirst
-            | RecallScope::Tools
-            | RecallScope::Code => None,
+            RecallScope::Auto | RecallScope::SessionFirst | RecallScope::Tools => None,
             RecallScope::Graph => Some(RecallSource::Graph),
             RecallScope::Session => Some(RecallSource::Session),
             RecallScope::Trace => Some(RecallSource::Trace),
             RecallScope::SessionContext => Some(RecallSource::SessionContext),
+            RecallScope::Code => Some(RecallSource::Code),
         }
     }
 
-    /// Whether Rust has a lane for this scope. `Tools` and `Code` are valid
-    /// names that [`resolve_sources`] refuses until SDK-1537.
+    /// Whether Rust has a lane for this scope. `Tools` is a valid name that
+    /// [`resolve_sources`] refuses until SDK-1537.
     fn is_supported(&self) -> bool {
-        !matches!(self, RecallScope::Tools | RecallScope::Code)
+        !matches!(self, RecallScope::Tools)
     }
 }
 
@@ -501,7 +511,9 @@ pub fn normalize_scope(input: Option<ScopeInput>) -> Result<Vec<RecallScope>, Se
     // (`entries.py:238-249`). `tools` is explicit opt-in, so it stays only
     // when supplied next to `"all"`; `session_first` is a strategy that
     // `"all"` neither implies nor replaces, so it is carried the same way.
-    // `code` is dropped.
+    // `code` is dropped, even when supplied next to `"all"`: Python carries
+    // only `tools` and `session_first` (`entries.py:226-229, 275-286`), so
+    // `["all", "code"]` with a code query is refused like `["all"]`.
     if raw.iter().any(|s| s == "all") {
         let mut expanded = RecallScope::ALL.to_vec();
         for carried in [RecallScope::Tools, RecallScope::SessionFirst] {
@@ -551,9 +563,9 @@ pub struct ResolvedSources {
 ///   a session hit skipping the graph (`recall.py:586-594`).
 /// - Anything else runs as given.
 ///
-/// A resolved list that names `Tools` or `Code` is refused with
-/// [`SearchError::NotSupported`] naming the first such scope, so a recall
-/// fails before any lane runs (SDK-1537 adds the lanes).
+/// A resolved list that names `Tools` is refused with
+/// [`SearchError::NotSupported`], so a recall fails before any lane runs
+/// (SDK-1537 adds the lane). `Code` runs ([`run_code`]).
 pub fn resolve_sources(
     normalized: Vec<RecallScope>,
     session_id: Option<&str>,
@@ -603,6 +615,183 @@ pub fn resolve_sources(
         )));
     }
     Ok(resolved)
+}
+
+/// Python's message for a `code_query` without the `code` scope
+/// (`InvalidCodeQueryError`, `recall.py:601-608`).
+pub const CODE_QUERY_WITHOUT_CODE_SCOPE: &str = "code_query requires the 'code' scope — pass \
+     scope=['code'] or scope=['graph', 'code'] ('code' is never implied by 'auto' or 'all').";
+
+/// Python's name for that error, the `name` of its `CogneeValidationError`.
+pub const INVALID_CODE_QUERY_ERROR: &str = "InvalidCodeQueryError";
+
+/// Refuse a `code_query` when the resolved `sources` do not include `code`
+/// (Python `recall.py:601-608`): the `code` scope is opt-in, so neither
+/// `auto` nor `all` carries the query anywhere. Callers check it before any
+/// source runs, after [`resolve_sources`].
+///
+/// # Errors
+///
+/// [`SearchError::QueryValidation`] with [`CODE_QUERY_WITHOUT_CODE_SCOPE`].
+pub fn check_code_query(
+    sources: &[RecallScope],
+    options: Option<&RecallOptions>,
+) -> Result<(), SearchError> {
+    let has_code_query = options.is_some_and(|o| o.code_query.is_some());
+    if has_code_query && !sources.contains(&RecallScope::Code) {
+        return Err(SearchError::QueryValidation(
+            CODE_QUERY_WITHOUT_CODE_SCOPE.to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Recall's `code` lane: one CODE search of `query_text` over the recall's
+/// datasets, each fact tagged [`RecallSource::Code`]. Mirrors Python's
+/// `_run_code` (`recall.py:1093-1157`).
+///
+/// The search runs [`RecallOptions::code_query`] (or `explore` with the query
+/// text as seed) with the recall's `top_k`, datasets (`dataset_ids` taking
+/// precedence, as in the graph lane) and tenant, and nothing else of the
+/// options: no node scope, session or prompt, as Python passes none. No
+/// warm-up guard either: a dataset without a code graph is a miss, not a
+/// cold graph.
+///
+/// Misses contribute nothing rather than failing the recall: a seed the code
+/// graph cannot resolve, a dataset without a code graph, or flows on a graph
+/// without them ([`CodeQueryError::is_seed_miss`], Python's
+/// `CodeSeedNotFoundError`), whether the search raised it (one dataset) or
+/// softened it into that dataset's marker (several), and a dataset with
+/// nothing to search next to others that have something. An invalid
+/// operation or argument still fails it: those are the caller's bugs.
+///
+/// Each remaining dataset's result becomes one item whose content is
+/// [`crate::recall_normalize::build_code_entry`]'s entry without its `source`
+/// (Python's `normalize_search_payload` item, `ResponseCodeEntry`), carrying
+/// the dataset's id and name.
+///
+/// Under per-dataset storage, a caller with no UUID and no dataset filter
+/// gets nothing, as in [`run_graph`].
+///
+/// [`CodeQueryError::is_seed_miss`]: cognee_code_graph::query::CodeQueryError::is_seed_miss
+#[allow(clippy::too_many_arguments)]
+pub async fn run_code(
+    query_text: &str,
+    datasets: Option<Vec<String>>,
+    dataset_ids: Option<Vec<Uuid>>,
+    top_k: usize,
+    user_id: Option<&str>,
+    search_orchestrator: &SearchOrchestrator,
+    options: Option<&RecallOptions>,
+) -> Result<Vec<RecallItem>, SearchError> {
+    let owner_id = graph_owner(user_id, datasets.as_deref(), dataset_ids.as_deref())?;
+    if search_orchestrator.scopes_unfiltered_search()
+        && owner_id.is_none()
+        && !has_dataset_filter(datasets.as_deref(), dataset_ids.as_deref())
+    {
+        debug!("recall: per-dataset storage and an unknown caller; no code results");
+        return Ok(Vec::new());
+    }
+    // Dataset UUIDs take precedence over names (`recall.py:1114-1124`): the
+    // orchestrator resolves names only without ids, as for the graph lane.
+    let request = SearchRequest {
+        query_text: query_text.to_string(),
+        search_type: SearchType::Code,
+        top_k: Some(top_k),
+        datasets,
+        dataset_ids,
+        system_prompt: None,
+        system_prompt_path: None,
+        only_context: None,
+        use_combined_context: None,
+        session_id: None,
+        node_type: None,
+        node_name: None,
+        node_name_filter_operator: None,
+        wide_search_top_k: None,
+        triplet_distance_penalty: None,
+        user_id: owner_id,
+        tenant_id: options.and_then(|o| o.tenant_id),
+        verbose: None,
+        feedback_influence: None,
+        retriever_specific_config: None,
+        response_schema: None,
+        custom_search_type: None,
+        auto_feedback_detection: None,
+        neighborhood_depth: None,
+        neighborhood_seed_top_k: None,
+        include_references: false,
+        code_query: options.and_then(|o| o.code_query.clone()),
+    };
+
+    let results = match search_orchestrator.search_datasets(&request).await {
+        Ok(results) => results,
+        // "No code facts for this prompt", not an error (`recall.py:1137-1142`).
+        Err(SearchError::Code(error)) if error.is_seed_miss() => {
+            debug!(
+                code = error.code.as_str(),
+                "recall: code seed miss; no code results"
+            );
+            return Ok(Vec::new());
+        }
+        Err(other) => return Err(other),
+    };
+
+    let mut items = Vec::new();
+    for result in results {
+        // A softened per-dataset miss, or a dataset with nothing to search:
+        // no facts (`recall.py:1145-1153`).
+        if result.error.is_some() || is_code_seed_miss_marker(&result.response.result) {
+            continue;
+        }
+        let dataset_id = result.dataset_id.map(|id| id.to_string());
+        for entry in code_entries(&result.response.result) {
+            let entry = crate::recall_normalize::build_code_entry(
+                entry,
+                dataset_id.clone(),
+                result.dataset_name.clone(),
+            );
+            items.push(RecallItem {
+                source: RecallSource::Code,
+                content: entry.item_content(),
+                score: 1.0,
+            });
+        }
+    }
+    Ok(items)
+}
+
+/// Whether a CODE dataset result is the marker a multi-dataset search
+/// softens a seed miss into (`{"seed_not_found": true, ...}`).
+fn is_code_seed_miss_marker(output: &crate::SearchOutput) -> bool {
+    matches!(
+        output,
+        crate::SearchOutput::Structured(serde_json::Value::Object(marker))
+            if marker.get("seed_not_found").is_some_and(cognee_code_graph::pyjson::is_truthy)
+    )
+}
+
+/// The entries of one dataset's CODE answer, as Python's
+/// `SearchResultPayload.entries()` lists a completion: a list's elements, or
+/// the one result.
+fn code_entries(output: &crate::SearchOutput) -> Vec<serde_json::Value> {
+    match output {
+        crate::SearchOutput::Structured(serde_json::Value::Array(results)) => results.clone(),
+        crate::SearchOutput::Structured(serde_json::Value::Null) => Vec::new(),
+        crate::SearchOutput::Structured(result) => vec![result.clone()],
+        crate::SearchOutput::Text(text) => vec![serde_json::Value::String(text.clone())],
+        crate::SearchOutput::Texts(texts) => texts
+            .iter()
+            .cloned()
+            .map(serde_json::Value::String)
+            .collect(),
+        crate::SearchOutput::Items(items) => {
+            items.iter().map(|item| item.payload.clone()).collect()
+        }
+        other => serde_json::to_value(other)
+            .map(|v| vec![v])
+            .unwrap_or_default(),
+    }
 }
 
 /// A single recall result item.
@@ -1716,11 +1905,11 @@ mod tests {
             RecallScope::SessionContext.as_source(),
             Some(RecallSource::SessionContext)
         );
+        assert_eq!(RecallScope::Code.as_source(), Some(RecallSource::Code));
         for scope in [
             RecallScope::Auto,
             RecallScope::SessionFirst,
             RecallScope::Tools,
-            RecallScope::Code,
         ] {
             assert_eq!(scope.as_source(), None, "{scope:?}");
         }
@@ -1856,16 +2045,15 @@ mod tests {
         );
     }
 
-    /// D1 (SDK-1040): `tools` and `code` are valid names refused before any
-    /// lane runs, naming the first one.
+    /// D1 (SDK-1040): `tools` is a valid name refused before any lane runs.
+    /// `code` runs (SDK-1056), alone or next to other sources.
     #[test]
-    fn resolve_sources_refuses_tools_and_code() {
+    fn resolve_sources_refuses_tools_and_runs_code() {
         for (scope, name) in [
             (vec![RecallScope::Tools], "tools"),
-            (vec![RecallScope::Code], "code"),
             (
                 vec![RecallScope::Graph, RecallScope::Code, RecallScope::Tools],
-                "code",
+                "tools",
             ),
             (vec![RecallScope::SessionFirst, RecallScope::Tools], "tools"),
         ] {
@@ -1888,6 +2076,97 @@ mod tests {
             err.to_string(),
             "Recall scope 'tools' is not supported yet in the Rust SDK (tracked in SDK-1537)."
         );
+
+        for scope in [
+            vec![RecallScope::Code],
+            vec![RecallScope::Graph, RecallScope::Code],
+        ] {
+            let resolved = resolve_sources(scope.clone(), Some("s"), false, None).expect("runs");
+            assert_eq!(resolved.sources, scope);
+            assert!(!resolved.auto_fallthrough);
+        }
+        // `session_first` keeps `code` after the session and graph sources.
+        assert_eq!(
+            resolve_sources(
+                vec![RecallScope::Code, RecallScope::SessionFirst],
+                Some("s"),
+                false,
+                None
+            )
+            .expect("runs")
+            .sources,
+            vec![RecallScope::Session, RecallScope::Graph, RecallScope::Code]
+        );
+    }
+
+    /// The `code` scope tags its items `code` (Python's `ResponseCodeEntry`).
+    #[test]
+    fn code_scope_tags_code_items() {
+        assert_eq!(RecallScope::Code.as_source(), Some(RecallSource::Code));
+        assert_eq!(RecallSource::Code.as_str(), "code");
+        assert_eq!(serde_json::to_value(RecallSource::Code).unwrap(), "code");
+        assert_eq!(RecallScope::Tools.as_source(), None);
+    }
+
+    /// `code_query` needs the `code` scope among the resolved sources;
+    /// `auto` and `all` never imply it (Python `recall.py:601-608`,
+    /// `test_code_query_without_code_scope_is_rejected`).
+    #[test]
+    fn code_query_requires_the_code_scope() {
+        let with_query = RecallOptions {
+            code_query: Some(serde_json::Map::from_iter([(
+                "operation".to_string(),
+                serde_json::json!("explore"),
+            )])),
+            ..Default::default()
+        };
+        let auto = resolve_sources(vec![RecallScope::Auto], None, false, None)
+            .expect("auto resolves")
+            .sources;
+        let all = normalize_scope(Some(ScopeInput::from("all"))).expect("all normalizes");
+        for sources in [vec![RecallScope::Graph], auto, all] {
+            match check_code_query(&sources, Some(&with_query)) {
+                Err(SearchError::QueryValidation(message)) => {
+                    assert_eq!(
+                        message,
+                        "code_query requires the 'code' scope — pass scope=['code'] or \
+                         scope=['graph', 'code'] ('code' is never implied by 'auto' or 'all')."
+                    );
+                }
+                other => panic!("expected the InvalidCodeQueryError message, got {other:?}"),
+            }
+        }
+        check_code_query(&[RecallScope::Code], Some(&with_query)).expect("code scope");
+        check_code_query(&[RecallScope::Graph, RecallScope::Code], Some(&with_query))
+            .expect("graph and code");
+        // Without a query any scope is fine.
+        check_code_query(&[RecallScope::Graph], None).expect("no query");
+        check_code_query(&[RecallScope::Graph], Some(&RecallOptions::default())).expect("no query");
+    }
+
+    #[test]
+    fn code_entries_list_a_dataset_answer() {
+        use serde_json::json;
+        let one = json!({"operation": "explore"});
+        assert_eq!(
+            code_entries(&crate::SearchOutput::Structured(one.clone())),
+            vec![one.clone()]
+        );
+        assert_eq!(
+            code_entries(&crate::SearchOutput::Structured(json!([
+                one.clone(),
+                one.clone()
+            ]))),
+            vec![one.clone(), one]
+        );
+        assert!(code_entries(&crate::SearchOutput::Structured(json!(null))).is_empty());
+        assert!(code_entries(&crate::SearchOutput::Items(Vec::new())).is_empty());
+        assert!(is_code_seed_miss_marker(&crate::SearchOutput::Structured(
+            json!({"seed_not_found": true, "error": "x"})
+        )));
+        assert!(!is_code_seed_miss_marker(&crate::SearchOutput::Structured(
+            json!({"seed_not_found": false, "operation": "explore"})
+        )));
     }
 
     #[test]

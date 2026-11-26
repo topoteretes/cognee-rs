@@ -514,8 +514,10 @@ void cg_sdk_add_and_cognify(const CgSdk*        sdk,
  *   "session_context" | "session_first" | "tools" | "trace"
  *   "graph_context" is a deprecated alias of "graph" (logged as a warning).
  *   "all" expands to graph, session, trace and session_context, keeping a
- *   co-supplied session_first (and tools). "tools" and "code" are accepted
- *   but fail with CG_ERR_SDK_VALIDATION as not supported yet (SDK-1537).
+ *   co-supplied session_first (and tools). "code" runs the deterministic
+ *   code-graph source (see "codeQuery" on cg_sdk_recall) and is never implied
+ *   by "auto" or "all". "tools" is accepted but fails with
+ *   CG_ERR_SDK_VALIDATION as not supported yet (SDK-1537).
  *   Absent/null scope → "auto" default applied internally.
  */
 
@@ -552,6 +554,14 @@ void cg_sdk_add_and_cognify(const CgSdk*        sdk,
  *   "embeddingConfig"       — object of embedding.* settings, likewise;
  *                             dimensions other than the configured model's
  *                             → CG_ERR_SDK_VALIDATION (14)
+ *   "codeQuery"             — with "searchType": "CODE" only: object naming
+ *                             the code-graph operation and its snake_case
+ *                             arguments, e.g. {"operation": "neighbors",
+ *                             "name": "create_order"}; without it a CODE
+ *                             search runs "explore" on the query text. A
+ *                             refused operation or argument →
+ *                             CG_ERR_SDK_VALIDATION (14), its message naming
+ *                             the error_code
  *
  * Note: "userId" in opts is ignored — user_id in the request is always set
  * from the handle's owner_id so dataset-name resolution works correctly.
@@ -585,7 +595,7 @@ void cg_sdk_search(const CgSdk*        sdk,
  *   "sessionId"  — string
  *   "scope"      — string or string array of RecallScope values (see
  *                  above): "auto" | "graph" | "session" | "session_first" |
- *                  "session_context" | "trace" | "all"
+ *                  "session_context" | "trace" | "code" | "all"
  *                  ("graph_context" is a deprecated alias of "graph")
  *                  Absent or null → "auto" default applied by recall();
  *                  an empty array runs no source and returns no items.
@@ -603,9 +613,15 @@ void cg_sdk_search(const CgSdk*        sdk,
  *                  CHUNKS and RAG_COMPLETION apply node-set names only.
  *   "llmConfig", "embeddingConfig" — as for cg_sdk_search; the whole recall
  *                  runs with them, routing included
+ *   "codeQuery"  — as for cg_sdk_search: the operation the "code" scope runs
+ *                  (default "explore" on the query text). Only valid when
+ *                  "scope" includes "code". Its facts are items with
+ *                  "source": "code"; a seed the code graph cannot resolve
+ *                  contributes nothing
  *
- * An unknown scope or "toolsTrigger", a "tools" / "code" scope, or
- * "nodeName" with an empty "nodeType" → CG_ERR_SDK_VALIDATION (14). The
+ * An unknown scope or "toolsTrigger", a "tools" scope, a "codeQuery" without
+ * the "code" scope or one the code graph refuses, or "nodeName" with an empty
+ * "nodeType" → CG_ERR_SDK_VALIDATION (14). The
  * unknown-scope message is Python's, both lists in Python repr form:
  * "Unknown recall scope(s): ['foo']. Valid values: ['all', 'auto', ...]".
  *

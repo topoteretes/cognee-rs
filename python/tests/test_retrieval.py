@@ -254,3 +254,32 @@ async def test_recall_invalid_search_type_raises(tmp_path):
     c = await _cognee_with_data(tmp_path)
     with pytest.raises(cp.CogneeValidationError):
         await c.recall("query", {"search_type": "BAD_TYPE"})
+
+
+# ---------------------------------------------------------------------------
+# CODE: code_query (SDK-1056 P3). Refused before any source or search runs,
+# so no LLM is needed.
+# ---------------------------------------------------------------------------
+
+@SKIP_IF_NO_ADD
+@pytest.mark.asyncio
+async def test_recall_code_query_requires_the_code_scope(tmp_path):
+    """A code_query without the "code" scope raises Python's InvalidCodeQueryError text."""
+    c = await _make_cognee(tmp_path)
+    for opts in (
+        {"code_query": {"operation": "explore"}},
+        {"scope": "all", "codeQuery": {"operation": "explore"}},
+    ):
+        with pytest.raises(cp.CogneeValidationError, match="code_query requires the 'code' scope"):
+            await c.recall("create_order", opts)
+
+
+@SKIP_IF_NO_ADD
+@pytest.mark.asyncio
+async def test_code_query_must_be_a_dict(tmp_path):
+    """A code_query that is not a dict is refused by search and recall alike."""
+    c = await _make_cognee(tmp_path)
+    with pytest.raises(cp.CogneeValidationError, match="codeQuery"):
+        await c.search("x", {"search_type": "CODE", "code_query": "explore"})
+    with pytest.raises(cp.CogneeValidationError, match="codeQuery"):
+        await c.recall("x", {"scope": "code", "code_query": ["explore"]})

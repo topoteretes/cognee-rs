@@ -376,6 +376,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicit `source_uri` in the item's metadata still wins. Unset, nothing
   changes. The closed HTTP server sets it, so `/cognify`'s
   `data_location` is `null` for an upload instead of its spool path.
+- **Recall's `code` scope, the CODE CLI options and `codeQuery` in recall
+  (SDK-1056 P3).** `RecallScope::Code` now runs (Python's `_run_code`,
+  `recall.py:1093-1157`): one CODE search with the new
+  `RecallOptions::code_query` (or `explore` on the query text), its facts
+  tagged `RecallSource::Code`, each Python's `ResponseCodeEntry` (the
+  normalized graph-entry shape, kind `code`, `source` on the item;
+  `recall_normalize::build_code_entry`). It is never implied by `auto` or
+  `all`; seed misses — raised for one dataset or softened per dataset —
+  contribute nothing, and an invalid operation fails with the new
+  `ApiError::CodeQuery`, which keeps Python's `error_code` / `error_param`. A
+  `code_query` without the `code` scope is refused before any source runs
+  with Python's `InvalidCodeQueryError` message
+  (`recall_scope::check_code_query`). `cognee-cli search` and `recall` gain
+  `--diagram {mermaid,dot}` and `--diagram-out PATH` next to `--code-query`
+  (a port of `cognee/cli/code_search.py`: a Mermaid `.html` page, Graphviz
+  `.svg`/`.png`/`.pdf` through `dot` on `PATH`, or raw source) and print CODE
+  results with their fenced diagrams; `recall -t CODE` runs the real CODE type
+  (no more `CODING_RULES` stand-in) and, with a CODE option, runs it in the
+  `code` source as Python's command does. The bindings' recall takes
+  `codeQuery` and the `"code"` scope (Python, TS, Java and C docs and types
+  updated), lists code entries in `normalizedResults`, and reports a refused
+  CODE operation from search or recall as a validation error naming its
+  `error_code`. A graph-lane `CODE` answer is normalized with the `code` kind,
+  not `structured`. `RecallOptions` gained a field and `RecallSource` and
+  `ApiError` a variant, so exhaustive matches need an arm;
+  `cognee::cognee_code_graph` is re-exported, and
+  `cognee_code_graph::pyjson::dumps_indented` writes Python's
+  `json.dumps(indent=...)`. The query router still does not route to `CODE`.
+  The bindings' search and `cognee-cli search` also report a
+  `SearchError::QueryValidation` (a `codeQuery` without the CODE type, a
+  `node_name` filter the type cannot apply) as a validation error, as Python
+  raises `CogneeValidationError`; they reported it as a runtime failure.
+  `SearchTuning::code_graph_cache` is now an `Option`: `None` (a config left
+  at the default `code_graph.snapshot_cache_*`) no longer resets the
+  process-wide CODE snapshot cache bounds another handle set
+  (`CodeGraphConfig::snapshot_cache_override`).
 - **CODE search: `search`, `flows`, `hubs` and `ask` (SDK-1056 P2).** The last
   four of Python's fifteen operations now run: `search` ranks facts and flows
   with the field-weighted BM25 of `code_search_index.py` (tokenizer, stemmer,

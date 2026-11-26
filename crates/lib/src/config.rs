@@ -691,8 +691,9 @@ impl Settings {
                 DEFAULT_SYSTEM_PROMPT_PATH,
             ))
             .then(|| self.default_system_prompt_path.trim().to_string()),
-            // `code_graph.snapshot_cache_*`: the CODE search snapshot cache.
-            code_graph_cache: self.code_graph().snapshot_cache_limits(),
+            // `code_graph.snapshot_cache_*`: the CODE search snapshot cache,
+            // changed only by a config that moves them off the defaults.
+            code_graph_cache: self.code_graph().snapshot_cache_override(),
         }
     }
 

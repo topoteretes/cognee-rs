@@ -19,14 +19,14 @@ feature-gated).
 | Command | Purpose | Notable flags | Feature gate |
 |---|---|---|---|
 | `remember <data…>` | Store memory: `add` + `cognify` + (by default) `improve`. `<data…>` is inline text and/or file paths | `-d/--dataset-name` (the `default_dataset_name` setting, `main_dataset`), `--session-id`, `--no-improve` (default OFF — improve runs by default), `--extractor` (graph extractor for this run: `auto`/`llm`/`gliner`/another registered kind; overrides `GRAPH_EXTRACTOR`; not with `--session-id`), `--content-type code` (each `<data>` is a local code repository, indexed as a code graph with no LLM; not with `--session-id` or `--extractor`), `--index-vectors` (with `--content-type code` only: also embed the code nodes; needs an embedding provider), `--tenant-id` | — |
-| `recall <query>` | Query memory with auto-routing (session-aware + graph-backed) | `-t/--query-type` (optional — omit to auto-route), `-d/--datasets` (repeatable), `-k/--top-k` (10), `--session-id`, `-f/--output-format` (`pretty`/`json`/`simple`, default `pretty`), `--tenant-id` (strict tenant match; omit = tenant-less data only) | — |
+| `recall <query>` | Query memory with auto-routing (session-aware + graph-backed) | `-t/--query-type` (optional — omit to auto-route), `-d/--datasets` (repeatable), `-k/--top-k` (10), `--session-id`, `-f/--output-format` (`pretty`/`json`/`simple`, default `pretty`), `--tenant-id` (strict tenant match; omit = tenant-less data only), `--scope` (repeatable; `code` is the code-graph source), `--code-query` / `--diagram` / `--diagram-out` (with `-t CODE`: run in the `code` source) | — |
 | `improve` | Run the improve stages (feedback weights, session/trace bridging, distillation, …) and log one result per stage | `-d/--dataset-name` (the `default_dataset_name` setting, `main_dataset`), `--session-id` (repeatable), `--feedback-alpha` (the `improve.feedback_alpha` setting, `0.1`), `--build-global-context-index[=BOOL]` (force the `global_context_index` stage on or off; absent follows `improve.global_context_index`, default on), `--review-conflicts[=BOOL]` / `--no-review-conflicts` (same for `review_conflicts`, `improve.review_conflicts`, default on), `--build-truth-subspace` (opt in to the `build_truth_subspace` stage; needs `--session-id`), `--tenant-id` | — |
 | `forget` | Remove memory (a dataset, a single data item, or everything) | `-d/--dataset-name` \| `--data-id` (UUID; requires `--dataset-name`; conflicts with `--all`) \| `--all`, `--tenant-id` | — |
 | `update <data>` | Replace one document of a dataset, **keeping its `data_id`** (the counterpart of Python's `cognee.update()`; Python has no CLI verb for it): its memory is dropped, `<data>` (inline text or a file path) is re-added pinned to the same id, and the document is cognified again. `--data-id` may be a pre-fork (`legacy_id`) id; an id the dataset does not hold fails with "No document found to update" | `--data-id <UUID>` (required), `-d/--dataset-name` (the `default_dataset_name` setting), `--node-set` (repeatable), `--extractor`, `--ontology-file`, `--tenant-id` | — |
 | `add <inputs…>` | Ingest text / file paths / HTTP(S) URLs into a dataset | `-d/--dataset-name` (the `default_dataset_name` setting, `main_dataset`), `--tenant-id` | — |
 | `cognify` | Build the knowledge graph from one or more datasets | `-d/--datasets`, `--chunk-size`, `--chunker` (`TextChunker`/`LangchainChunker`/`CsvChunker`/`JsonListChunker`; overrides the `chunk_strategy` setting for the run, see [Chunking](../configuration.md#chunking--tokenizer)), `--ontology-file`, `-b/--background`, `--llm-max-retries`, `--llm-max-parallel-requests`, `--graph-schema <FILE>` (a custom graph model's JSON Schema; see [the guide](../guides/custom-graph-schema.md)), `--graph-spec <FILE>` (the same model in the spec DSL; not with `--graph-schema`), `--chunk-attachment` (`direct`/`all`; requires `--graph-schema` or `--graph-spec`), `--extractor` (graph extractor for this run: `auto`/`llm`/`gliner`/another registered kind; overrides `GRAPH_EXTRACTOR`, see [Keyless cognify](../configuration.md#keyless-cognify)), `--tenant-id` (strict tenant match; without `--datasets`, the owner's datasets in that tenant) | — |
 | `add-and-cognify <inputs…>` | `add` then `cognify` in one step | union of the above; `--tenant-id` applies to both the add and the dataset lookup; `--graph-schema` / `--graph-spec` / `--chunk-attachment` are validated before anything is added | — |
-| `search <query>` | Query the graph/vectors | `-t/--query-type` (`GRAPH_COMPLETION`), `-d/--datasets`, `-k/--top-k` (10), `--system-prompt` / `--system-prompt-path`, `--session-id`, `-f/--output-format` (`pretty`/`json`), `--llm-max-retries`, `--tenant-id` (strict tenant match; omit = tenant-less data only), `--code-query` (with `-t CODE`: the code-graph operation as a JSON object) | — |
+| `search <query>` | Query the graph/vectors | `-t/--query-type` (`GRAPH_COMPLETION`), `-d/--datasets`, `-k/--top-k` (10), `--system-prompt` / `--system-prompt-path`, `--session-id`, `-f/--output-format` (`pretty`/`json`), `--llm-max-retries`, `--tenant-id` (strict tenant match; omit = tenant-less data only), `--code-query` (with `-t CODE`: the code-graph operation as a JSON object), `--diagram` (`mermaid`/`dot`), `--diagram-out` (`.html` page, Graphviz `.svg`/`.png`/`.pdf`, or raw source) | — |
 | `export` | Write the graph as a COGX archive that Python cognee can re-import (`cognee.remember(COGXArchiveSource(path))`, or upload the packed tarball to `/api/v1/remember` with `content_type=cogx-archive`) | `-o/--output` (dir; default `<dataset>_cogx`), `-d/--dataset` (**label only — does not scope the export; the whole graph store is written**), `--pack` (also write `<output>.cogx.tar.gz`), `--format` (`cogx`; the only value that round-trips) | — |
 | `delete` | Remove data/datasets across all backends. Names and ids must be the acting user's datasets in `--tenant-id` and are deleted by id | `-d/--dataset-name` \| `--dataset-id`, `--data-id` (optionally with a dataset reference: that item in that dataset), `--all` (the acting user's datasets in `--tenant-id`, like Python's `datasets.delete_all` — **not** a store-wide wipe), `-u/--user-id` (the acting user; alone, selects that user's datasets in `--tenant-id`), `--tenant-id` (strict tenant match), `--delete-dataset-if-empty` (with `--data-id`), `--mode` (`soft`/`hard`), `--dry-run`, `-f/--force`. `--enforce-acl` is not available in OSS (no ACL backend) | — |
 | `vector-reindex` | Build the ANN index on every vector collection missing one. pgvector only — the index is created per collection, so one can be missing either because it predates the index or because its best-effort build failed (pgvector without the `hnsw` access method, a restricted role, too little `maintenance_work_mem`), which is logged and leaves a working but sequential-scan collection. Online (`CREATE INDEX CONCURRENTLY`) and idempotent, so it does the work rather than reporting first; on any other backend it says so and does nothing | — | — |
@@ -86,6 +86,8 @@ cognee-cli cognify -d my_dataset
 cognee-cli search "what did we learn about X?" -t GRAPH_COMPLETION -d my_dataset -k 10
 cognee-cli search "what did we learn about X?" -t HYBRID_COMPLETION -d my_dataset -k 10
 cognee-cli search "" -t CODE -d my_code --code-query '{"operation": "neighbors", "name": "create_order"}'
+cognee-cli search "" -t CODE -d my_code --code-query '{"operation": "architecture"}' --diagram-out architecture.html
+cognee-cli recall "create_order" -t CODE -d my_code --code-query '{"operation": "impact_analysis", "name": "create_order"}'
 ```
 
 A `cognify` run that the configured failure policy let *complete* despite
@@ -100,9 +102,29 @@ Which failures are tolerated at all is the two-axis policy in
 The full set of accepted `-t/--query-type` values is the `QueryTypeArg` enum in
 [`crates/cli/src/cli.rs`](../../crates/cli/src/cli.rs), which maps onto the
 library's [`SearchType`](../../crates/search/src/types/search_type.rs) (see also
-`cognee-cli search --help`). `search -t CODE` runs the deterministic code-graph
-search (`SearchType::Code`, with `--code-query`); `recall -t CODE` still maps
-to `CODING_RULES` until recall's code lane is ported. The hybrid retriever's
+`cognee-cli search --help`). `-t CODE` runs the deterministic code-graph
+search (`SearchType::Code`), a port of Python's `cognee/cli/code_search.py`:
+
+- `--code-query JSON` names the operation and its arguments (`explore` with
+  the query text as seed without it); `--help` lists the fifteen operations.
+- `--diagram {mermaid,dot}` adds the result drawn as Mermaid or Graphviz DOT.
+- `--diagram-out PATH` writes the diagram after the results are printed: a
+  `.html`/`.htm` page that renders Mermaid in a browser (Mermaid loaded from a
+  CDN), an `.svg`/`.png`/`.pdf` rendered by Graphviz's `dot` (found on
+  `PATH`; a missing `dot` is an error naming it), or the raw source for any
+  other extension. Alone it implies `--diagram`, DOT for `.dot`/`.gv` and the
+  Graphviz renderings, Mermaid otherwise.
+
+The three need `-t CODE` (a validation error otherwise). The pretty output
+prints each operation result as indented JSON under a one-line summary and its
+diagram in a ```` ```mermaid ```` / ```` ```dot ```` fence; `-f json` keeps the
+diagram inside the payload. `search` runs the CODE type itself; `recall -t
+CODE` with any of the three options runs the query in recall's opt-in `code`
+source (`--scope code`, replacing any `--scope`), whose facts print the same
+way, and without them pins the graph source to `CODE`. `recall --scope code`
+alone runs `explore` on the query text. A seed the code graph cannot resolve
+is no result in `recall`, and an error in `search` over one dataset. The
+hybrid retriever's
 tuning knobs are not exposed as CLI flags in Phase 1 — see
 [configuration.md §Search — hybrid retriever knobs](../configuration.md#search--hybrid-retriever-knobs).
 

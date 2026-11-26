@@ -269,6 +269,21 @@ result = await cognee.recall(
 )
 ```
 
+A `CODE` search runs one deterministic operation over an indexed code graph:
+pass it as `code_query` (without one it runs `explore` with the query text as
+seed). In `recall` the same query runs in the opt-in `"code"` scope (never
+implied by `"auto"` or `"all"`), whose facts come back as items with
+`source == "code"`:
+
+```python
+await cognee.search("", {"search_type": "CODE",
+                         "code_query": {"operation": "neighbors", "name": "create_order"}})
+result = await cognee.recall("create_order", {
+    "scope": ["graph", "code"],
+    "code_query": {"operation": "impact_analysis", "name": "create_order"},
+})
+```
+
 ### Memory operations
 
 #### remember

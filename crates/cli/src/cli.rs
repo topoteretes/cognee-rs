@@ -667,12 +667,35 @@ pub struct SearchArgs {
     #[arg(long = "neighborhood-seed-top-k")]
     pub neighborhood_seed_top_k: Option<std::num::NonZeroUsize>,
 
-    /// With `-t CODE`: the code-graph operation and its arguments, as a JSON
-    /// object (Python's `--code-query`), e.g.
-    /// `'{"operation": "neighbors", "name": "create_order"}'`. Without it a
-    /// CODE search runs `explore`.
-    #[arg(long = "code-query")]
+    #[command(flatten)]
+    pub code: CodeSearchArgs,
+}
+
+/// The CODE-only options of `search` and `recall` (Python's
+/// `add_code_arguments`, `cognee/cli/code_search.py:78-116`). Each needs
+/// `--query-type CODE`; without `--code-query` a CODE search runs `explore`
+/// with the query text as seed.
+#[derive(Debug, Clone, Default, Args)]
+pub struct CodeSearchArgs {
+    #[arg(long = "code-query", value_name = "JSON", help = crate::code_search::CODE_QUERY_HELP)]
     pub code_query: Option<String>,
+
+    #[arg(long = "diagram", help = crate::code_search::DIAGRAM_HELP)]
+    pub diagram: Option<crate::code_search::DiagramFormatArg>,
+
+    #[arg(long = "diagram-out", value_name = "PATH", help = crate::code_search::DIAGRAM_OUT_HELP)]
+    pub diagram_out: Option<std::path::PathBuf>,
+}
+
+impl CodeSearchArgs {
+    /// The options as [`crate::code_search::build_code_query`] reads them.
+    pub fn options(&self) -> crate::code_search::CodeOptions<'_> {
+        crate::code_search::CodeOptions {
+            code_query: self.code_query.as_deref(),
+            diagram: self.diagram,
+            diagram_out: self.diagram_out.as_deref(),
+        }
+    }
 }
 
 /// Arguments for `cognee-cli remember` — one-call store (add + cognify + improve).
@@ -765,9 +788,10 @@ pub struct RecallArgs {
 
     /// Sources to recall from (Python's `scope`); repeat for several. One of
     /// `auto`, `graph`, `session`, `session_first`, `session_context`,
-    /// `trace`, `all` (`graph_context` is a deprecated alias of `graph`).
-    /// `tools` and `code` are accepted names that fail as not supported yet.
-    /// Omitted is `auto`.
+    /// `trace`, `code`, `all` (`graph_context` is a deprecated alias of
+    /// `graph`; `code` is never implied by `auto` or `all`). `tools` is an
+    /// accepted name that fails as not supported yet. Omitted is `auto`.
+    /// `-t CODE` with a CODE option replaces it with `code`.
     #[arg(long = "scope")]
     pub scope: Vec<String>,
 
@@ -795,6 +819,11 @@ pub struct RecallArgs {
     /// that response after the items (under `search_response` in JSON).
     #[arg(long = "verbose", default_value_t = false)]
     pub verbose: bool,
+
+    /// With `-t CODE`, any of these runs the code query in recall's `code`
+    /// source (`--scope code`), as Python's `recall` command does.
+    #[command(flatten)]
+    pub code: CodeSearchArgs,
 }
 
 /// Arguments for `cognee-cli forget` — remove memory.

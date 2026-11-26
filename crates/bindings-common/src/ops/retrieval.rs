@@ -42,6 +42,7 @@ use cognee::search::{
     EngineOverride, NormalizedResult, RecallItem, RecallSource, SearchOutput, SearchRequest,
     SearchResponse, SearchType, ToolsTrigger, build_graph_entry, build_structured_entry,
     entry_dataset_ids, entry_evidence, maybe_with_engine_override, only_context_system_prompt,
+    recall_normalize::CODE_SOURCE,
 };
 use cognee::{ComponentManager, EmbeddingConfig, LlmConfig};
 
@@ -202,6 +203,10 @@ pub struct RecallArgs {
     /// `llmConfig` / `embeddingConfig`: the engines this recall runs with
     /// (Python's `llm_config` / `embedding_config`, `recall.py:467-468`).
     pub engine_configs: EngineConfigs,
+    /// `codeQuery`: the operation the `code` scope runs (Python's
+    /// `code_query`, `recall.py:465`); only valid when the scope includes
+    /// `"code"`, which recall checks.
+    pub code_query: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl RecallArgs {
@@ -223,6 +228,7 @@ impl RecallArgs {
             node_name: self.node_scope.node_name.clone(),
             node_name_filter_operator: self.node_scope.node_name_filter_operator.clone(),
             verbose: self.verbose,
+            code_query: self.code_query.clone(),
             ..Default::default()
         }
     }
@@ -335,6 +341,7 @@ pub fn build_recall_args(opts: &serde_json::Value) -> Result<RecallArgs, SdkErro
     let node_scope = parse_node_scope(opts)?;
     let verbose = parse_verbose(opts);
     let engine_configs = parse_engine_configs(opts)?;
+    let code_query = parse_code_query(opts)?;
 
     Ok(RecallArgs {
         query_type,
@@ -353,6 +360,7 @@ pub fn build_recall_args(opts: &serde_json::Value) -> Result<RecallArgs, SdkErro
         node_scope,
         verbose,
         engine_configs,
+        code_query,
     })
 }
 
@@ -539,18 +547,9 @@ pub fn build_search_request(
                 .collect()
         });
 
-    // `codeQuery`: the CODE operation and its arguments (Python's
-    // `code_query`). An object or nothing; the orchestrator refuses it with
-    // any other search type, as Python's `search()` does.
-    let code_query = match opts.get("codeQuery").filter(|v| !v.is_null()) {
-        None => None,
-        Some(serde_json::Value::Object(map)) => Some(map.clone()),
-        Some(other) => {
-            return Err(SdkError::Validation(format!(
-                "`codeQuery` must be an object, got {other}"
-            )));
-        }
-    };
+    // `codeQuery`: the orchestrator refuses it with any other search type,
+    // as Python's `search()` does.
+    let code_query = parse_code_query(opts)?;
 
     Ok(SearchRequest {
         query_text: query.to_string(),
@@ -590,6 +589,39 @@ pub fn build_search_request(
         include_references: parse_include_references(opts),
         code_query,
     })
+}
+
+/// `codeQuery`: the CODE operation and its arguments (Python's
+/// `code_query`, snake_case inside, e.g. `{"operation": "neighbors",
+/// "name": "create_order"}`). An object, or nothing when absent or null;
+/// anything else is a validation error. Shared by search (the `CODE` search
+/// type) and recall (the `code` scope).
+pub fn parse_code_query(
+    opts: &serde_json::Value,
+) -> Result<Option<serde_json::Map<String, serde_json::Value>>, SdkError> {
+    match opts.get("codeQuery").filter(|v| !v.is_null()) {
+        None => Ok(None),
+        Some(serde_json::Value::Object(map)) => Ok(Some(map.clone())),
+        Some(other) => Err(SdkError::Validation(format!(
+            "`codeQuery` must be an object, got {other}"
+        ))),
+    }
+}
+
+/// A refused CODE operation as a binding validation error: Python's
+/// `CodeSearchValidationError` message with its stable `error_code` and,
+/// when it names one, `error_param`, so a caller can branch on them.
+pub fn code_query_error(error: &cognee::cognee_code_graph::query::CodeQueryError) -> SdkError {
+    let param = error
+        .param
+        .as_deref()
+        .map(|param| format!(", error_param={param}"))
+        .unwrap_or_default();
+    SdkError::Validation(format!(
+        "{} (error_code={}{param})",
+        error.message,
+        error.code.as_str()
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -710,10 +742,23 @@ pub async fn search(
 
     let response = maybe_with_engine_override(engines, svc.search_orchestrator.search(&request))
         .await
-        .map_err(|e| SdkError::Runtime(format!("search failed: {e}")))?;
+        .map_err(search_error)?;
 
     serde_json::to_value(&response)
         .map_err(|e| SdkError::Runtime(format!("failed to serialize SearchResponse: {e}")))
+}
+
+/// Map a search failure onto the binding error: a refused CODE operation
+/// ([`code_query_error`]) and arguments that do not fit together (Python's
+/// `CogneeValidationError` / `QueryValidationError`, such as `codeQuery`
+/// without the CODE type or an unsupported `node_name` filter) are the
+/// caller's; anything else is a runtime failure.
+fn search_error(error: cognee::search::SearchError) -> SdkError {
+    match error {
+        cognee::search::SearchError::Code(error) => code_query_error(&error),
+        cognee::search::SearchError::QueryValidation(message) => SdkError::Validation(message),
+        other => SdkError::Runtime(format!("search failed: {other}")),
+    }
 }
 
 /// Run recall and return hand-built camelCase JSON value.
@@ -724,10 +769,16 @@ pub async fn search(
 ///
 /// `normalizedResults` is additive: one typed entry (kind, text, score,
 /// provenance metadata, raw; see [`normalize_recall_items`]) per graph-source
-/// item, in the same order. `items` is unchanged. Session, trace and
-/// session_context items stay out of it, as Python's
-/// `normalize_search_payload` normalizes graph results only; they are in
+/// and code-source item, in the same order as `items`. A code item's content
+/// already is its entry (Python's `ResponseCodeEntry`, kind `code`); its
+/// normalized entry adds back `source: "code"`. `items` is unchanged.
+/// Session, trace and session_context items stay out of it, as Python's
+/// `normalize_search_payload` normalizes search results only; they are in
 /// `items`, tagged with their `source`.
+///
+/// `codeQuery` runs the `"code"` scope's operation; without that scope it is
+/// a validation error (Python's `InvalidCodeQueryError`). A refused CODE
+/// operation is a validation error carrying its `error_code`.
 ///
 /// `opts` may be `serde_json::Value::Null` when no options were provided.
 /// `llmConfig` / `embeddingConfig` run the recall with the call's own LLM and
@@ -820,20 +871,16 @@ pub async fn recall(
         result.search_response.as_ref(),
     )
     .await;
-    let normalized_results = match result.search_type_used {
-        Some(st) => serde_json::to_value(normalize_recall_items(
+    let graph_entries = match result.search_type_used {
+        Some(st) => normalize_recall_items(
             &result.items,
             st,
             result.search_response.as_ref(),
             &dataset_names,
-        ))
-        .map_err(|e| {
-            SdkError::Runtime(format!(
-                "failed to serialize normalized recall results: {e}"
-            ))
-        })?,
-        None => json!([]),
+        ),
+        None => Vec::new(),
     };
+    let normalized_results = normalized_results_json(&result.items, graph_entries)?;
 
     Ok(json!({
         "items": items,
@@ -844,17 +891,57 @@ pub async fn recall(
     }))
 }
 
+/// `normalizedResults`: the graph entries and the code items' entries,
+/// interleaved in `items` order. `graph_entries` holds one entry per graph
+/// item, in order ([`normalize_recall_items`]).
+fn normalized_results_json(
+    items: &[RecallItem],
+    graph_entries: Vec<NormalizedResult>,
+) -> Result<serde_json::Value, SdkError> {
+    let serialize_error = |e: serde_json::Error| {
+        SdkError::Runtime(format!(
+            "failed to serialize normalized recall results: {e}"
+        ))
+    };
+    let mut graph_entries = graph_entries.into_iter();
+    let mut entries = Vec::new();
+    for item in items {
+        match item.source {
+            RecallSource::Graph => {
+                if let Some(entry) = graph_entries.next() {
+                    entries.push(serde_json::to_value(entry).map_err(serialize_error)?);
+                }
+            }
+            RecallSource::Code => {
+                let mut entry = item.content.clone();
+                if let serde_json::Value::Object(map) = &mut entry {
+                    map.insert(
+                        "source".to_string(),
+                        serde_json::Value::String(CODE_SOURCE.to_string()),
+                    );
+                }
+                entries.push(entry);
+            }
+            _ => {}
+        }
+    }
+    Ok(serde_json::Value::Array(entries))
+}
+
 /// Map a [`cognee::api::recall`] failure onto the binding error.
 ///
 /// Recall refuses the caller's own input with [`ApiError::InvalidArgument`]:
-/// a `tools` / `code` scope that is not supported yet (SDK-1537) or node
-/// names with an empty `nodeType`, both before any source runs, and a pinned
-/// `searchType` that cannot apply the `nodeName` filter. That is a
-/// developer error, so it surfaces as [`SdkError::Validation`] (the bindings'
-/// `VALIDATION_ERROR`) rather than as an infrastructure failure.
+/// a `tools` scope that is not supported yet (SDK-1537), a `codeQuery`
+/// without the `code` scope or node names with an empty `nodeType`, all
+/// before any source runs, and a pinned `searchType` that cannot apply the
+/// `nodeName` filter. That is a developer error, so it surfaces as
+/// [`SdkError::Validation`] (the bindings' `VALIDATION_ERROR`) rather than
+/// as an infrastructure failure. So does a CODE operation the `code` scope
+/// refused ([`ApiError::CodeQuery`], see [`code_query_error`]).
 fn recall_error(error: ApiError) -> SdkError {
     match error {
         ApiError::InvalidArgument(message) => SdkError::Validation(message),
+        ApiError::CodeQuery(error) => code_query_error(&error),
         other => SdkError::Runtime(format!("recall failed: {other}")),
     }
 }
@@ -937,8 +1024,11 @@ pub fn normalize_recall_items(
     dataset_names: &HashMap<Uuid, String>,
 ) -> Vec<NormalizedResult> {
     let system_prompt = search_response.and_then(only_context_system_prompt);
-    let structured =
-        search_response.is_some_and(|r| matches!(r.result, SearchOutput::Structured(_)));
+    // A structured answer is a validated `response_schema` answer; a CODE
+    // result is structured output too but a plain dict in Python, so its
+    // entries keep the `code` kind (`normalize_search_payload.py:110-118`).
+    let structured = search_type != SearchType::Code
+        && search_response.is_some_and(|r| matches!(r.result, SearchOutput::Structured(_)));
     let graph_items = graph_items(items);
     let entry_datasets = graph_item_datasets(&graph_items, search_response);
     let (evidence, dataset_count) = match search_response {
@@ -1826,6 +1916,156 @@ mod tests {
         );
         let args = build_recall_args(&json!({ "scope": "tools" })).unwrap();
         assert_eq!(args.scope, Some(vec![RecallScope::Tools]));
+    }
+
+    /// SDK-1056 P3: `codeQuery` and the `code` scope reach the recall
+    /// options; a non-object `codeQuery` is refused like search's.
+    #[test]
+    fn recall_code_query_and_code_scope_reach_the_recall_options() {
+        use cognee::api::RecallScope;
+        let args = build_recall_args(&json!({
+            "scope": ["graph", "code"],
+            "codeQuery": {"operation": "impact_analysis", "name": "UserService", "max_depth": 2},
+        }))
+        .unwrap();
+        assert_eq!(
+            args.scope,
+            Some(vec![RecallScope::Graph, RecallScope::Code])
+        );
+        let options = args.recall_options();
+        let code_query = options.code_query.expect("carried");
+        assert_eq!(code_query["operation"], json!("impact_analysis"));
+        // The inner keys stay snake_case: only top-level opts are camelCase.
+        assert_eq!(code_query["max_depth"], json!(2));
+
+        assert_eq!(build_recall_args(&json!({})).unwrap().code_query, None);
+        assert_eq!(
+            build_recall_args(&json!({"codeQuery": null}))
+                .unwrap()
+                .code_query,
+            None
+        );
+        let error = build_recall_args(&json!({"codeQuery": ["explore"]})).unwrap_err();
+        assert!(
+            matches!(&error, SdkError::Validation(message) if message == "`codeQuery` must be an object, got [\"explore\"]"),
+            "{error:?}"
+        );
+    }
+
+    /// A refused CODE operation is a validation error carrying Python's
+    /// `error_code` and `error_param`, from search and from recall alike.
+    #[test]
+    fn code_errors_are_validation_errors_with_their_code() {
+        use cognee::cognee_code_graph::query::{CodeErrorCode, CodeQueryError};
+        let unknown = CodeQueryError::unknown_operation("Unknown CODE operation 'teleport'.");
+        let expected = "Unknown CODE operation 'teleport'. (error_code=unknown_operation, error_param=operation)";
+        match search_error(cognee::search::SearchError::Code(unknown.clone())) {
+            SdkError::Validation(message) => assert_eq!(message, expected),
+            other => panic!("expected Validation, got {other:?}"),
+        }
+        match recall_error(ApiError::CodeQuery(unknown)) {
+            SdkError::Validation(message) => assert_eq!(message, expected),
+            other => panic!("expected Validation, got {other:?}"),
+        }
+        let no_param = CodeQueryError::unavailable("No code graph.", CodeErrorCode::NoCodeGraph);
+        match code_query_error(&no_param) {
+            SdkError::Validation(message) => {
+                assert_eq!(message, "No code graph. (error_code=no_code_graph)")
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+        // Python's `CogneeValidationError` (`search.py:282-286`).
+        let misplaced = "code_query requires query_type=SearchType.CODE.";
+        match search_error(cognee::search::SearchError::QueryValidation(
+            misplaced.to_string(),
+        )) {
+            SdkError::Validation(message) => assert_eq!(message, misplaced),
+            other => panic!("expected Validation, got {other:?}"),
+        }
+        match search_error(cognee::search::SearchError::GraphError("down".to_string())) {
+            SdkError::Runtime(message) => assert_eq!(message, "search failed: graph error: down"),
+            other => panic!("expected Runtime, got {other:?}"),
+        }
+    }
+
+    /// `normalizedResults` lists graph and code entries in `items` order; a
+    /// code entry is its item's content with `source: "code"` added.
+    #[test]
+    fn normalized_results_interleave_graph_and_code_entries() {
+        let code_content = cognee::search::recall_normalize::build_code_entry(
+            json!({"operation": "explore", "seeds": []}),
+            Some(ID_A.to_string()),
+            Some("shop".to_string()),
+        )
+        .item_content();
+        let items = vec![
+            RecallItem {
+                source: RecallSource::Code,
+                content: code_content.clone(),
+                score: 1.0,
+            },
+            RecallItem {
+                source: RecallSource::Session,
+                content: json!({"question": "q"}),
+                score: 1.0,
+            },
+            RecallItem {
+                source: RecallSource::Graph,
+                content: json!("graph answer"),
+                score: 1.0,
+            },
+        ];
+        let graph_entries =
+            normalize_recall_items(&items, SearchType::GraphCompletion, None, &HashMap::new());
+        assert_eq!(graph_entries.len(), 1);
+        let normalized = normalized_results_json(&items, graph_entries).unwrap();
+        let entries = normalized.as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["source"], json!("code"));
+        assert_eq!(entries[0]["kind"], json!("code"));
+        assert_eq!(entries[0]["dataset_name"], json!("shop"));
+        assert_eq!(entries[0]["raw"]["operation"], json!("explore"));
+        assert_eq!(entries[1]["source"], json!("graph"));
+        assert_eq!(entries[1]["text"], json!("graph answer"));
+        // `source` comes last, as in Python's `ResponseCodeEntry`.
+        assert_eq!(
+            entries[0]
+                .as_object()
+                .unwrap()
+                .keys()
+                .next_back()
+                .map(String::as_str),
+            Some("source")
+        );
+    }
+
+    /// A graph-lane CODE search answers `Structured` output, but its entries
+    /// keep the `code` kind: a CODE result is a plain dict in Python, not a
+    /// validated `response_model`.
+    #[test]
+    fn a_graph_code_answer_keeps_the_code_kind() {
+        let response: SearchResponse = serde_json::from_value(json!({
+            "search_type": "CODE",
+            "result": {"kind": "Structured", "data": {"operation": "explore"}},
+            "context": null,
+            "graphs": null,
+            "diagnostics": null,
+            "datasets": null,
+            "only_context": false,
+            "use_combined_context": false,
+            "verbose": false,
+        }))
+        .unwrap();
+        let items = vec![RecallItem {
+            source: RecallSource::Graph,
+            content: json!({"operation": "explore"}),
+            score: 1.0,
+        }];
+        let entries =
+            normalize_recall_items(&items, SearchType::Code, Some(&response), &HashMap::new());
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].kind, cognee::search::RecallResultKind::Code);
+        assert_eq!(entries[0].structured, None);
     }
 
     /// Recall's refusals of the caller's input are validation errors; any

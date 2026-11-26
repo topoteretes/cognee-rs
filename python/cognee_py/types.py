@@ -136,6 +136,12 @@ class SearchOpts(TypedDict, total=False):
     #: match the configured model's, or the call raises
     #: ``CogneeValidationError``.
     embedding_config: dict[str, Any]
+    #: With ``search_type="CODE"`` only: the code-graph operation and its
+    #: snake_case arguments, e.g. ``{"operation": "neighbors", "name":
+    #: "create_order"}`` (Python's ``code_query``). Without it a CODE search
+    #: runs ``explore`` with the query text as seed. A refused operation or
+    #: argument raises ``CogneeValidationError`` naming its ``error_code``.
+    code_query: dict[str, Any]
     user_id: str
 
 
@@ -148,10 +154,12 @@ class RecallOpts(TypedDict, total=False):
     auto_route: bool
     session_id: str
     #: ``"auto"`` | ``"graph"`` | ``"session"`` | ``"session_first"`` |
-    #: ``"session_context"`` | ``"trace"`` | ``"all"`` (``"graph_context"`` is
-    #: a deprecated alias of ``"graph"``; ``"tools"`` and ``"code"`` are
-    #: accepted but raise ``CogneeValidationError`` as not supported yet). An
-    #: empty list runs no source and returns no items, as in Python.
+    #: ``"session_context"`` | ``"trace"`` | ``"code"`` | ``"all"``
+    #: (``"graph_context"`` is a deprecated alias of ``"graph"``; ``"code"``,
+    #: the deterministic code-graph source, is never implied by ``"auto"`` or
+    #: ``"all"``; ``"tools"`` is accepted but raises ``CogneeValidationError``
+    #: as not supported yet). An empty list runs no source and returns no
+    #: items, as in Python.
     scope: Union[str, list[str]]
     neighborhood_depth: int
     neighborhood_seed_top_k: int
@@ -180,6 +188,12 @@ class RecallOpts(TypedDict, total=False):
     llm_config: dict[str, Any]
     #: As ``SearchOpts.embedding_config``.
     embedding_config: dict[str, Any]
+    #: The operation the ``"code"`` scope runs, as ``SearchOpts.code_query``
+    #: (Python's ``code_query``). Only valid when ``scope`` includes
+    #: ``"code"``; otherwise the call raises ``CogneeValidationError``. Its
+    #: facts come back as items with ``source == "code"``; a seed the code
+    #: graph cannot resolve contributes nothing.
+    code_query: dict[str, Any]
 
 
 class RememberOpts(TypedDict, total=False):

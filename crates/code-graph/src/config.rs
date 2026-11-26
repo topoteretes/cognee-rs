@@ -97,6 +97,15 @@ impl CodeGraphConfig {
         };
         SnapshotCacheLimits { max_entries, ttl }
     }
+
+    /// [`Self::snapshot_cache_limits`] when they differ from the defaults,
+    /// else `None`: the bounds a search handle built from this config
+    /// applies to the process-wide cache. A config that leaves both keys at
+    /// their defaults does not reset bounds another handle set.
+    pub fn snapshot_cache_override(&self) -> Option<SnapshotCacheLimits> {
+        let limits = self.snapshot_cache_limits();
+        (limits != SnapshotCacheLimits::default()).then_some(limits)
+    }
 }
 
 #[cfg(test)]
@@ -172,7 +181,24 @@ mod tests {
                 config.snapshot_cache_limits(),
                 SnapshotCacheLimits::default()
             );
+            assert_eq!(config.snapshot_cache_override(), None);
         }
+    }
+
+    #[test]
+    fn only_bounds_off_the_defaults_override_the_cache() {
+        assert_eq!(CodeGraphConfig::default().snapshot_cache_override(), None);
+        let config = CodeGraphConfig {
+            snapshot_cache_max_entries: 4,
+            ..CodeGraphConfig::default()
+        };
+        assert_eq!(
+            config.snapshot_cache_override(),
+            Some(SnapshotCacheLimits {
+                max_entries: 4,
+                ttl: Duration::from_secs(60),
+            })
+        );
     }
 
     #[test]

@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use cognee::database::IngestDb;
-use cognee::search::{SearchBuilder, SearchOutput, SearchRequest, SearchResponse, SearchType};
+use cognee::search::{
+    SearchBuilder, SearchError, SearchOutput, SearchRequest, SearchResponse, SearchType,
+};
 use cognee::{ComponentManager, PipelineContext};
 use tracing::warn;
 use uuid::Uuid;
@@ -20,7 +22,13 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
     }
 
     let mapped_query_type = map_query_type(args.query_type);
-    let code_query = parse_code_query(args.code_query.as_deref())?;
+    // `--code-query` / `--diagram` / `--diagram-out`, refused before anything
+    // runs without `-t CODE` (Python's `build_code_query`).
+    let code_query = crate::code_search::build_code_query(
+        &args.code.options(),
+        mapped_query_type == SearchType::Code,
+    )?;
+    let diagram_out = args.code.diagram_out.clone();
 
     if requires_llm(mapped_query_type) && settings.llm().api_key.is_empty() {
         warn!("Warning: llm_api_key is empty. LLM-based search types may fail at runtime.");
@@ -123,12 +131,18 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             code_query,
         };
 
-        let response = orchestrator
-            .search(&request)
-            .await
-            .map_err(|error| CliError::Runtime(format!("Search execution failed: {error}")))?;
+        let response = orchestrator.search(&request).await.map_err(search_error)?;
 
         render_output(&response, args.output_format)?;
+        // After the results, as Python's `handle_diagram_out` runs.
+        for line in crate::code_search::handle_diagram_out(
+            &serde_json::to_value(&response.result).map_err(|error| {
+                CliError::Runtime(format!("Failed to read the search result: {error}"))
+            })?,
+            diagram_out.as_deref(),
+        )? {
+            println!("{line}");
+        }
         Ok(())
     })
 }
@@ -143,24 +157,6 @@ fn map_query_type(query_type: QueryTypeArg) -> SearchType {
         QueryTypeArg::Code => SearchType::Code,
         QueryTypeArg::Cypher => SearchType::Cypher,
         QueryTypeArg::Temporal => SearchType::Temporal,
-    }
-}
-
-/// `--code-query`: a JSON object, or nothing.
-fn parse_code_query(
-    text: Option<&str>,
-) -> Result<Option<serde_json::Map<String, serde_json::Value>>, CliError> {
-    let Some(text) = text else {
-        return Ok(None);
-    };
-    match serde_json::from_str(text) {
-        Ok(serde_json::Value::Object(object)) => Ok(Some(object)),
-        Ok(_) => Err(CliError::Validation(
-            "--code-query must be a JSON object".to_string(),
-        )),
-        Err(error) => Err(CliError::Validation(format!(
-            "--code-query is not valid JSON: {error}"
-        ))),
     }
 }
 
@@ -264,14 +260,50 @@ fn render_output(
                 }
             }
             SearchOutput::Ack { message } => println!("{message}"),
-            SearchOutput::Structured(value) => println!(
-                "{}",
-                serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
-            ),
+            // A CODE result: each operation result, then its diagram fenced
+            // (Python's `print_recall_results` -> `print_code_results`).
+            SearchOutput::Structured(value) if response.search_type == SearchType::Code => {
+                print!("{}", pretty_code_output(value));
+            }
+            SearchOutput::Structured(value) => println!("{}", value),
         },
     }
 
     Ok(())
+}
+
+/// A search failure as a CLI error: a CODE operation or argument the code
+/// graph refused, and arguments that do not fit together (Python's
+/// `CogneeValidationError` / `QueryValidationError`, e.g. `--code-query`
+/// without `-t CODE`), are the caller's (a validation error, as recall
+/// reports it); anything else is a runtime failure.
+fn search_error(error: SearchError) -> CliError {
+    match error {
+        SearchError::Code(error) => CliError::Validation(error.to_string()),
+        SearchError::QueryValidation(message) => CliError::Validation(message),
+        other => CliError::Runtime(format!("Search execution failed: {other}")),
+    }
+}
+
+/// The pretty text of a CODE search result: Python's `_print_graph_results`
+/// header for the CODE type (one result per dataset searched), then
+/// [`crate::code_search::render_code_results`]; the JSON itself when it holds
+/// no operation result.
+fn pretty_code_output(value: &serde_json::Value) -> String {
+    let count = match value {
+        serde_json::Value::Array(results) => results.len(),
+        _ => 1,
+    };
+    match crate::code_search::render_code_results(value) {
+        Some(text) => format!(
+            "\nFound {count} result(s) using CODE:\n{}\n{text}",
+            "=".repeat(60)
+        ),
+        None => format!(
+            "{}\n",
+            serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -289,20 +321,60 @@ mod tests {
         assert!(!requires_llm(SearchType::Code));
     }
 
+    /// A refused CODE operation is a validation error with the bare
+    /// message, as in recall; other failures stay runtime ones.
     #[test]
-    fn code_query_must_be_a_json_object() {
-        assert_eq!(parse_code_query(None).unwrap(), None);
-        let parsed = parse_code_query(Some(r#"{"operation": "delta"}"#))
-            .unwrap()
-            .unwrap();
-        assert_eq!(parsed["operation"], serde_json::json!("delta"));
-        assert!(matches!(
-            parse_code_query(Some("[1]")),
-            Err(CliError::Validation(message)) if message == "--code-query must be a JSON object"
-        ));
-        assert!(matches!(
-            parse_code_query(Some("{")),
-            Err(CliError::Validation(message)) if message.starts_with("--code-query is not valid JSON")
-        ));
+    fn refused_code_operations_are_validation_errors() {
+        use cognee::cognee_code_graph::query::CodeQueryError;
+        let refused = CodeQueryError::unknown_operation("Unknown CODE operation 'teleport'.");
+        match search_error(SearchError::Code(refused)) {
+            CliError::Validation(message) => {
+                assert_eq!(message, "Unknown CODE operation 'teleport'.")
+            }
+            other => panic!("expected a validation error, got {other:?}"),
+        }
+        let misplaced = "code_query requires query_type=SearchType.CODE.";
+        match search_error(SearchError::QueryValidation(misplaced.to_string())) {
+            CliError::Validation(message) => assert_eq!(message, misplaced),
+            other => panic!("expected a validation error, got {other:?}"),
+        }
+        match search_error(SearchError::GraphError("down".to_string())) {
+            CliError::Runtime(message) => {
+                assert_eq!(message, "Search execution failed: graph error: down")
+            }
+            other => panic!("expected a runtime error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pretty_code_output_prints_each_result_and_its_diagram() {
+        let value = serde_json::json!({
+            "operation": "architecture",
+            "diagram": {"format": "mermaid", "source": "flowchart LR\n  a --> b\n", "nodes": 2, "edges": 1},
+        });
+        let text = pretty_code_output(&value);
+        assert!(
+            text.starts_with(&format!(
+                "\nFound 1 result(s) using CODE:\n{}\nResult 1: architecture\n",
+                "=".repeat(60)
+            )),
+            "{text}"
+        );
+        assert!(
+            text.contains("```mermaid\nflowchart LR\n  a --> b\n```\n"),
+            "{text}"
+        );
+
+        // One result per dataset searched.
+        let per_dataset = serde_json::json!([
+            {"operation": "explore", "seeds": []},
+            {"seed_not_found": true, "error": "x", "code": "not_found"},
+        ]);
+        assert!(pretty_code_output(&per_dataset).starts_with("\nFound 2 result(s) using CODE:"));
+        // No operation result: the JSON as is.
+        assert_eq!(
+            pretty_code_output(&serde_json::json!({"a": 1})),
+            "{\n  \"a\": 1\n}\n"
+        );
     }
 }

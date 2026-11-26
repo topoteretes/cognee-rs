@@ -2398,6 +2398,162 @@ fn add_and_cognify_of_a_code_project_is_keyless() {
     );
 }
 
+/// `search -t CODE` and `recall -t CODE` over a code graph indexed with
+/// `remember --content-type code`, keyless (SDK-1056 P3): the CODE options
+/// reach the operation, the pretty printer shows each result and its
+/// diagram, `--diagram-out` writes the Mermaid page, and recall runs the
+/// query in its `code` source. The options need `-t CODE`.
+#[cfg(unix)]
+#[test]
+fn code_search_and_recall_run_the_code_graph() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let workdir = TempDir::new().expect("temp dir should be created");
+    let db_file_path = workdir.path().join("cognee.db");
+    std::fs::File::create(&db_file_path).expect("sqlite database file should be created");
+    config_set(
+        &config_home,
+        workdir.path(),
+        "relational_db_url",
+        &format!("\"sqlite://{}\"", db_file_path.display()),
+    );
+    config_set(
+        &config_home,
+        workdir.path(),
+        "data_root_directory",
+        &format!("\"{}\"", workdir.path().join("cognee_data").display()),
+    );
+    let enola =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../code-graph/tests/fixtures/bin/enola");
+    let repo = workdir.path().join("shop");
+    std::fs::create_dir(&repo).expect("repo dir");
+    std::fs::write(repo.join("pyproject.toml"), "[project]\nname = \"shop\"\n").expect("write");
+    std::fs::write(repo.join("main.py"), "def main():\n    pass\n").expect("write");
+    std::fs::write(repo.join(".fake-enola"), "snapshot:basic").expect("write");
+
+    let keyless = || {
+        let mut cmd = make_cmd_in(&config_home, workdir.path());
+        for var in [
+            "LLM_API_KEY",
+            "OPENAI_TOKEN",
+            "EMBEDDING_API_KEY",
+            "LLM_PROVIDER",
+            "MOCK_LLM",
+            "COGNEE_SKIP_PREFLIGHT",
+            "COGNEE_SKIP_CONNECTION_TEST",
+            "GRAPH_EXTRACTOR",
+        ] {
+            cmd.env_remove(var);
+        }
+        cmd.env("MOCK_EMBEDDING", "true");
+        cmd.env("ENOLA_PATH", &enola);
+        cmd
+    };
+
+    keyless()
+        .args([
+            "remember",
+            repo.to_str().expect("utf-8 path"),
+            "--content-type",
+            "code",
+            "--dataset-name",
+            "code_ds",
+        ])
+        .assert()
+        .success();
+
+    let page = workdir.path().join("out").join("arch.html");
+    keyless()
+        .args([
+            "search",
+            "",
+            "-t",
+            "CODE",
+            "-d",
+            "code_ds",
+            "--code-query",
+            r#"{"operation": "architecture"}"#,
+            "--diagram-out",
+            page.to_str().expect("utf-8 path"),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Found 1 result(s) using CODE:"))
+        .stdout(predicate::str::contains("Result 1: architecture"))
+        .stdout(predicate::str::contains("```mermaid"))
+        .stdout(predicate::str::contains(format!(
+            "Diagram written to {}",
+            page.display()
+        )));
+    let html = std::fs::read_to_string(&page).expect("the diagram page");
+    assert!(html.starts_with("<!doctype html>"), "{html}");
+    assert!(html.contains("mermaid.initialize"), "{html}");
+
+    // recall runs the code query in its `code` source; JSON lists the items.
+    let output = keyless()
+        .args([
+            "recall",
+            "main",
+            "-t",
+            "CODE",
+            "-d",
+            "code_ds",
+            "--code-query",
+            r#"{"operation": "capabilities"}"#,
+            "-f",
+            "json",
+        ])
+        .output()
+        .expect("recall runs");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let items: serde_json::Value = serde_json::from_slice(&output.stdout).expect("a JSON document");
+    assert_eq!(items[0]["kind"], "code", "{items}");
+    assert_eq!(items[0]["raw"]["operation"], "capabilities", "{items}");
+
+    // A seed the code graph cannot resolve is no code facts, not an error.
+    keyless()
+        .args([
+            "recall",
+            "no_such_symbol_anywhere",
+            "-t",
+            "CODE",
+            "-d",
+            "code_ds",
+            "--code-query",
+            r#"{"operation": "neighbors"}"#,
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No results found for your query."));
+
+    // The CODE options need `-t CODE`; an unknown operation is refused.
+    keyless()
+        .args(["search", "q", "-t", "CHUNKS", "--diagram", "mermaid"])
+        .assert()
+        .failure()
+        .code(2)
+        .stdout(predicate::str::contains(
+            "--code-query, --diagram and --diagram-out require --query-type CODE.",
+        ));
+    keyless()
+        .args([
+            "recall",
+            "q",
+            "-t",
+            "CODE",
+            "-d",
+            "code_ds",
+            "--code-query",
+            r#"{"operation": "teleport"}"#,
+        ])
+        .assert()
+        .failure()
+        .code(2);
+}
+
 /// `remember --content-type code` indexes a local repository as a code graph
 /// on a keyless setup (SDK-1053 O5): one code-repo row, no documents, no LLM.
 /// enola is the fake script of the `cognee-code-graph` tests. The content

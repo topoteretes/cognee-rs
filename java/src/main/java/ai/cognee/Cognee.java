@@ -260,9 +260,12 @@ public final class Cognee implements AutoCloseable {
      * Source-aware retrieval with per-call {@link RecallOptions}: the scope
      * (including "session_first" and "session_context"), the session-context
      * profile, the tools trigger, the graph source's node scope and verbose.
-     * An invalid option (an unknown scope or tools trigger, a not-yet-supported
-     * "tools" / "code" scope, node names with an empty node type) fails the
-     * future with a validation error.
+     * The "code" scope runs one deterministic CODE search
+     * ({@link RecallOptions#codeQuery}) and tags its facts "code".
+     * An invalid option (an unknown scope or tools trigger, the
+     * not-yet-supported "tools" scope, a code query without the "code" scope
+     * or one the code graph refuses, node names with an empty node type)
+     * fails the future with a validation error.
      */
     public CompletableFuture<RecallResult> recall(String query, RecallOptions opts) {
         CompletableFuture<String> f = new CompletableFuture<>();

@@ -377,6 +377,30 @@ mod tests {
         }
     }
 
+    /// Python's `isinstance(True, int)` is true, but every helper rejects
+    /// `bool` first (`code_retriever.py:319-358, 418-419`): a JSON boolean
+    /// is not an integer or a number here either.
+    #[test]
+    fn booleans_are_not_numbers_as_in_python() {
+        for flag in [json!(true), json!(false)] {
+            assert_eq!(
+                count(Some(&flag), "depth", 2, 5).unwrap_err().message,
+                "CODE depth must be an integer."
+            );
+            assert_eq!(
+                confidence(Some(&flag), "min_confidence")
+                    .unwrap_err()
+                    .message,
+                "CODE min_confidence must be a number between 0 and 1."
+            );
+            assert_eq!(crate::query::snapshot::int_or_none(Some(&flag)), None);
+        }
+        assert_eq!(
+            confidence(Some(&json!(1)), "min_confidence").unwrap(),
+            Some(1.0)
+        );
+    }
+
     #[test]
     fn direction_and_node_types() {
         assert_eq!(direction(None, "both").unwrap(), Direction::Both);

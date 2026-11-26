@@ -16,6 +16,13 @@ cannot resolve as that dataset's result (`{"seed_not_found": true, "error",
 "code", "param"}`, Python's `_report_code_seed_miss`) instead of failing,
 and `search` merges the datasets' results into one array.
 
+Recall's opt-in `code` scope (`recall_scope::run_code`, Python's `_run_code`)
+runs one CODE search with `RecallOptions::code_query` (or `explore` on the
+query text) and tags its facts `RecallSource::Code`, each the normalized
+entry Python returns as `ResponseCodeEntry` (`recall_normalize::
+build_code_entry`). Seed misses contribute nothing; a `code_query` without the
+`code` scope is refused (`check_code_query`, Python's `InvalidCodeQueryError`).
+
 Part of [cognee-rs](https://github.com/topoteretes/cognee-rs) — see the [project README](../../README.md) for an architecture overview and how the pieces fit together.
 
 ## License

@@ -114,6 +114,14 @@ pub enum ApiError {
     #[error("{0}")]
     CodeRepositoryForbidden(String),
 
+    /// A CODE operation of recall's `code` lane was refused: an unknown
+    /// operation or an invalid argument (Python's `CodeSearchValidationError`,
+    /// HTTP 422), with its stable `code` and `param`. Seed misses never
+    /// reach this: the lane answers nothing for them. Displays as the bare
+    /// message.
+    #[error(transparent)]
+    CodeQuery(#[from] cognee_code_graph::query::CodeQueryError),
+
     #[error("Background task join error: {0}")]
     Join(#[from] tokio::task::JoinError),
 }

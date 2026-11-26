@@ -225,17 +225,30 @@ Session-first routing: checks session QA history before falling back to graph se
 ```ts
 const result = await c.recall("What did we discuss?", {
   sessionId: "session-uuid",
-  scope: "auto",   // "graph" | "session" | "session_first" | "session_context" | "trace" | "all"
-                   // ("graph_context" = deprecated "graph")
+  scope: "auto",   // "graph" | "session" | "session_first" | "session_context" | "trace" | "code" | "all"
+                   // ("graph_context" = deprecated "graph"; "code" is never implied by "auto"/"all")
   contextProfile: "qa",   // profile the "session_context" scope renders ("qa" | "agent")
   toolsTrigger: "always", // "always" | "on_empty"; validated, no effect until the tools scope exists
 });
 ```
 
 `nodeType`, `nodeName`, `nodeNameFilterOperator` and `verbose` apply to the
-graph source as they do to `search`. `"tools"` and `"code"` scopes, an unknown
+graph source as they do to `search`. The `"tools"` scope, an unknown
 `toolsTrigger` and node names with an empty `nodeType` fail with a
 `ValidationError`.
+
+The `"code"` scope runs one deterministic `CODE` search over the indexed code
+graph — `codeQuery`, or `explore` with the query text as seed — and returns
+its facts as items with `source: "code"` (a seed the graph cannot resolve
+contributes nothing). A `codeQuery` without that scope is a
+`ValidationError`, as is a refused operation:
+
+```ts
+const result = await c.recall("create_order", {
+  scope: ["graph", "code"],
+  codeQuery: { operation: "impact_analysis", name: "create_order" },
+});
+```
 
 `search` and `recall` both take `llmConfig` / `embeddingConfig` to run one
 call with its own LLM or embedding model (Python's `llm_config` /

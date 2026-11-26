@@ -25,9 +25,11 @@ public final class RecallOptions extends Options {
     public RecallOptions sessionId(String s) { put("sessionId", s); return this; }
     /**
      * A single scope: "auto", "graph", "session", "session_first",
-     * "session_context", "trace" or "all" ("graph_context" is a deprecated
-     * alias of "graph"). "tools" and "code" are accepted names that fail
-     * validation as not supported yet.
+     * "session_context", "trace", "code" or "all" ("graph_context" is a
+     * deprecated alias of "graph"). "code" runs the deterministic code-graph
+     * source (see {@link #codeQuery}) and is never implied by "auto" or
+     * "all". "tools" is an accepted name that fails validation as not
+     * supported yet.
      */
     public RecallOptions scope(String scope) { put("scope", scope); return this; }
     /** Multiple scopes, e.g. ["graph","session"]. */
@@ -64,4 +66,16 @@ public final class RecallOptions extends Options {
     public RecallOptions llmConfig(Map<String, Object> c) { put("llmConfig", c); return this; }
     /** As {@link SearchOptions#embeddingConfig}. */
     public RecallOptions embeddingConfig(Map<String, Object> c) { put("embeddingConfig", c); return this; }
+    /**
+     * The operation the "code" scope runs, as {@link SearchOptions#codeQuery}
+     * (Python's {@code code_query}), e.g.
+     * {@code {"operation": "impact_analysis", "name": "UserService"}}. Without
+     * it the scope runs {@code explore} with the query text as seed. Only
+     * valid when the scope includes "code" (a validation error otherwise).
+     * Its facts are items with source "code"; a seed the code graph cannot
+     * resolve contributes nothing.
+     *
+     * @param q the operation and its snake_case arguments
+     */
+    public RecallOptions codeQuery(Map<String, Object> q) { put("codeQuery", q); return this; }
 }

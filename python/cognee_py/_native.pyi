@@ -692,7 +692,12 @@ class Cognee:
         ``neighborhood_depth`` / ``neighborhoodDepth``,
         ``neighborhood_seed_top_k`` / ``neighborhoodSeedTopK``,
         ``llm_config`` / ``llmConfig``, ``embedding_config`` /
-        ``embeddingConfig``.
+        ``embeddingConfig``, ``code_query`` / ``codeQuery``.
+
+        ``code_query`` goes with ``search_type="CODE"`` only: the code-graph
+        operation and its snake_case arguments (e.g. ``{"operation":
+        "neighbors", "name": "create_order"}``); a refused operation or
+        argument raises :exc:`CogneeValidationError` naming its ``error_code``.
 
         ``llm_config`` / ``embedding_config`` run the call with its own LLM
         and embedding model: dicts keyed by the settings' Python names
@@ -712,7 +717,7 @@ class Cognee:
 
         Returns a dict with camelCase keys: ``items``, ``searchTypeUsed``,
         ``autoRouted``, ``searchResponse``, ``normalizedResults`` (typed
-        entries for the graph items).
+        entries for the graph and code items).
 
         Accepted *opts* keys (``snake_case`` and ``camelCase`` both accepted):
         ``search_type`` / ``searchType``, ``datasets``, ``top_k`` / ``topK``,
@@ -726,14 +731,18 @@ class Cognee:
         ``node_name_filter_operator`` / ``nodeNameFilterOperator``,
         ``verbose``, ``llm_config`` / ``llmConfig``, ``embedding_config`` /
         ``embeddingConfig`` (as for :meth:`search`; the whole recall runs with
-        them).
+        them), ``code_query`` / ``codeQuery``.
 
         ``scope`` is a string or list of: ``"auto"``, ``"graph"``,
         ``"session"``, ``"session_first"``, ``"session_context"``,
-        ``"trace"``, ``"all"`` (``"graph_context"`` is a deprecated alias of
-        ``"graph"``). ``"tools"`` and ``"code"`` are accepted names that raise
-        :exc:`CogneeValidationError` as not supported yet, as does an invalid
-        ``tools_trigger``.
+        ``"trace"``, ``"code"``, ``"all"`` (``"graph_context"`` is a
+        deprecated alias of ``"graph"``). ``"code"`` runs one deterministic
+        CODE search (``code_query``, or ``explore`` with the query text as
+        seed) and returns its facts as items with ``source == "code"``; it is
+        never implied by ``"auto"`` or ``"all"``, and a ``code_query`` without
+        it raises :exc:`CogneeValidationError`. ``"tools"`` is an accepted name
+        that raises :exc:`CogneeValidationError` as not supported yet, as does
+        an invalid ``tools_trigger``.
         """
         ...
 
