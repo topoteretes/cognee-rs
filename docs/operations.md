@@ -368,6 +368,16 @@ writer's) leaves the graph only with an endpoint. Ledger rows with a nil
 type and structural edge, still claim their artifact until its dataset is
 deleted. A delete does not lock against a running cognify of the same data.
 
+A **hard** delete (`DeleteMode::Hard`, `--mode hard`) then sweeps the graph
+for degree-one `Entity` and `EntityType` nodes, as Python's `legacy_delete`
+does in hard mode, but keeps every node a ledger row still names, a nil
+`data_id` row included (SDK-1694 O9). A degree-one node another document
+claims is not an orphan: an ontology class such as `organization`, whose only
+edge is its `is_a`, or a type one surviving entity still has. Python never
+removes a node another ledger row names and runs its degree sweep only for
+data its ledger does not know, so what the sweep still removes is a node no
+row names. A soft delete runs no sweep.
+
 ## Lower-level pipeline
 
 The memory API composes these building blocks. They remain available directly
