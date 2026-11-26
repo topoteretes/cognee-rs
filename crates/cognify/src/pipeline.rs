@@ -112,6 +112,11 @@ pub struct CognifyResult {
 pub enum ItemStatus {
     /// Processed by this run and completed: saved, and marked complete when
     /// `incremental_loading` is on. Python's `PipelineRunCompleted` entry.
+    ///
+    /// It does not promise a completion marker. None is written without
+    /// `incremental_loading` (also under an explicit
+    /// [`crate::RollbackScope::FailedItems`]), and a failed marker write
+    /// only warns, so the next run may process the item again.
     Completed,
     /// Skipped: an earlier run completed it (the completion markers cover
     /// it), so this run did nothing for it. Python's
@@ -140,7 +145,9 @@ impl ItemStatus {
     }
 }
 
-/// One data item's outcome: its id and [`ItemStatus`].
+/// One data item's outcome: its id and [`ItemStatus`]. A
+/// [`ItemStatus::Completed`] item is saved, but not necessarily marked
+/// complete (see there).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ItemOutcome {

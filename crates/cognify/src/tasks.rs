@@ -367,7 +367,8 @@ pub fn classify_documents(
     info!(doc_count = documents.len(), "documents classified");
 
     // `model_classify_documents` filter_maps items whose extension maps to no
-    // document type (`md`, `json`, `xml`, `yaml`, anything unmapped). They are
+    // document type (`md`, `json`, `xml` and `yaml` map to text; source code
+    // and any other unmapped extension does not). They are
     // dropped silently, so without this they are neither failed nor unreached
     // and a completing run would mark them done — and, since markers now skip,
     // never revisit them. Record each as a file-unit failure instead.

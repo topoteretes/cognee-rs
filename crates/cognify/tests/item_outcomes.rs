@@ -19,7 +19,10 @@ mod rollback_harness;
 use std::sync::Arc;
 
 use cognee_cognify::{CognifyConfig, CognifyError, ItemOutcome, ItemStatus, RollbackScope};
-use rollback_harness::{CountingLlm, Harness, default_batch_extraction_config, extraction_config};
+use rollback_harness::{
+    CountingLlm, Harness, SummarizationFailingLlm, default_batch_extraction_config,
+    extraction_config,
+};
 use uuid::Uuid;
 
 fn failed_items(config: CognifyConfig) -> CognifyConfig {
@@ -246,4 +249,96 @@ async fn an_item_no_loader_matches_is_unreached_on_a_completed_run() {
         ])
     );
     assert!(!harness.is_marked(unsupported).await);
+}
+
+// ── Probes from the O8 review ────────────────────────────────────────────────
+
+fn statuses(items: &[ItemOutcome]) -> Vec<ItemStatus> {
+    items.iter().map(|item| item.status).collect()
+}
+
+/// Without incremental loading nothing is skipped: a rerun processes every
+/// item again, so both runs report them completed, never already completed.
+#[tokio::test]
+async fn without_incremental_loading_a_rerun_completes_every_item_again() {
+    let mut harness = Harness::new().await;
+    harness.add_file("Alice works at Acme.").await;
+    harness.add_file("Bob works at Acme.").await;
+    let config = extraction_config().with_incremental_loading(false);
+
+    let first = harness.run(&config).await.expect("first run");
+    let second = harness.run(&config).await.expect("second run");
+    assert_eq!(statuses(&first.items), vec![ItemStatus::Completed; 2]);
+    assert!(!second.already_completed);
+    assert_eq!(statuses(&second.items), vec![ItemStatus::Completed; 2]);
+}
+
+/// Without incremental loading the default scope is `whole_run`: a failure
+/// discards the items the run processed.
+#[tokio::test]
+async fn without_incremental_loading_a_failure_discards_the_run() {
+    let mut harness = Harness::new().await;
+    harness.add_file("Alice works at Acme.").await;
+    harness.add_file("Bob FAILMARKER breaks here.").await;
+    harness.add_file("Carol works at Acme.").await;
+    let config = default_batch_extraction_config().with_incremental_loading(false);
+
+    let outcome = errored_outcomes(harness.run(&config).await);
+    assert_eq!(
+        statuses(&outcome),
+        vec![
+            ItemStatus::Discarded,
+            ItemStatus::Failed,
+            ItemStatus::Discarded
+        ]
+    );
+}
+
+/// A summarization failure the policy tolerates fails no item: the run is
+/// `Ok` and both items are completed.
+#[tokio::test]
+async fn a_tolerated_summarization_failure_completes_every_item() {
+    let mut harness = Harness::new().await;
+    let a = harness.add_file("Alice works at Acme.").await;
+    let b = harness.add_file("Bob FAILMARKER breaks here.").await;
+    let config = CognifyConfig::default()
+        .with_chunk_size(1500)
+        .with_summarization_failure_tolerance(true);
+
+    let result = harness
+        .run_with_llm(
+            &config,
+            Arc::new(SummarizationFailingLlm),
+            vec![harness.data(a), harness.data(b)],
+        )
+        .await
+        .expect("a tolerated failure completes the run");
+    assert!(result.failures.total() > 0, "the failure is still reported");
+    assert_eq!(statuses(&result.items), vec![ItemStatus::Completed; 2]);
+}
+
+/// The same failure, not tolerated, fails its item and errors the run, which
+/// keeps the other one.
+#[tokio::test]
+async fn an_untolerated_summarization_failure_fails_its_item() {
+    let mut harness = Harness::new().await;
+    let a = harness.add_file("Alice works at Acme.").await;
+    let b = harness.add_file("Bob FAILMARKER breaks here.").await;
+    let config = CognifyConfig::default()
+        .with_chunk_size(1500)
+        .with_summarization_failure_tolerance(false);
+
+    let outcome = errored_outcomes(
+        harness
+            .run_with_llm(
+                &config,
+                Arc::new(SummarizationFailingLlm),
+                vec![harness.data(a), harness.data(b)],
+            )
+            .await,
+    );
+    assert_eq!(
+        outcome,
+        outcomes(&[(a, ItemStatus::Completed), (b, ItemStatus::Failed)])
+    );
 }
