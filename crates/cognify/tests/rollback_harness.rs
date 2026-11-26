@@ -29,7 +29,7 @@ use cognee_database::{
 use cognee_embedding::MockEmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_models::{Data, Dataset};
-use cognee_ontology::NoOpOntologyResolver;
+use cognee_ontology::{NoOpOntologyResolver, OntologyResolver};
 use cognee_storage::{MockStorage, StorageTrait};
 use cognee_test_utils::{MockGraphDB, MockLlm, MockVectorDB};
 use cognee_vector::VectorDB;
@@ -263,6 +263,18 @@ impl Harness {
         llm: Arc<dyn cognee_llm::Llm>,
         items: Vec<Data>,
     ) -> Result<CognifyResult, CognifyError> {
+        self.run_with_ontology(config, llm, items, Arc::new(NoOpOntologyResolver::new()))
+            .await
+    }
+
+    /// [`Self::run_with_llm`] with an ontology resolver.
+    pub async fn run_with_ontology(
+        &self,
+        config: &CognifyConfig,
+        llm: Arc<dyn cognee_llm::Llm>,
+        items: Vec<Data>,
+        ontology: Arc<dyn OntologyResolver>,
+    ) -> Result<CognifyResult, CognifyError> {
         let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(
             cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool"),
         );
@@ -280,7 +292,7 @@ impl Harness {
             self.db.clone(),
             Arc::clone(&self.repo),
             thread_pool,
-            Arc::new(NoOpOntologyResolver::new()),
+            ontology,
             config,
         )
         .await

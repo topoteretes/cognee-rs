@@ -15,8 +15,8 @@
 //! * A legacy nil-`data_id` row — what a database written before O6 holds for
 //!   every EntityType and structural edge — is still a claim, of the type's
 //!   slug and of the edge's triple.
-//! * `get_node_slugs_owned_by_data` answers which degree-one types a
-//!   document still claims, for the hard delete's sweep: nil rows do not
+//! * `get_claimed_node_slugs` answers which degree-one entities and types a
+//!   ledger row still names, for the hard delete's sweep (O9): nil rows
 //!   count, the dataset narrows, and the slug list is batched.
 //!
 //! Every case runs on in-memory SQLite and, when `TEST_POSTGRES_URL` is set,
@@ -29,9 +29,8 @@ use std::collections::BTreeSet;
 use chrono::Utc;
 use cognee_database::ops::datasets::create_dataset;
 use cognee_database::ops::graph_storage::{
-    RunScope, get_node_slugs_owned_by_data, get_unique_edges_for_data,
-    get_unique_edges_for_datasets, get_unique_edges_for_run, get_unique_nodes_for_data,
-    upsert_edges, upsert_nodes,
+    RunScope, get_claimed_node_slugs, get_unique_edges_for_data, get_unique_edges_for_datasets,
+    get_unique_edges_for_run, get_unique_nodes_for_data, upsert_edges, upsert_nodes,
 };
 use cognee_database::{
     ClaimantScope, DatabaseConnection, GraphEdge, GraphNode, connect, initialize,
@@ -246,32 +245,51 @@ async fn legacy_nil_rows_are_still_claims(db: &DatabaseConnection) {
     }
 }
 
-/// The degree-one sweep's question: of these slugs, which does a document's
-/// row still claim? Not one with nil rows only, not one claimed only in
-/// another dataset when a dataset is named, and every one of a list longer
-/// than a batch.
-async fn owned_slugs_ignore_nil_rows_and_narrow_by_dataset(db: &DatabaseConnection) {
+/// The degree-one sweep's question: of these slugs, which does a ledger row
+/// still name? One with nil rows only too (a legacy claim), an entity as
+/// well as a type, not one claimed only in another dataset when a dataset is
+/// named, and every one of a list longer than a batch.
+async fn claimed_slugs_count_nil_rows_and_narrow_by_dataset(db: &DatabaseConnection) {
     let w = World::new(db).await;
     let (a, other) = (Uuid::new_v4(), Uuid::new_v4());
     w.node("company", "EntityType", w.dataset, a).await;
     w.node("company", "EntityType", w.dataset, NIL).await;
     w.node("legacy", "EntityType", w.dataset, NIL).await;
+    w.node("organization", "Entity", w.dataset, a).await;
     w.node("elsewhere", "EntityType", w.other_dataset, other)
         .await;
-    let asked = [id("company"), id("legacy"), id("elsewhere"), id("absent")];
+    let asked = [
+        id("company"),
+        id("legacy"),
+        id("organization"),
+        id("elsewhere"),
+        id("absent"),
+    ];
 
-    let owned = |dataset| get_node_slugs_owned_by_data(db, &asked, dataset);
+    let owned = |dataset| get_claimed_node_slugs(db, &asked, dataset);
     assert_eq!(
         owned(None)
             .await
             .unwrap()
             .into_iter()
             .collect::<BTreeSet<_>>(),
-        BTreeSet::from([id("company"), id("elsewhere")])
+        BTreeSet::from([
+            id("company"),
+            id("legacy"),
+            id("organization"),
+            id("elsewhere")
+        ])
     );
-    assert_eq!(owned(Some(w.dataset)).await.unwrap(), vec![id("company")]);
+    assert_eq!(
+        owned(Some(w.dataset))
+            .await
+            .unwrap()
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([id("company"), id("legacy"), id("organization")])
+    );
     assert!(
-        get_node_slugs_owned_by_data(db, &[], None)
+        get_claimed_node_slugs(db, &[], None)
             .await
             .unwrap()
             .is_empty()
@@ -283,7 +301,7 @@ async fn owned_slugs_ignore_nil_rows_and_narrow_by_dataset(db: &DatabaseConnecti
         w.node(name, "EntityType", w.dataset, a).await;
     }
     let slugs: Vec<Uuid> = names.iter().map(|name| id(name)).collect();
-    let owned: BTreeSet<Uuid> = get_node_slugs_owned_by_data(db, &slugs, Some(w.dataset))
+    let owned: BTreeSet<Uuid> = get_claimed_node_slugs(db, &slugs, Some(w.dataset))
         .await
         .unwrap()
         .into_iter()
@@ -308,7 +326,7 @@ async fn run_all(db: &DatabaseConnection) {
     clear_ledger(db).await;
     legacy_nil_rows_are_still_claims(db).await;
     clear_ledger(db).await;
-    owned_slugs_ignore_nil_rows_and_narrow_by_dataset(db).await;
+    claimed_slugs_count_nil_rows_and_narrow_by_dataset(db).await;
 }
 
 #[tokio::test]

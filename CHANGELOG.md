@@ -18,6 +18,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **The hard delete's degree-one sweep keeps every node a ledger row still
+  names (SDK-1694, stage O9).** `DeleteMode::Hard` sweeps the graph for
+  `Entity` and `EntityType` nodes with exactly one edge. Since O6 it kept a
+  type a document still claimed, but not an entity, so hard-deleting one
+  document removed another document's ontology class entities (`class`,
+  `organization`), whose only edge is their `is_a`. The sweep now asks the
+  ledger about both kinds, in one batched lookup per 500 slugs, and keeps any
+  node a row still names. A legacy nil-`data_id` row counts, as it does in the
+  data-scoped delete: a type or ontology class only a nil row claims is no
+  longer swept, and stays until its dataset is deleted, as nil-claimed
+  types and structural edges already do (a type is then still one entity's;
+  a nil-claimed ontology class may be garbage). This
+  follows Python, which never removes a slug another ledger row names
+  (`get_global_data_related_nodes`) and runs its degree sweep only for data
+  its ledger does not know (`legacy_delete`). What the sweep still removes is
+  a node no row names, such as one in a graph written before the ledger.
+  Soft delete is unchanged (no sweep). **API:** the required
+  `DeleteDb::get_node_slugs_owned_by_data` is renamed
+  `DeleteDb::get_claimed_node_slugs` (and
+  `ops::graph_storage::get_node_slugs_owned_by_data` to
+  `get_claimed_node_slugs`) and now counts nil rows; an implementor renames
+  its method.
 - **cognify works one document at a time, as Python does (SDK-1694,
   overview).** The stage entries below and under Added / Changed / Fixed
   give the detail; together they change cognify as follows. The pipeline is
@@ -82,8 +104,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     not another document extracted it, so deleting the extractor keeps it;
   - the hard delete's sweep of degree-one EntityTypes keeps a type a
     document's ledger row still claims (new **required** method
-    `DeleteDb::get_node_slugs_owned_by_data`). A type only legacy nil rows
-    claim is swept as before.
+    `DeleteDb::get_node_slugs_owned_by_data`, renamed
+    `get_claimed_node_slugs` by O9 above, which also keeps entities and
+    counts nil rows).
 
   **Existing databases:** nil rows already written stay claims. A type or
   structural edge written before this change is not removed by a

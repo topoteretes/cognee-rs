@@ -674,3 +674,239 @@ async fn a_type_a_failed_document_declared_never_outlives_every_row() {
         );
     }
 }
+
+// ── SDK-1694 O9: the hard delete's degree-one sweep keeps claimed nodes ─────
+
+/// `Fruit` is a subclass of `Food`, `Company` of `Organization`.
+const ONTOLOGY: &str = r#"@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix : <http://test.cognee.ai/ontology#> .
+
+:Food a owl:Class ; rdfs:label "Food" .
+:Fruit a owl:Class ; rdfs:subClassOf :Food ; rdfs:label "Fruit" .
+:Organization a owl:Class ; rdfs:label "Organization" .
+:Company a owl:Class ; rdfs:subClassOf :Organization ; rdfs:label "Company" .
+"#;
+
+/// Two documents, cognified in one run against [`ONTOLOGY`].
+async fn cognified_with_ontology(first: &str, second: &str) -> (Harness, Uuid, Uuid) {
+    use cognee_ontology::{OntologyFileInput, OntologyResolver, RdfLibOntologyResolver};
+    let mut harness = Harness::new().await;
+    let a = harness.add_file(first).await;
+    let b = harness.add_file(second).await;
+    let readers: Vec<Box<dyn std::io::Read>> =
+        vec![Box::new(std::io::Cursor::new(ONTOLOGY.as_bytes().to_vec()))];
+    let resolver =
+        RdfLibOntologyResolver::new(OntologyFileInput::Readers(readers)).expect("ontology");
+    assert!(resolver.is_loaded(), "the ontology loads");
+    let items = vec![harness.data(a), harness.data(b)];
+    harness
+        .run_with_ontology(
+            &extraction_config(),
+            Arc::new(TypesLlm),
+            items,
+            Arc::new(resolver) as Arc<dyn OntologyResolver>,
+        )
+        .await
+        .expect("cognify succeeds");
+    (harness, a, b)
+}
+
+/// The graph's `is_a` edges as `(source name/type, target name/type)`.
+async fn named_is_a_edges(harness: &Harness) -> BTreeSet<(String, String)> {
+    let (nodes, edges) = harness.graph_db.get_graph_data().await.unwrap();
+    let label = |id: &str| -> String {
+        nodes
+            .iter()
+            .find(|(node, _)| node == id)
+            .map(|(_, props)| {
+                format!(
+                    "{}/{}",
+                    props.get("name").and_then(Value::as_str).unwrap_or("?"),
+                    props.get("type").and_then(Value::as_str).unwrap_or("?")
+                )
+            })
+            .unwrap_or_else(|| format!("missing {id}"))
+    };
+    edges
+        .iter()
+        .filter(|(_, _, relationship, _)| relationship == "is_a")
+        .map(|(source, target, _, _)| (label(source), label(target)))
+        .collect()
+}
+
+fn named(set: &[(&str, &str)]) -> BTreeSet<(String, String)> {
+    set.iter()
+        .map(|(source, target)| (source.to_string(), target.to_string()))
+        .collect()
+}
+
+/// The graph id of the node named `name` with type `node_type`.
+async fn node_named(harness: &Harness, name: &str, node_type: &str) -> Option<Uuid> {
+    let (nodes, _) = harness.graph_db.get_graph_data().await.unwrap();
+    nodes
+        .into_iter()
+        .find(|(_, props)| {
+            props.get("name").and_then(Value::as_str) == Some(name)
+                && props.get("type").and_then(Value::as_str) == Some(node_type)
+        })
+        .map(|(id, _)| Uuid::parse_str(&id).unwrap())
+}
+
+/// Shared by both documents: Apple, and the ontology root `class`. Only A
+/// reaches `company` and its ancestor `organization`.
+const SHARED_AND_A: [(&str, &str); 6] = [
+    ("apple/Entity", "company/EntityType"),
+    ("class/Entity", "class/EntityType"),
+    ("company/EntityType", "class/EntityType"),
+    ("company/EntityType", "organization/EntityType"),
+    ("organization/Entity", "organization/EntityType"),
+    ("organization/EntityType", "class/EntityType"),
+];
+/// Only B reaches `fruit` and its ancestor `food`.
+const ONLY_B: [(&str, &str); 5] = [
+    ("apple/Entity", "fruit/EntityType"),
+    ("fruit/EntityType", "class/EntityType"),
+    ("fruit/EntityType", "food/EntityType"),
+    ("food/Entity", "food/EntityType"),
+    ("food/EntityType", "class/EntityType"),
+];
+
+/// SDK-1694 O9: hard-deleting doc B keeps the ontology class *entities* doc A
+/// still claims (`class`, `organization`), although their only edge is their
+/// `is_a` and the hard delete's degree-one sweep reads the whole graph. Before
+/// O9 the sweep checked the ledger for types only, so hard mode removed them;
+/// soft mode, which runs no sweep, always kept them and still does. B's own
+/// ontology class (`food`) goes in both modes with B, through the
+/// data-scoped delete.
+#[tokio::test]
+async fn a_hard_delete_keeps_the_ontology_classes_another_document_claims() {
+    for mode in [DeleteMode::Soft, DeleteMode::Hard] {
+        let (harness, a, b) = cognified_with_ontology("Apple:Company", "Apple:Fruit").await;
+        let mut before = named(&SHARED_AND_A);
+        before.extend(named(&ONLY_B));
+        assert_eq!(named_is_a_edges(&harness).await, before, "{mode:?}");
+        let class = node_named(&harness, "class", "Entity").await.unwrap();
+        let organization = node_named(&harness, "organization", "Entity")
+            .await
+            .unwrap();
+        assert!(node_owners(&harness, organization).await.contains(&a));
+        assert!(node_owners(&harness, class).await.contains(&a));
+        for (id, name) in [(class, "class"), (organization, "organization")] {
+            assert!(
+                harness
+                    .graph_db
+                    .get_degree_one_nodes("Entity")
+                    .await
+                    .unwrap()
+                    .iter()
+                    .any(|(node, _)| node == &id.to_string()),
+                "{name} is a degree-one Entity: the case the sweep must spare"
+            );
+        }
+
+        delete(&harness, b, mode.clone()).await;
+
+        assert_eq!(
+            named_is_a_edges(&harness).await,
+            named(&SHARED_AND_A),
+            "{mode:?}: B's types and ontology ancestors go; A's classes and the shared root stay"
+        );
+        for (id, name) in [(class, "class"), (organization, "organization")] {
+            assert!(has_node(&harness, id).await, "{mode:?}: {name} stays");
+            assert!(
+                has_point(&harness, "Entity", "name", id),
+                "{mode:?}: {name}'s vector point stays"
+            );
+        }
+        assert!(
+            node_named(&harness, "food", "Entity").await.is_none(),
+            "{mode:?}: B's class goes with B"
+        );
+
+        // A's delete takes its classes with it, hard or soft.
+        delete(&harness, a, mode.clone()).await;
+        let (nodes, edges) = harness.graph_db.get_graph_data().await.unwrap();
+        assert!(nodes.is_empty(), "{mode:?}: {nodes:?}");
+        assert!(edges.is_empty(), "{mode:?}: {edges:?}");
+    }
+}
+
+/// Add an Entity named `name` to the graph with one `is_a` edge to the type
+/// `company`, and, when `claim` names one, a ledger row for it with that
+/// `data_id`.
+async fn add_stray_entity(harness: &Harness, name: &str, claim: Option<Uuid>) -> Uuid {
+    let id = Entity::id_for(name);
+    harness
+        .graph_db
+        .add_node_raw(json!({"id": id.to_string(), "type": "Entity", "name": name}))
+        .await
+        .unwrap();
+    harness
+        .graph_db
+        .add_edge(
+            &id.to_string(),
+            &type_id("company").to_string(),
+            "is_a",
+            None,
+        )
+        .await
+        .unwrap();
+    if let Some(data_id) = claim {
+        upsert_nodes(
+            &harness.db,
+            &[GraphNode {
+                id: Uuid::new_v4(),
+                slug: id,
+                user_id: harness.owner_id,
+                data_id,
+                dataset_id: harness.dataset_id,
+                pipeline_run_id: None,
+                label: Some(name.to_string()),
+                node_type: "Entity".into(),
+                indexed_fields: json!(["name"]),
+                attributes: None,
+                created_at: chrono::Utc::now(),
+            }],
+        )
+        .await
+        .unwrap();
+    }
+    id
+}
+
+/// What the sweep still removes after O9: a degree-one Entity no ledger row
+/// names. One only a legacy nil-`data_id` row names is a claim, as it is in
+/// the data-scoped delete, and stays. Soft mode removes neither.
+#[tokio::test]
+async fn the_hard_sweep_removes_only_the_nodes_no_ledger_row_names() {
+    for mode in [DeleteMode::Soft, DeleteMode::Hard] {
+        let (harness, a, b) = cognified("Apple:Company", "Pear:Fruit").await;
+        let stray = add_stray_entity(&harness, "Stray", None).await;
+        let legacy = add_stray_entity(&harness, "Legacy", Some(Uuid::nil())).await;
+
+        delete(&harness, b, mode.clone()).await;
+
+        let hard = matches!(mode, DeleteMode::Hard);
+        assert_eq!(
+            has_node(&harness, stray).await,
+            !hard,
+            "{mode:?}: an entity no row names is an orphan"
+        );
+        assert!(
+            has_node(&harness, legacy).await,
+            "{mode:?}: a nil row is a claim"
+        );
+        assert!(has_node(&harness, Entity::id_for("Apple")).await);
+        assert!(has_node(&harness, type_id("company")).await);
+        assert_eq!(
+            node_owners(&harness, legacy).await,
+            BTreeSet::from([Uuid::nil()])
+        );
+        assert!(
+            node_owners(&harness, Entity::id_for("Apple"))
+                .await
+                .contains(&a)
+        );
+    }
+}

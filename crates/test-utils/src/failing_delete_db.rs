@@ -214,12 +214,12 @@ impl DeleteDb for FailingDeleteDb {
         DeleteDb::delete_provenance_edges_by_ids(self.inner.as_ref(), ids).await
     }
 
-    async fn get_node_slugs_owned_by_data(
+    async fn get_claimed_node_slugs(
         &self,
         slugs: &[Uuid],
         dataset_id: Option<Uuid>,
     ) -> Result<Vec<Uuid>, DatabaseError> {
-        DeleteDb::get_node_slugs_owned_by_data(self.inner.as_ref(), slugs, dataset_id).await
+        DeleteDb::get_claimed_node_slugs(self.inner.as_ref(), slugs, dataset_id).await
     }
 
     async fn get_edge_retrieval_texts_claimed_outside_data(

@@ -1076,20 +1076,22 @@ pub async fn get_structural_edges_for_data(
     Ok(rows)
 }
 
-/// Slugs per `IN (…)` list of [`get_node_slugs_owned_by_data`].
-const OWNED_SLUG_BATCH: usize = 500;
+/// Slugs per `IN (…)` list of [`get_claimed_node_slugs`].
+const CLAIMED_SLUG_BATCH: usize = 500;
 
-/// The members of `slugs` that a node row naming a data item (a non-nil
-/// `data_id`) still claims, in `dataset_id` when it is given and in any
-/// dataset otherwise.
+/// The members of `slugs` that any node row still names, in `dataset_id`
+/// when it is given and in any dataset otherwise. A legacy nil-`data_id` row
+/// counts: it is a claim here as it is in the data-scoped delete.
 ///
-/// What the hard delete's degree-one sweep keeps (SDK-1694 O6): an
-/// `EntityType` is removed with its last declaring document by the
-/// data-scoped delete, so one with a single `is_a` edge left may still be a
-/// surviving document's type. A legacy nil-`data_id` row is not such a claim:
-/// the sweep removed those types before and still does.
+/// What the hard delete's degree-one sweep keeps (SDK-1694 O6, O9): Python
+/// removes a node only when no other ledger row names its slug
+/// (`get_global_data_related_nodes`, a nil row included), and runs its
+/// degree-one sweep only for data the ledger does not know
+/// (`legacy_delete`). So a degree-one Entity or EntityType a surviving row
+/// names — an ontology class another document reached, a type one entity
+/// still has — is not an orphan; only a node no row names is.
 #[instrument(
-    name = "cognee.db.relational.graph_storage.get_node_slugs_owned_by_data",
+    name = "cognee.db.relational.graph_storage.get_claimed_node_slugs",
     level = "info",
     skip_all,
     fields(
@@ -1098,21 +1100,19 @@ const OWNED_SLUG_BATCH: usize = 500;
     ),
     err,
 )]
-pub async fn get_node_slugs_owned_by_data(
+pub async fn get_claimed_node_slugs(
     db: &DatabaseConnection,
     slugs: &[Uuid],
     dataset_id: Option<Uuid>,
 ) -> Result<Vec<Uuid>, DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
-    let nil = uuid_hex::to_hex(Uuid::nil());
     let mut owned = BTreeSet::new();
-    for batch in slugs.chunks(OWNED_SLUG_BATCH) {
+    for batch in slugs.chunks(CLAIMED_SLUG_BATCH) {
         let mut query = node::Entity::find()
             .select_only()
             .column(node::Column::Slug)
             .distinct()
-            .filter(node::Column::Slug.is_in(batch.iter().copied().map(uuid_hex::to_hex)))
-            .filter(node::Column::DataId.ne(nil.clone()));
+            .filter(node::Column::Slug.is_in(batch.iter().copied().map(uuid_hex::to_hex)));
         if let Some(dataset_id) = dataset_id {
             query = query.filter(node::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)));
         }
