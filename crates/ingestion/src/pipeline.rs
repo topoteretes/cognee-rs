@@ -439,7 +439,7 @@ fn upload_file_name(name: &str) -> Result<&str, IngestionError> {
 #[allow(clippy::too_many_arguments)]
 #[instrument(
     name = "ingestion.process_input",
-    skip(input, storage, loaders, stored_text)
+    skip(input, storage, loaders, stored_text, upload_root)
 )]
 async fn process_input_reusing(
     input: &DataInput,
@@ -2304,7 +2304,10 @@ pub fn make_process_input_task_with_loaders(
 }
 
 /// [`make_process_input_task_with_loaders`] that tries the Python loader names
-/// in `preferred_loaders` first (see [`AddParams::preferred_loaders`]).
+/// in `preferred_loaders` first (see [`AddParams::preferred_loaders`]), and
+/// treats files under `upload_root` as uploads
+/// ([`AddPipeline::with_upload_root`]).
+#[allow(clippy::too_many_arguments)]
 fn make_process_input_task_preferring(
     storage: Arc<dyn StorageTrait>,
     loaders: Arc<LoaderRegistry>,
@@ -7197,6 +7200,7 @@ mod tests {
                 None,
                 &[],
                 Some(&lookup),
+                None,
             )
         };
 
