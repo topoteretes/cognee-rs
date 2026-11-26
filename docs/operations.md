@@ -369,9 +369,11 @@ type and structural edge, still claim their artifact until its dataset is
 deleted. A delete does not lock against a running cognify of the same data.
 
 A **hard** delete (`DeleteMode::Hard`, `--mode hard`) then sweeps the graph
-for degree-one `Entity` and `EntityType` nodes, as Python's `legacy_delete`
-does in hard mode, but keeps every node a ledger row still names, a nil
-`data_id` row included (SDK-1694 O9). A degree-one node another document
+for degree-one `Entity` and `EntityType` nodes. The sweep is Rust-only:
+Python's degree sweep sits in `legacy_delete`'s hard mode, which its delete
+never reaches (`datasets.delete_data` ignores `mode` and always passes
+`"soft"`). It keeps every node a ledger row still names, a nil `data_id` row
+included (SDK-1694 O9). A degree-one node another document
 claims is not an orphan: an ontology class such as `organization`, whose only
 edge is its `is_a`, or a type one surviving entity still has. Python never
 removes a node another ledger row names and runs its degree sweep only for

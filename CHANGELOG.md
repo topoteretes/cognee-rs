@@ -27,7 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ledger about both kinds, in one batched lookup per 500 slugs, and keeps any
   node a row still names. A legacy nil-`data_id` row counts, as it does in the
   data-scoped delete: a type or ontology class only a nil row claims is no
-  longer swept (it was a live node anyway: one edge is still attached). This
+  longer swept, and stays until its dataset is deleted, as nil-claimed
+  types and structural edges already do (a type is then still one entity's;
+  a nil-claimed ontology class may be garbage). This
   follows Python, which never removes a slug another ledger row names
   (`get_global_data_related_nodes`) and runs its degree sweep only for data
   its ledger does not know (`legacy_delete`). What the sweep still removes is
