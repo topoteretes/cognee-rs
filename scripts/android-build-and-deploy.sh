@@ -132,21 +132,6 @@ export ANDROID_API_LEVEL
 # ARM objects that the aarch64 linker rejects with "incompatible" errors.
 export ANDROID_NDK="${ANDROID_NDK_HOME}"
 
-# lbug's build.rs does not declare ANDROID_NDK in cargo:rerun-if-env-changed,
-# so cargo caches cmake-built static libraries and will reuse wrong-arch objects
-# when the NDK or target changes.  We track the last build config in a marker
-# file and only purge the lbug build cache when it actually changes.
-LBUG_MARKER="${TARGET_DIR}/${TARGET}/${PROFILE}/.lbug-build-config"
-LBUG_CONFIG_KEY="${TARGET}|${ANDROID_NDK_HOME}|${ANDROID_API_LEVEL}"
-if [[ -f "${LBUG_MARKER}" ]] && [[ "$(cat "${LBUG_MARKER}")" == "${LBUG_CONFIG_KEY}" ]]; then
-    echo ">>> lbug build cache is up-to-date for ${TARGET}/${PROFILE}, skipping purge."
-else
-    echo ">>> Purging cached C/C++ build outputs for ${TARGET}/${PROFILE} (config changed)..."
-    rm -rf "${TARGET_DIR}/${TARGET}/${PROFILE}/build/lbug-"*
-    mkdir -p "$(dirname "${LBUG_MARKER}")"
-    echo "${LBUG_CONFIG_KEY}" > "${LBUG_MARKER}"
-fi
-
 # lbug publishes no Android prebuilt, and its build.rs picks a prebuilt by the
 # *host* OS, so without this a cross build would download and try to link the
 # host's archive. Build the engine from source instead. (The source build
@@ -157,12 +142,28 @@ export LBUG_BUILD_FROM_SOURCE=1
 # lbug 0.23's CMake requires OpenSSL 3 (find_package honours OPENSSL_ROOT_DIR
 # from the environment) and its build.rs links libssl/libcrypto dynamically,
 # taking the library dir from the same variable.
-if [[ -z "${OPENSSL_ROOT_DIR:-}" || ! -f "${OPENSSL_ROOT_DIR}/lib/libssl.so" ]]; then
+if [[ -z "${OPENSSL_ROOT_DIR:-}" || ! -f "${OPENSSL_ROOT_DIR}/lib/libssl.so" \
+      || ! -f "${OPENSSL_ROOT_DIR}/lib/libcrypto.so" ]]; then
     echo "ERROR: OPENSSL_ROOT_DIR must point at an OpenSSL 3 build for ${TARGET}" >&2
     echo "       (with lib/libssl.so and lib/libcrypto.so); lbug needs it and the NDK has none." >&2
     exit 1
 fi
 export OPENSSL_ROOT_DIR
+
+# lbug's build.rs does not declare ANDROID_NDK in cargo:rerun-if-env-changed,
+# so cargo caches cmake-built static libraries and will reuse wrong-arch objects
+# when the NDK or target changes.  We track the last build config in a marker
+# file and only purge the lbug build cache when it actually changes.
+LBUG_MARKER="${TARGET_DIR}/${TARGET}/${PROFILE}/.lbug-build-config"
+LBUG_CONFIG_KEY="${TARGET}|${ANDROID_NDK_HOME}|${ANDROID_API_LEVEL}|${OPENSSL_ROOT_DIR}"
+if [[ -f "${LBUG_MARKER}" ]] && [[ "$(cat "${LBUG_MARKER}")" == "${LBUG_CONFIG_KEY}" ]]; then
+    echo ">>> lbug build cache is up-to-date for ${TARGET}/${PROFILE}, skipping purge."
+else
+    echo ">>> Purging cached C/C++ build outputs for ${TARGET}/${PROFILE} (config changed)..."
+    rm -rf "${TARGET_DIR}/${TARGET}/${PROFILE}/build/lbug-"*
+    mkdir -p "$(dirname "${LBUG_MARKER}")"
+    echo "${LBUG_CONFIG_KEY}" > "${LBUG_MARKER}"
+fi
 
 # ── Step 1: Build ──────────────────────────────────────────────────────────────
 echo ">>> Step 1: Building workspace for ${TARGET} (${PROFILE})..."

@@ -98,6 +98,70 @@ impl BackendBuildContext {
     /// factory that does not say what it reads. In memory only: it carries
     /// resolved URLs and API keys.
     pub fn fingerprint(&self) -> String {
+        // Exhaustive on purpose (no `..`): a field added to any of these
+        // structs fails to compile here until it is added to the fingerprint
+        // below, so a non-narrowing factory is never left on a stale engine.
+        let Self {
+            data_root_directory: _,
+            system_root_directory: _,
+            cache_root_directory: _,
+            relational_db_url: _,
+            graph_provider: _,
+            graph_file_path: _,
+            graph_postgres_url: _,
+            vector_provider: _,
+            vector_db_url: _,
+            vector_postgres_url: _,
+            embedding_dimensions: _,
+            embedding: _,
+            llm: _,
+            sections: _,
+        } = self;
+        let EmbeddingInputs {
+            provider: _,
+            model: _,
+            dimensions: _,
+            endpoint: _,
+            api_key: _,
+            batch_size: _,
+            max_concurrent_data_points: _,
+            rate_limit_enabled: _,
+            rate_limit_requests: _,
+            rate_limit_interval: _,
+            mock: _,
+            mock_mode: _,
+            max_completion_tokens: _,
+            max_sequence_length: _,
+        } = &self.embedding;
+        let LlmInputs {
+            provider: _,
+            model: _,
+            api_key: _,
+            endpoint: _,
+            max_retries: _,
+            network_retries: _,
+            min_retry_seconds: _,
+            max_parallel_requests: _,
+            request_timeout_seconds: _,
+            connect_timeout_seconds: _,
+            request_deadline_seconds: _,
+            rate_limit_enabled: _,
+            rate_limit_requests: _,
+            rate_limit_interval: _,
+            auto_rate_limit: _,
+            max_completion_tokens: _,
+            temperature: _,
+            llm_args: _,
+            api_version: _,
+            reasoning_override: _,
+            structured_output_mode: _,
+            mock: _,
+            cassette: _,
+            record_path: _,
+            debug_requests: _,
+            streaming: _,
+            answer_streaming: _,
+        } = &self.llm;
         let e = &self.embedding;
         let l = &self.llm;
         format!(

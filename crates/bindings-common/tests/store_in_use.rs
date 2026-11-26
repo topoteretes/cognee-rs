@@ -196,3 +196,18 @@ fn an_op_time_store_in_use_keeps_its_code() {
         "RUNTIME_ERROR"
     );
 }
+
+/// An improve aborted by a refused open stays `IMPROVE_ABORTED`: that code is
+/// what carries its partial result to the bindings.
+#[test]
+fn an_aborted_improve_keeps_its_own_code() {
+    let dir = tempfile::tempdir().unwrap();
+    let _held = cognee_utils::StoreClaim::acquire(dir.path(), "ladybug graph").unwrap();
+    let in_use = cognee_utils::StoreClaim::acquire(dir.path(), "ladybug graph").unwrap_err();
+    let err = cognee_bindings_common::SdkError::ImproveAborted {
+        message: format!("persist_session_qa: {in_use}"),
+        improve_result: Box::new(serde_json::json!({"stages": []})),
+    };
+    assert_eq!(err.code(), "IMPROVE_ABORTED");
+    assert!(err.improve_result().is_some());
+}

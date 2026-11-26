@@ -79,8 +79,13 @@ impl SdkError {
         // where a binding carries the string (Java, TypeScript) — also when it
         // happened mid-operation and arrives inside another error's message
         // (`cognify failed: STORE_IN_USE: …`).
+        //
+        // An aborted improve keeps `IMPROVE_ABORTED` even when its fatal stage
+        // was a refused open: that code is what carries the partial
+        // `improve_result` to TS and Java, and losing it loses the result.
         let in_use = match self {
             SdkError::Component(cognee::ComponentError::StoreInUse(_)) => true,
+            SdkError::ImproveAborted { .. } => false,
             other => cognee_utils::mentions_store_in_use(&other.to_string()),
         };
         if in_use {

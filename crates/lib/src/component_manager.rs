@@ -2498,4 +2498,41 @@ mod tests {
         drop(graph);
         cm.close().await;
     }
+
+    /// A store-tuning option (`graph.ladybug.max_db_size`) changes while an
+    /// operation still holds a dataset's engine: the per-dataset storage is
+    /// kept, so the dataset stays usable instead of every access failing
+    /// STORE_IN_USE against the old storage's still-open engine.
+    #[cfg(all(feature = "ladybug", feature = "testing"))]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn per_dataset_storage_survives_a_store_tuning_change_while_held() {
+        let root = tempfile::tempdir().unwrap();
+        let cm = store_manager(root.path(), true);
+        let owner = uuid::Uuid::new_v4();
+        let dataset = cognee_models::Dataset::new("ds".into(), owner, None, uuid::Uuid::new_v4());
+        let id = dataset.id;
+        let db = cm.database().await.unwrap();
+        cognee_database::IngestDb::create_dataset(&*db, dataset)
+            .await
+            .unwrap();
+        let in_flight = cm.graph_db().await.unwrap();
+        cognee_models::dataset_scope::with_dataset(
+            id,
+            in_flight.add_node_raw(serde_json::json!({"id": "n1", "name": "N", "type": "T"})),
+        )
+        .await
+        .unwrap();
+
+        cm.config()
+            .set("graph.ladybug.max_db_size", serde_json::json!(1u64 << 33))
+            .unwrap();
+        let graph = cm.graph_db().await.unwrap();
+        assert!(
+            cognee_models::dataset_scope::with_dataset(id, graph.has_node("n1"))
+                .await
+                .expect("no STORE_IN_USE while the old engine is held"),
+        );
+        drop((graph, in_flight));
+        cm.close().await;
+    }
 }

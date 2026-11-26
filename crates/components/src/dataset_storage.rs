@@ -711,20 +711,37 @@ impl DatasetStorage {
     }
 }
 
-/// What a [`DatasetStorage`] depends on in a build context: the shared-store
-/// inputs of both kinds ([`crate::graph_store_inputs`] /
-/// [`crate::vector_store_inputs`], the same ones the shared stores are keyed
-/// on), plus what only per-dataset storage reads — the relational database
-/// its `dataset_database` rows live in, and the embedding model it records
-/// and checks per dataset. In memory only: it carries resolved URLs.
+/// What identifies a [`DatasetStorage`] in a build context: the providers,
+/// the locations every dataset's stores are derived from, the handlers, the
+/// relational database its `dataset_database` rows live in, and the embedding
+/// model and width it records and checks per dataset. In memory only: it
+/// carries resolved URLs.
+///
+/// Deliberately *not* the store-tuning options (`graph.ladybug.max_db_size`
+/// and the rest of the `graph.*` / `vector.*` sections). A new storage opens
+/// every dataset's stores again, and while an operation still holds the old
+/// storage's engine on a dataset each such open is refused `StoreInUse`, with
+/// no take-back path here as the shared store slots have. So a tuning change
+/// keeps the storage and applies when a dataset's store is next opened, the
+/// same rule the shared slots follow for a same-path option change.
 fn storage_fingerprint(ctx: &BackendBuildContext) -> String {
+    let graph = ctx.section::<crate::sections::GraphConfig>();
+    let vector = ctx.section::<crate::sections::VectorConfig>();
     format!(
         "{:?}",
         (
-            crate::graph_store_inputs(ctx, &[]),
-            crate::vector_store_inputs(ctx, &[]),
+            ctx.graph_provider.to_lowercase(),
+            ctx.vector_provider.to_lowercase(),
+            &ctx.graph_file_path,
+            &ctx.vector_db_url,
+            &ctx.graph_postgres_url,
+            &ctx.vector_postgres_url,
             &ctx.relational_db_url,
+            &ctx.system_root_directory,
+            ctx.embedding_dimensions,
             &ctx.embedding.model,
+            graph.dataset_database_handler,
+            vector.dataset_database_handler,
         )
     )
 }

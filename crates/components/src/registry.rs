@@ -560,9 +560,31 @@ impl ComponentRegistry {
         provider: &str,
         android_lancedb_fallback: bool,
     ) -> Result<String, ComponentError> {
+        let (key, fell_back) = self.lookup_vector_key(provider, android_lancedb_fallback)?;
+        if fell_back {
+            tracing::warn!(
+                "vector_db_provider='{provider}' has no registered factory on this Android \
+                 build (the `lancedb` feature is off because the Arrow + lance native stack \
+                 does not cross-compile); falling back to in-memory brute-force -- the same \
+                 backend a lancedb-enabled Android build resolves to. Set \
+                 vector_db_provider='pgvector' for durable storage."
+            );
+        }
+        Ok(key)
+    }
+
+    /// [`Self::resolve_vector_key`] without its fallback warning, and saying
+    /// whether the fallback applied: for callers that only *identify* the
+    /// store (the fingerprint, computed on every config change) and must not
+    /// repeat the warning the build itself logs.
+    fn lookup_vector_key(
+        &self,
+        provider: &str,
+        android_lancedb_fallback: bool,
+    ) -> Result<(String, bool), ComponentError> {
         let key = canonical_vector_provider(provider);
         if self.vector.contains_key(&key) {
-            return Ok(key);
+            return Ok((key, false));
         }
         // Only degrade the one id that is unbuildable on this platform by
         // construction, and only after a real lookup miss -- so an external
@@ -572,14 +594,7 @@ impl ComponentRegistry {
             && key == "lancedb"
             && self.vector.contains_key(ANDROID_LANCEDB_FALLBACK_KEY)
         {
-            tracing::warn!(
-                "vector_db_provider='{provider}' has no registered factory on this Android \
-                 build (the `lancedb` feature is off because the Arrow + lance native stack \
-                 does not cross-compile); falling back to in-memory brute-force -- the same \
-                 backend a lancedb-enabled Android build resolves to. Set \
-                 vector_db_provider='pgvector' for durable storage."
-            );
-            return Ok(ANDROID_LANCEDB_FALLBACK_KEY.to_string());
+            return Ok((ANDROID_LANCEDB_FALLBACK_KEY.to_string(), true));
         }
         Err(ComponentError::Config(unsupported_msg(
             "vector_db_provider",
@@ -621,8 +636,8 @@ impl ComponentRegistry {
     /// ([`VectorDbFactory::store_fingerprint`], under the same factory
     /// resolution as [`Self::build_vector`], Android fallback included).
     pub fn vector_store_fingerprint(&self, ctx: &BackendBuildContext) -> String {
-        match self.resolve_vector_key(&ctx.vector_provider, ANDROID_LANCEDB_FALLBACK) {
-            Ok(key) => {
+        match self.lookup_vector_key(&ctx.vector_provider, ANDROID_LANCEDB_FALLBACK) {
+            Ok((key, _)) => {
                 let own = self
                     .vector
                     .get(&key)
