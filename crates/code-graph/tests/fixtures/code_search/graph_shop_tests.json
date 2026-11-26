@@ -1,0 +1,1189 @@
+{
+  "nodes": [
+    [
+      "repo",
+      {
+        "name": "shop",
+        "type": "CodeRepository",
+        "path": "/src/shop",
+        "last_snapshot_id": "snap-shop-2",
+        "last_delta": {
+          "nodes_added": 3,
+          "nodes_updated": 1,
+          "nodes_unchanged": 12,
+          "edges_added": 4,
+          "edges_removed": 0,
+          "nodes_removed": 0,
+          "samples_added": [
+            "orders/api.create_order"
+          ],
+          "snapshot_id": "snap-shop-2"
+        },
+        "last_receipt": "{\"enola_version\": \"0.5.1\", \"format_version\": 1}"
+      }
+    ],
+    [
+      "repo-payments",
+      {
+        "name": "payments",
+        "type": "CodeRepository",
+        "path": "payments"
+      }
+    ],
+    [
+      "m-auth",
+      {
+        "name": "auth",
+        "type": "CodeModule",
+        "file_path": "auth",
+        "repo": "shop"
+      }
+    ],
+    [
+      "m-orders",
+      {
+        "name": "orders",
+        "type": "CodeModule",
+        "file_path": "orders",
+        "repo": "shop"
+      }
+    ],
+    [
+      "validate",
+      {
+        "name": "auth/tokens.validate_token",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "auth/tokens.py",
+        "line": 12,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python",
+          "doc": "Validates a bearer token and returns its claims."
+        },
+        "end_line": 30,
+        "description": "Validates a bearer token and returns its claims.",
+        "doc": "Validates a bearer token and returns its claims.",
+        "enola_id": "22222222222222222222222222222222"
+      }
+    ],
+    [
+      "parse",
+      {
+        "name": "auth/tokens.parse_header",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "auth/tokens.py",
+        "line": 40,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python"
+        }
+      }
+    ],
+    [
+      "session",
+      {
+        "name": "auth/session.SessionStore",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "auth/session.py",
+        "line": 5,
+        "repo": "shop",
+        "symbol_kind": "class",
+        "fact_properties": {
+          "symbol_kind": "class",
+          "language": "python",
+          "doc": "Keeps user sessions in Redis."
+        },
+        "description": "Keeps user sessions in Redis."
+      }
+    ],
+    [
+      "create",
+      {
+        "name": "orders/api.create_order",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "orders/api.py",
+        "line": 8,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python",
+          "doc": "Creates an order after checking the caller's token."
+        },
+        "description": "Creates an order after checking the caller's token.",
+        "doc": "Creates an order after checking the caller's token.",
+        "enola_id": "11111111111111111111111111111111"
+      }
+    ],
+    [
+      "place",
+      {
+        "name": "orders/service.place_order",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "orders/service.py",
+        "line": 20,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python",
+          "doc": "Places an order and charges the card."
+        },
+        "description": "Places an order and charges the card.",
+        "doc": "Places an order and charges the card.",
+        "enola_id": "33333333333333333333333333333333"
+      }
+    ],
+    [
+      "save",
+      {
+        "name": "orders/repository.save",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "orders/repository.py",
+        "line": 3,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python"
+        }
+      }
+    ],
+    [
+      "charge",
+      {
+        "name": "billing.charge_card",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "billing/stripe.py",
+        "line": 7,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python",
+          "doc": "Charges a card through the payment provider."
+        },
+        "description": "Charges a card through the payment provider.",
+        "doc": "Charges a card through the payment provider.",
+        "enola_id": "44444444444444444444444444444444"
+      }
+    ],
+    [
+      "report",
+      {
+        "name": "orders/report.render_report",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "orders/report.py",
+        "line": 2,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python",
+          "doc": "Renders the monthly sales report."
+        },
+        "description": "Renders the monthly sales report.",
+        "doc": "Renders the monthly sales report."
+      }
+    ],
+    [
+      "camel",
+      {
+        "name": "web/auth.validateToken",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "web/auth.ts",
+        "line": 4,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python"
+        }
+      }
+    ],
+    [
+      "test",
+      {
+        "name": "tests/test_tokens.test_validate_token",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "tests/test_tokens.py",
+        "line": 3,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python"
+        }
+      }
+    ],
+    [
+      "cli",
+      {
+        "name": "cli.main",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "cli.py",
+        "line": 1,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python"
+        },
+        "enola_id": "77777777777777777777777777777777"
+      }
+    ],
+    [
+      "route",
+      {
+        "name": "POST /orders",
+        "type": "ApiEndpoint",
+        "file_path": "orders/api.py",
+        "line": 7,
+        "repo": "shop",
+        "enola_id": "66666666666666666666666666666666",
+        "fact_properties": {
+          "method": "POST",
+          "auth": {
+            "required": true,
+            "scheme": "bearer"
+          }
+        }
+      }
+    ],
+    [
+      "table",
+      {
+        "name": "orders_table",
+        "type": "StorageResource",
+        "file_path": "orders/repository.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "noise",
+      {
+        "name": "ordinary text",
+        "type": "DocumentChunk",
+        "text": "token"
+      }
+    ],
+    [
+      "order-model",
+      {
+        "name": "orders/models.Order",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "orders/models.py",
+        "line": 4,
+        "repo": "shop",
+        "symbol_kind": "class",
+        "fact_properties": {
+          "symbol_kind": "class",
+          "language": "python"
+        }
+      }
+    ],
+    [
+      "order-storage",
+      {
+        "name": "orders/models.Order",
+        "type": "StorageResource",
+        "file_path": "orders/models.py",
+        "line": 4,
+        "repo": "shop",
+        "fact_properties": {
+          "table": "orders"
+        }
+      }
+    ],
+    [
+      "charge-payments",
+      {
+        "name": "billing.charge_card",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "billing/card.py",
+        "line": 11,
+        "repo": "payments",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python",
+          "doc": "Charges a card for the payments service."
+        },
+        "description": "Charges a card for the payments service.",
+        "doc": "Charges a card for the payments service."
+      }
+    ],
+    [
+      "list",
+      {
+        "id": "list",
+        "name": "orders/api.list_orders",
+        "type": "CodeSymbol",
+        "properties": "{\"kind\": \"symbol\", \"file_path\": \"orders/api.py\", \"line\": 30, \"end_line\": 41, \"repo\": \"shop\", \"symbol_kind\": \"function\", \"doc\": null, \"fact_properties\": {\"symbol_kind\": \"function\", \"language\": \"python\", \"decorators\": [\"get\"]}}"
+      }
+    ],
+    [
+      "strasse",
+      {
+        "name": "geo/Straße.lookup",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "geo/straße.py",
+        "line": 1,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python",
+          "doc": "   "
+        },
+        "description": "   ",
+        "doc": "   "
+      }
+    ],
+    [
+      "dep",
+      {
+        "name": "requests",
+        "type": "ExternalDependency",
+        "repo": "shop"
+      }
+    ],
+    [
+      "nodeset",
+      {
+        "name": "shop",
+        "type": "NodeSet"
+      }
+    ],
+    [
+      "flow-orders",
+      {
+        "name": "POST /orders",
+        "type": "CodeFlow",
+        "kind": "flow",
+        "file_path": "orders/api.py",
+        "line": 8,
+        "repo": "shop",
+        "enola_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "description": "The program starts at POST /orders, which hands off to its stages.",
+        "fact_properties": "{\"mechanism\": \"route\", \"rank\": 1, \"summary\": \"The program starts at POST /orders, which hands off to its stages.\", \"metrics\": {\"reach\": 5, \"modules\": 3, \"max_depth\": 2, \"unresolved_calls\": 4}, \"modules\": [{\"name\": \"orders\", \"symbols\": 3}, {\"name\": \"auth\", \"symbols\": 2}], \"entry\": {\"name\": \"orders/api.create_order\", \"id\": \"11111111111111111111111111111111\", \"file\": \"orders/api.py\", \"line\": 8, \"doc\": \"Creates an order after checking the caller's token.\"}, \"stages\": [{\"name\": \"orders/service.place_order\", \"id\": \"33333333333333333333333333333333\", \"file\": \"orders/service.py\", \"line\": 20, \"order\": 1, \"depth\": 1, \"reach\": 3}, {\"name\": \"billing.charge_card\", \"id\": \"55555555555555555555555555555555\", \"file\": \"billing/stripe.py\", \"line\": 7, \"order\": 2, \"depth\": 2, \"parent\": \"33333333333333333333333333333333\", \"reach\": 1}, {\"name\": \"auth/tokens.validate_token\", \"id\": \"22222222222222222222222222222222\", \"file\": \"auth/tokens.py\", \"line\": 12, \"order\": 3, \"depth\": 1, \"reach\": 2}, {\"name\": \"vendor.retry\", \"id\": \"88888888888888888888888888888888\", \"file\": \"vendor/retry.py\", \"line\": 9, \"order\": 4, \"depth\": 2, \"parent\": \"33333333333333333333333333333333\", \"reach\": 1}], \"routes\": [{\"name\": \"POST /orders\", \"id\": \"66666666666666666666666666666666\", \"file\": \"orders/api.py\", \"line\": 7, \"method\": \"POST\"}]}"
+      }
+    ],
+    [
+      "flow-main",
+      {
+        "name": "cli.main",
+        "type": "CodeFlow",
+        "kind": "flow",
+        "file_path": "cli.py",
+        "line": 1,
+        "repo": "shop",
+        "enola_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "description": "The program starts at cli.main, which hands off to its stages.",
+        "fact_properties": "{\"mechanism\": \"main\", \"rank\": 2, \"summary\": \"The program starts at cli.main, which hands off to its stages.\", \"metrics\": {\"reach\": 5, \"modules\": 3, \"max_depth\": 2, \"unresolved_calls\": 0}, \"modules\": [{\"name\": \"orders\", \"symbols\": 3}, {\"name\": \"auth\", \"symbols\": 2}], \"entry\": {\"name\": \"cli.main\", \"id\": \"77777777777777777777777777777777\", \"file\": \"cli.py\", \"line\": 1}}"
+      }
+    ],
+    [
+      "flow-seed",
+      {
+        "name": "scripts/seed.main",
+        "type": "CodeFlow",
+        "kind": "flow",
+        "file_path": "scripts/seed.py",
+        "line": 1,
+        "repo": "shop",
+        "enola_id": "cccccccccccccccccccccccccccccccc",
+        "description": "The program starts at scripts/seed.main, which hands off to its stages.",
+        "fact_properties": "{\"mechanism\": \"main\", \"rank\": 3, \"summary\": \"The program starts at scripts/seed.main, which hands off to its stages.\", \"metrics\": {\"reach\": 5, \"modules\": 3, \"max_depth\": 2, \"unresolved_calls\": 0}, \"modules\": [{\"name\": \"orders\", \"symbols\": 3}, {\"name\": \"auth\", \"symbols\": 2}], \"entry\": {\"name\": \"scripts/seed.main\", \"id\": \"99999999999999999999999999999999\", \"file\": \"scripts/seed.py\", \"line\": 1}, \"side\": true}"
+      }
+    ],
+    [
+      "test-ref-0",
+      {
+        "name": "tests/test_tokens_00.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_00.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-1",
+      {
+        "name": "tests/test_tokens_01.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_01.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-2",
+      {
+        "name": "tests/test_tokens_02.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_02.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-3",
+      {
+        "name": "tests/test_tokens_03.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_03.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-4",
+      {
+        "name": "tests/test_tokens_04.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_04.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-5",
+      {
+        "name": "tests/test_tokens_05.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_05.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-6",
+      {
+        "name": "tests/test_tokens_06.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_06.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-7",
+      {
+        "name": "tests/test_tokens_07.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_07.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-8",
+      {
+        "name": "tests/test_tokens_08.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_08.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-9",
+      {
+        "name": "tests/test_tokens_09.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_09.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-10",
+      {
+        "name": "tests/test_tokens_10.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_10.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-11",
+      {
+        "name": "tests/test_tokens_11.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_11.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-12",
+      {
+        "name": "tests/test_tokens_12.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_12.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-13",
+      {
+        "name": "tests/test_tokens_13.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_13.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-14",
+      {
+        "name": "tests/test_tokens_14.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_14.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-15",
+      {
+        "name": "tests/test_tokens_15.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_15.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-16",
+      {
+        "name": "tests/test_tokens_16.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_16.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-17",
+      {
+        "name": "tests/test_tokens_17.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_17.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-18",
+      {
+        "name": "tests/test_tokens_18.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_18.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-19",
+      {
+        "name": "tests/test_tokens_19.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_19.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-20",
+      {
+        "name": "tests/test_tokens_20.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_20.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-21",
+      {
+        "name": "tests/test_tokens_21.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_21.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-22",
+      {
+        "name": "tests/test_tokens_22.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_22.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-23",
+      {
+        "name": "tests/test_tokens_23.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_23.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-24",
+      {
+        "name": "tests/test_tokens_24.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_24.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-25",
+      {
+        "name": "tests/test_tokens_25.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_25.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-26",
+      {
+        "name": "tests/test_tokens_26.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_26.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-27",
+      {
+        "name": "tests/test_tokens_27.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_27.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-28",
+      {
+        "name": "tests/test_tokens_28.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_28.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "test-ref-29",
+      {
+        "name": "tests/test_tokens_29.py",
+        "type": "CodeTestReference",
+        "file_path": "tests/test_tokens_29.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "tie-9",
+      {
+        "name": "pkg9/tokens.check_token",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "pkg9/tokens.py",
+        "line": 1,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python"
+        }
+      }
+    ],
+    [
+      "tie-8",
+      {
+        "name": "pkg8/tokens.check_token",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "pkg8/tokens.py",
+        "line": 1,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python"
+        }
+      }
+    ],
+    [
+      "tie-7",
+      {
+        "name": "pkg7/tokens.check_token",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "pkg7/tokens.py",
+        "line": 1,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python"
+        }
+      }
+    ],
+    [
+      "tie-6",
+      {
+        "name": "pkg6/tokens.check_token",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "pkg6/tokens.py",
+        "line": 1,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python"
+        }
+      }
+    ],
+    [
+      "tie-5",
+      {
+        "name": "pkg5/tokens.check_token",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "pkg5/tokens.py",
+        "line": 1,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python"
+        }
+      }
+    ],
+    [
+      "tie-4",
+      {
+        "name": "pkg4/tokens.check_token",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "pkg4/tokens.py",
+        "line": 1,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python"
+        }
+      }
+    ],
+    [
+      "tie-3",
+      {
+        "name": "pkg3/tokens.check_token",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "pkg3/tokens.py",
+        "line": 1,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python"
+        }
+      }
+    ],
+    [
+      "tie-2",
+      {
+        "name": "pkg2/tokens.check_token",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "pkg2/tokens.py",
+        "line": 1,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python"
+        }
+      }
+    ],
+    [
+      "tie-1",
+      {
+        "name": "pkg1/tokens.check_token",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "pkg1/tokens.py",
+        "line": 1,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python"
+        }
+      }
+    ],
+    [
+      "tie-0",
+      {
+        "name": "pkg0/tokens.check_token",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "pkg0/tokens.py",
+        "line": 1,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python"
+        }
+      }
+    ]
+  ],
+  "edges": [
+    [
+      "route",
+      "create",
+      "handled_by",
+      {}
+    ],
+    [
+      "create",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "create",
+      "place",
+      "calls",
+      {}
+    ],
+    [
+      "place",
+      "save",
+      "calls",
+      {}
+    ],
+    [
+      "place",
+      "save",
+      "calls",
+      {
+        "relationship_name": "calls",
+        "source_node_id": "place",
+        "target_node_id": "save",
+        "edge_text": "place calls save",
+        "weight": 2
+      }
+    ],
+    [
+      "place",
+      "charge",
+      "calls",
+      {}
+    ],
+    [
+      "validate",
+      "parse",
+      "calls",
+      {}
+    ],
+    [
+      "test",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "cli",
+      "report",
+      "calls",
+      {}
+    ],
+    [
+      "save",
+      "table",
+      "depends_on",
+      {
+        "properties": "{\"access\": \"write\"}"
+      }
+    ],
+    [
+      "validate",
+      "m-auth",
+      "declares",
+      {}
+    ],
+    [
+      "parse",
+      "m-auth",
+      "declares",
+      {}
+    ],
+    [
+      "create",
+      "m-orders",
+      "declares",
+      {}
+    ],
+    [
+      "place",
+      "m-orders",
+      "declares",
+      {}
+    ],
+    [
+      "list",
+      "m-orders",
+      "declares",
+      {}
+    ],
+    [
+      "m-orders",
+      "dep",
+      "imports",
+      {}
+    ],
+    [
+      "create",
+      "repo",
+      "part_of",
+      {}
+    ],
+    [
+      "create",
+      "nodeset",
+      "belongs_to_set",
+      {}
+    ],
+    [
+      "charge-payments",
+      "charge",
+      "calls",
+      {}
+    ],
+    [
+      "flow-orders",
+      "create",
+      "flow_entry",
+      {}
+    ],
+    [
+      "flow-orders",
+      "place",
+      "flow_stage",
+      {}
+    ],
+    [
+      "flow-orders",
+      "charge",
+      "flow_stage",
+      {}
+    ],
+    [
+      "flow-orders",
+      "validate",
+      "flow_stage",
+      {}
+    ],
+    [
+      "flow-orders",
+      "route",
+      "flow_route",
+      {}
+    ],
+    [
+      "flow-main",
+      "cli",
+      "flow_entry",
+      {}
+    ],
+    [
+      "test-ref-0",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-1",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-2",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-3",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-4",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-5",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-6",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-7",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-8",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-9",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-10",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-11",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-12",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-13",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-14",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-15",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-16",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-17",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-18",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-19",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-20",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-21",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-22",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-23",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-24",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-25",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-26",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-27",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-28",
+      "validate",
+      "calls",
+      {}
+    ],
+    [
+      "test-ref-29",
+      "validate",
+      "calls",
+      {}
+    ]
+  ]
+}

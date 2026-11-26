@@ -26,7 +26,7 @@ pub enum CodeErrorCode {
     /// The dataset has no code graph.
     NoCodeGraph,
     /// The dataset's code graph lacks what the operation needs (flows
-    /// without `flows.json`), or this build does not implement it yet.
+    /// without `flows.json`).
     FeatureUnavailable,
 }
 
@@ -159,15 +159,14 @@ impl CodeQueryError {
         }
     }
 
-    /// An operation or argument this build does not implement yet
-    /// (`feature_unavailable`). A validation error, not a per-dataset miss:
-    /// every dataset would answer it the same way.
-    pub fn not_implemented(message: impl Into<String>, param: &str) -> Self {
+    /// [`Self::unavailable`] naming the argument that asked for what the
+    /// graph lacks: Python's `CodeGraphUnavailableError(message,
+    /// code="feature_unavailable", param="operation")` for flows without
+    /// `flows.json`.
+    pub fn unavailable_for(message: impl Into<String>, code: CodeErrorCode, param: &str) -> Self {
         Self {
-            message: message.into(),
-            code: CodeErrorCode::FeatureUnavailable,
             param: Some(param.to_string()),
-            class: CodeErrorClass::Validation,
+            ..Self::unavailable(message, code)
         }
     }
 

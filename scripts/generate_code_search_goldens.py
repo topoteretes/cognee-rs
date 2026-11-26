@@ -23,7 +23,10 @@ named in crates/code-graph/README.md):
 It writes crates/code-graph/tests/fixtures/code_search/graph.json (the raw nodes
 and edges, as an adapter returns them), one graph_<name>.json per extra graph
 (the graphs of Python's code_retriever_test.py: "widget", "insights",
-"architecture" and "bare_constructor"), .../goldens.json:
+"architecture" and "bare_constructor"; and, for the text and flow
+operations, those of code_retriever_navigation_test.py: "shop_no_flows" (no flows),
+"shop_bare" (no flows, no docs), "shop_tests" (test code and score ties),
+"checkout" and "checkout_documented"), .../goldens.json:
 
     [{"name": ..., "config": {...}, "query": "...", ["graph": "<name>",]
       "result": {...}, "context": "<json.dumps(sort_keys)>"}            # success
@@ -181,8 +184,17 @@ def _flow(name, enola_id, *, rank, mechanism, entry, stages=(), routes=(), side=
     }
 
 
-def fixture_graph():
-    """Python's navigation-test shop graph, plus the quirks the port must keep."""
+def fixture_graph(*, with_flows=True, with_docs=True):
+    """Python's navigation-test shop graph, plus the quirks the port must keep.
+
+    ``with_flows`` and ``with_docs`` are ``_shop_graph``'s switches: without
+    flows no CodeFlow node or flow edge is written, without docs no symbol
+    carries a docstring.
+    """
+
+    def doc(text):
+        return text if with_docs else None
+
     nodes = [
         (
             "repo",
@@ -217,7 +229,7 @@ def fixture_graph():
                 "auth/tokens.validate_token",
                 "auth/tokens.py",
                 12,
-                doc=VALIDATE_DOC,
+                doc=doc(VALIDATE_DOC),
                 enola_id=E_VALIDATE,
                 end_line=30,
             ),
@@ -229,7 +241,7 @@ def fixture_graph():
                 "auth/session.SessionStore",
                 "auth/session.py",
                 5,
-                doc="Keeps user sessions in Redis.",
+                doc=doc("Keeps user sessions in Redis."),
                 prop_doc_only=True,
                 symbol_kind="class",
             ),
@@ -237,7 +249,7 @@ def fixture_graph():
         (
             "create",
             _symbol(
-                "orders/api.create_order", "orders/api.py", 8, doc=CREATE_DOC, enola_id=E_CREATE
+                "orders/api.create_order", "orders/api.py", 8, doc=doc(CREATE_DOC), enola_id=E_CREATE
             ),
         ),
         (
@@ -246,7 +258,7 @@ def fixture_graph():
                 "orders/service.place_order",
                 "orders/service.py",
                 20,
-                doc="Places an order and charges the card.",
+                doc=doc("Places an order and charges the card."),
                 enola_id=E_PLACE,
             ),
         ),
@@ -257,7 +269,7 @@ def fixture_graph():
                 "billing.charge_card",
                 "billing/stripe.py",
                 7,
-                doc="Charges a card through the payment provider.",
+                doc=doc("Charges a card through the payment provider."),
                 enola_id=E_CHARGE,
             ),
         ),
@@ -267,7 +279,7 @@ def fixture_graph():
                 "orders/report.render_report",
                 "orders/report.py",
                 2,
-                doc="Renders the monthly sales report.",
+                doc=doc("Renders the monthly sales report."),
             ),
         ),
         ("camel", _symbol("web/auth.validateToken", "web/auth.ts", 4)),
@@ -320,7 +332,7 @@ def fixture_graph():
                 "billing/card.py",
                 11,
                 repo=OTHER_REPO,
-                doc="Charges a card for the payments service.",
+                doc=doc("Charges a card for the payments service."),
             ),
         ),
         # Ladybug-style node: every user property inside a JSON-text
@@ -392,6 +404,8 @@ def fixture_graph():
         ("create", "nodeset", "belongs_to_set", {}),
         ("charge-payments", "charge", "calls", {}),
     ]
+    if not with_flows:
+        return nodes, edges
     orders_entry = _ref("orders/api.create_order", E_CREATE, "orders/api.py", 8, doc=CREATE_DOC)
     nodes += [
         (
@@ -902,11 +916,78 @@ def bare_constructor_graph():
     return nodes, []
 
 
+# --- Variants of the shop graph for the text and flow operations (SDK-1056 P2) -----------
+
+
+def shop_no_flows_graph():
+    """`_shop_graph(with_flows=False)`: no flows.json was read."""
+    return fixture_graph(with_flows=False)
+
+
+def shop_bare_graph():
+    """`_shop_graph(with_flows=False, with_docs=False)`: neither flows nor docstrings."""
+    return fixture_graph(with_flows=False, with_docs=False)
+
+
+def shop_tests_graph():
+    """The shop graph plus what test_ask_and_hubs_leave_test_code_out_unless_asked and
+    test_a_limited_text_match_is_the_head_of_the_full_ranking add: thirty test files
+    calling the token validator, and ten symbols shaped alike that tie on every score."""
+    nodes, edges = fixture_graph()
+    for index in range(30):
+        path = f"tests/test_tokens_{index:02d}.py"
+        nodes.append(
+            (
+                f"test-ref-{index}",
+                {"name": path, "type": "CodeTestReference", "file_path": path, "repo": REPO},
+            )
+        )
+        edges.append((f"test-ref-{index}", "validate", "calls", {}))
+    nodes += [
+        (f"tie-{index}", _symbol(f"pkg{index}/tokens.check_token", f"pkg{index}/tokens.py", 1))
+        for index in reversed(range(10))
+    ]
+    return nodes, edges
+
+
+def _checkout_graph(*, route_doc):
+    """test_ask_counts_docs_over_the_seeds_that_can_carry_one: a route and its handler."""
+    route = {
+        "name": "/checkout",
+        "type": "ApiEndpoint",
+        "file_path": "shop/api.py",
+        "line": 14,
+        "repo": REPO,
+    }
+    if route_doc:
+        route["doc"] = route_doc
+    handler = _symbol(
+        "shop/api.process_checkout",
+        "shop/api.py",
+        15,
+        doc="Charge the cart, then create the order.",
+    )
+    return [("route", route), ("handler", handler)], [("route", "handler", "handled_by", {})]
+
+
+def checkout_graph():
+    return _checkout_graph(route_doc=None)
+
+
+def checkout_documented_graph():
+    return _checkout_graph(route_doc="Checks the cart out.")
+
+
 EXTRA_GRAPHS = {
     "widget": widget_graph,
     "insights": insight_graph,
     "architecture": architecture_graph,
     "bare_constructor": bare_constructor_graph,
+    "shop_no_flows": shop_no_flows_graph,
+    "shop_bare": shop_bare_graph,
+    "shop_tests": shop_tests_graph,
+    "checkout": checkout_graph,
+    "checkout_documented": checkout_documented_graph,
 }
 
 # (name, config, query[, graph]): explore, traverse, find_path, impact_analysis,
@@ -1132,6 +1213,162 @@ P1B_CASES = [
     ("architecture_repo_null", {"operation": "architecture", "repo": None, "diagram": None}, "", "architecture"),
 ]
 
+# (name, config, query[, graph]): search, flows, hubs and ask (SDK-1056 P2), after
+# Python's code_retriever_navigation_test.py.
+P2_CASES = [
+    # search
+    ("search_validate_token", {"operation": "search", "text": "validate token"}, ""),
+    ("search_camel_query", {"operation": "search"}, "validateToken"),
+    ("search_q_snake", {"operation": "search", "q": "validate_token"}, ""),
+    ("search_query_field", {"operation": "search", "query": "validate token"}, "ignored"),
+    ("search_blank_text_falls_back", {"operation": "search", "text": "  "}, "validate token"),
+    ("search_flows_only", {"operation": "search", "text": "orders", "kinds": ["flow"]}, ""),
+    ("search_codeflow_kind", {"operation": "search", "text": "main", "kinds": "CodeFlow"}, ""),
+    ("search_include_tests", {"operation": "search", "text": "validate token", "include_tests": True}, ""),
+    ("search_include_tests_text", {"operation": "search", "text": "validate token", "include_tests": "TRUE"}, ""),
+    ("search_kinds_all", {"operation": "search", "text": "orders", "kinds": "all"}, ""),
+    ("search_kinds_mixed_all", {"operation": "search", "text": "orders", "kinds": ["module", " All "]}, ""),
+    ("search_kinds_types", {"operation": "search", "text": "orders", "kinds": ["CodeModule", "storage"]}, ""),
+    ("search_page", {"operation": "search", "text": "orders", "limit": 2, "offset": 1}, ""),
+    ("search_offset_past_end", {"operation": "search", "text": "orders", "offset": 100}, ""),
+    ("search_limit_capped", {"operation": "search", "text": "orders", "limit": 1000, "kinds": "all"}, ""),
+    ("search_limit_zero_is_default", {"operation": "search", "text": "order", "limit": 0, "kinds": "all"}, ""),
+    ("search_repo_unknown", {"operation": "search", "text": "token", "repo": "other"}, ""),
+    ("search_repo_payments", {"operation": "search", "text": "charge card", "repo": OTHER_REPO}, ""),
+    ("search_repo_null", {"operation": "search", "text": "charge card", "repo": None}, ""),
+    ("search_file_prefix", {"operation": "search", "text": "order", "file_prefix": "orders/"}, ""),
+    ("search_exact_name", {"operation": "search", "text": "orders/api.create_order"}, ""),
+    ("search_short_name", {"operation": "search", "text": "create_order"}, ""),
+    ("search_qualified_suffix", {"operation": "search", "text": "api.create_order"}, ""),
+    ("search_declaration_view", {"operation": "search", "text": "orders/models.Order", "kinds": "all"}, ""),
+    ("search_storage_view_alone", {"operation": "search", "text": "orders/models.Order", "kinds": "storage"}, ""),
+    ("search_casefold_name", {"operation": "search", "text": "GEO/STRASSE.LOOKUP", "kinds": "all"}, ""),
+    ("search_flow_summary", {"operation": "search", "text": "hands off stages"}, ""),
+    ("search_route_name", {"operation": "search", "text": "POST /orders", "kinds": ["route", "flow"]}, ""),
+    ("search_stopwords_only", {"operation": "search", "text": "how does this work"}, ""),
+    ("search_no_hits", {"operation": "search", "text": "kubernetes operator"}, ""),
+    ("search_unicode_terms", {"operation": "search", "text": "Größe straße", "kinds": "all"}, ""),
+    ("search_ties_limit", {"operation": "search", "text": "check token", "limit": 3}, "", "shop_tests"),
+    ("search_ties_page", {"operation": "search", "text": "check token", "limit": 4, "offset": 2}, "", "shop_tests"),
+    ("search_no_docs", {"operation": "search", "text": "validate token"}, "", "shop_bare"),
+    ("search_blank", {"operation": "search"}, "   "),
+    ("search_text_not_string", {"operation": "search", "text": 5}, "token"),
+    ("search_q_list", {"operation": "search", "q": ["token"]}, ""),
+    ("search_bad_kind", {"operation": "search", "text": "token", "kinds": ["widget"]}, ""),
+    ("search_kinds_not_a_list", {"operation": "search", "text": "token", "kinds": 3}, ""),
+    ("search_bad_include_tests", {"operation": "search", "text": "token", "include_tests": "maybe"}, ""),
+    ("search_negative_limit", {"operation": "search", "text": "token", "limit": -1}, ""),
+    ("search_limit_float", {"operation": "search", "text": "token", "limit": 1.5}, ""),
+    ("search_bad_offset", {"operation": "search", "text": "token", "offset": "x"}, ""),
+    # flows
+    ("flows_list", {"operation": "flows"}, ""),
+    ("flows_list_explicit_mode", {"operation": "flows", "mode": " LIST "}, "ignored"),
+    ("flows_list_side_mechanism", {"operation": "flows", "include_side": True, "mechanism": "main"}, ""),
+    ("flows_list_mechanisms", {"operation": "flows", "mechanism": ["route", "main"], "include_side": "true"}, ""),
+    ("flows_list_page", {"operation": "flows", "limit": 1}, ""),
+    ("flows_list_offset", {"operation": "flows", "offset": 1, "include_side": True}, ""),
+    ("flows_list_limit_capped", {"operation": "flows", "limit": 500}, ""),
+    ("flows_list_repo", {"operation": "flows", "repo": REPO}, ""),
+    ("flows_list_repo_other", {"operation": "flows", "repo": OTHER_REPO}, ""),
+    ("flows_show_name_suffix", {"operation": "flows", "name": "/orders"}, ""),
+    ("flows_show_enola_id", {"operation": "flows", "id": F_ORDERS}, ""),
+    ("flows_show_node_id", {"operation": "flows", "id": "flow-main"}, ""),
+    ("flows_show_query", {"operation": "flows", "mode": "show"}, "POST /orders"),
+    ("flows_show_flow_alias", {"operation": "flows", "flow": "cli.MAIN"}, ""),
+    ("flows_show_substring", {"operation": "flows", "name": "seed"}, ""),
+    ("flows_show_side_flow", {"operation": "flows", "name": "scripts/seed.main"}, ""),
+    ("flows_show_ambiguous", {"operation": "flows", "name": "main"}, ""),
+    ("flows_show_missing", {"operation": "flows", "flow": "DELETE /orders"}, ""),
+    ("flows_show_missing_id", {"operation": "flows", "id": "nope"}, ""),
+    ("flows_show_id_wrong_repo", {"operation": "flows", "id": F_ORDERS, "repo": OTHER_REPO}, ""),
+    ("flows_show_name_wrong_repo", {"operation": "flows", "name": "POST /orders", "repo": OTHER_REPO}, ""),
+    ("flows_show_blank", {"operation": "flows", "mode": "show"}, "  "),
+    ("flows_through_symbol", {"operation": "flows", "symbol": "auth/tokens.parse_header"}, ""),
+    ("flows_through_stage", {"operation": "flows", "through": "billing.charge_card", "repo": REPO}, ""),
+    ("flows_through_ambiguous", {"operation": "flows", "through": "billing.charge_card"}, ""),
+    ("flows_through_id", {"operation": "flows", "mode": "through", "id": "create"}, ""),
+    ("flows_through_enola_id", {"operation": "flows", "mode": "through", "id": E_PLACE}, ""),
+    ("flows_through_route", {"operation": "flows", "mode": "through"}, "POST /orders"),
+    ("flows_through_outside_entry", {"operation": "flows", "symbol": "orders/report.render_report"}, ""),
+    ("flows_through_none", {"operation": "flows", "symbol": "auth/session.SessionStore"}, ""),
+    ("flows_through_other_repo", {"operation": "flows", "symbol": "billing.charge_card", "repo": OTHER_REPO}, ""),
+    ("flows_through_missing", {"operation": "flows", "symbol": "nowhere.at_all"}, ""),
+    ("flows_bad_mode", {"operation": "flows", "mode": "draw"}, ""),
+    ("flows_mode_bool", {"operation": "flows", "mode": True}, ""),
+    ("flows_no_flows", {"operation": "flows"}, "", "shop_no_flows"),
+    ("flows_no_flows_show", {"operation": "flows", "name": "POST /orders"}, "", "shop_no_flows"),
+    ("flows_bad_limit_no_flows", {"operation": "flows", "limit": -1}, "", "shop_no_flows"),
+    ("flows_bad_offset_no_flows", {"operation": "flows", "offset": "x"}, "", "shop_no_flows"),
+    ("flows_bad_mechanism_no_flows", {"operation": "flows", "mechanism": 5}, "", "shop_no_flows"),
+    ("flows_bad_include_side_no_flows", {"operation": "flows", "include_side": "maybe"}, "", "shop_no_flows"),
+    ("flows_bad_repo_no_flows", {"operation": "flows", "repo": 7}, "", "shop_no_flows"),
+    ("flows_show_id_list_no_flows", {"operation": "flows", "mode": "show", "id": ["F1"]}, "", "shop_no_flows"),
+    ("flows_show_name_int_no_flows", {"operation": "flows", "mode": "show", "name": 3}, "", "shop_no_flows"),
+    ("flows_through_symbol_list_no_flows", {"operation": "flows", "mode": "through", "symbol": ["create"]}, "", "shop_no_flows"),
+    ("flows_show_id_true", {"operation": "flows", "mode": "show", "id": True}, ""),
+    ("flows_show_flow_list", {"operation": "flows", "mode": "show", "flow": ["POST /orders"]}, ""),
+    ("flows_through_float", {"operation": "flows", "mode": "through", "through": 1.5}, ""),
+    ("flows_through_id_list", {"operation": "flows", "mode": "through", "symbol": "create", "id": [1]}, ""),
+    # hubs
+    ("hubs_default", {"operation": "hubs"}, "ignored"),
+    ("hubs_include_tests", {"operation": "hubs", "include_tests": True}, ""),
+    ("hubs_reverse_limit", {"operation": "hubs", "direction": "reverse", "include_tests": True, "limit": 1}, ""),
+    ("hubs_forward", {"operation": "hubs", "direction": "Forward"}, ""),
+    ("hubs_modules_declares", {"operation": "hubs", "kinds": ["module"], "relation_types": ["declares"]}, ""),
+    ("hubs_every_kind_calls", {"operation": "hubs", "kinds": ["symbol", "route", "storage"], "relation": "calls"}, ""),
+    ("hubs_repo", {"operation": "hubs", "repo": OTHER_REPO}, ""),
+    ("hubs_file_prefix", {"operation": "hubs", "file_prefix": "orders/"}, ""),
+    ("hubs_limit_capped", {"operation": "hubs", "limit": 1000, "kinds": "all"}, ""),
+    ("hubs_tests_graph", {"operation": "hubs"}, "", "shop_tests"),
+    ("hubs_tests_graph_include_tests", {"operation": "hubs", "include_tests": True}, "", "shop_tests"),
+    ("hubs_bad_include_tests", {"operation": "hubs", "include_tests": "maybe"}, ""),
+    ("hubs_bad_direction", {"operation": "hubs", "direction": "up"}, ""),
+    ("hubs_bad_kind", {"operation": "hubs", "kinds": ["flow"]}, ""),
+    ("hubs_negative_limit", {"operation": "hubs", "limit": -3}, ""),
+    ("hubs_bad_relation", {"operation": "hubs", "relation_types": [""]}, ""),
+    # ask
+    ("ask_question", {"operation": "ask", "question": "Where do we validate auth tokens for new orders?"}, ""),
+    ("ask_query_text", {"operation": "ask"}, "how are orders placed and cards charged?"),
+    ("ask_text_field", {"operation": "ask", "text": "render the sales report"}, ""),
+    ("ask_no_flows_no_docs", {"operation": "ask"}, "how does order placement work?", "shop_bare"),
+    ("ask_no_flows", {"operation": "ask", "question": "validate token"}, "", "shop_no_flows"),
+    ("ask_nothing", {"operation": "ask", "text": "kubernetes operator reconcile"}, ""),
+    ("ask_nothing_repo", {"operation": "ask", "text": "kubernetes", "repo": REPO}, ""),
+    ("ask_nothing_no_flows", {"operation": "ask", "text": "kubernetes"}, "", "shop_no_flows"),
+    ("ask_stopwords_only", {"operation": "ask"}, "how does this work?"),
+    (
+        "ask_cuts",
+        {"operation": "ask", "question": "validate token order", "max_seeds": 2, "max_nodes": 3, "max_citations": 2},
+        "",
+    ),
+    ("ask_max_nodes_2", {"operation": "ask", "question": "orders token card report", "max_seeds": 5, "max_nodes": 2}, ""),
+    ("ask_limits_capped", {"operation": "ask", "question": "order token", "max_seeds": 99, "max_nodes": 999, "max_citations": 999, "kinds": "all"}, ""),
+    ("ask_repo", {"operation": "ask", "question": "charge card", "repo": OTHER_REPO}, ""),
+    ("ask_file_prefix", {"operation": "ask", "question": "order", "file_prefix": "orders/"}, ""),
+    ("ask_flow_match", {"operation": "ask", "question": "cli main", "kinds": ["flow", "symbol"]}, ""),
+    ("ask_flows_only", {"operation": "ask", "question": "orders", "kinds": ["flow"]}, ""),
+    ("ask_kinds_all_tests", {"operation": "ask", "question": "validate token", "kinds": "all", "include_tests": True}, ""),
+    ("ask_tests_graph", {"operation": "ask", "question": "validate token", "max_seeds": 1, "max_nodes": 10}, "", "shop_tests"),
+    (
+        "ask_tests_graph_include_tests",
+        {"operation": "ask", "question": "validate token", "max_seeds": 1, "max_nodes": 10, "include_tests": True},
+        "",
+        "shop_tests",
+    ),
+    ("ask_ties", {"operation": "ask", "question": "check token", "max_seeds": 3}, "", "shop_tests"),
+    ("ask_checkout", {"operation": "ask", "question": "How does checkout work?"}, "", "checkout"),
+    ("ask_checkout_documented", {"operation": "ask", "question": "How does checkout work?"}, "", "checkout_documented"),
+    ("ask_no_question", {"operation": "ask"}, ""),
+    ("ask_question_not_string", {"operation": "ask", "question": 5}, "x"),
+    ("ask_bad_max_seeds", {"operation": "ask", "question": "token", "max_seeds": -1}, ""),
+    ("ask_bad_max_citations", {"operation": "ask", "question": "token", "max_citations": "ten"}, ""),
+    ("ask_bad_kinds", {"operation": "ask", "question": "token", "kinds": ["widget"]}, ""),
+    ("ask_bad_include_tests", {"operation": "ask", "question": "token", "include_tests": 1}, ""),
+    # capabilities over the variants
+    ("capabilities_no_flows", {"operation": "capabilities"}, "", "shop_no_flows"),
+    ("capabilities_bare", {"operation": "capabilities"}, "", "shop_bare"),
+]
+
 # Direct renderer calls: (name, nodes, edges, highlight_ids, title).
 DIAGRAM_CASES = [
     (
@@ -1221,6 +1458,15 @@ def main():
     for name, config, query, *graph_name in P1B_CASES:
         graph_name = graph_name[0] if graph_name else "shop"
         cases.append((name, config, query, graph_name, snapshots[graph_name]))
+    for name, config, query, *graph_name in P2_CASES:
+        graph_name = graph_name[0] if graph_name else "shop"
+        cases.append((name, config, query, graph_name, snapshots[graph_name]))
+    cases.append(("search_empty_graph", {"operation": "search"}, "token", "shop", empty))
+    cases.append(("flows_empty_graph", {"operation": "flows"}, "", "shop", empty))
+    cases.append(("flows_bad_mode_empty_graph", {"operation": "flows", "mode": "x"}, "", "shop", empty))
+    cases.append(("hubs_empty_graph", {"operation": "hubs"}, "", "shop", empty))
+    cases.append(("ask_empty_graph", {"operation": "ask"}, "checkout", "shop", empty))
+    cases.append(("ask_no_question_empty_graph", {"operation": "ask"}, " ", "shop", empty))
     cases.append(("explore_empty_graph", {"operation": "explore"}, "x", "shop", empty))
     cases.append(("architecture_empty_graph", {"operation": "architecture"}, "", "shop", empty))
     cases.append(("insights_empty_graph", {"operation": "insights"}, "", "shop", empty))

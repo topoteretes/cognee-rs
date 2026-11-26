@@ -77,29 +77,21 @@ async fn graph_snapshot(file: &str) -> CodeGraphSnapshot {
     load_code_graph_snapshot(&mock).await.expect("load")
 }
 
-/// Python's `capabilities` lists all fifteen operations; this build lists
-/// the ones it runs (see `ops::capabilities`).
-fn expected_result(name: &str, mut result: Value) -> Value {
-    if result["operation"] == "capabilities" {
-        let implemented: Vec<&str> = CodeOperation::implemented()
-            .iter()
-            .map(|operation| operation.as_str())
-            .collect();
-        assert_eq!(
-            result["operations"].as_array().map(Vec::len),
-            Some(15),
-            "{name}"
-        );
-        result["operations"] = json!(implemented);
-    }
-    result
-}
-
 #[tokio::test]
 async fn every_operation_matches_python() {
     let mut graphs: HashMap<String, CodeGraphSnapshot> = HashMap::new();
     graphs.insert("shop".into(), fixture_snapshot().await);
-    for name in ["widget", "insights", "architecture", "bare_constructor"] {
+    for name in [
+        "widget",
+        "insights",
+        "architecture",
+        "bare_constructor",
+        "shop_no_flows",
+        "shop_bare",
+        "shop_tests",
+        "checkout",
+        "checkout_documented",
+    ] {
         graphs.insert(
             name.into(),
             graph_snapshot(&format!("graph_{name}.json")).await,
@@ -109,7 +101,7 @@ async fn every_operation_matches_python() {
     let goldens = read_json("goldens.json");
     let goldens = goldens.as_array().expect("a list of cases");
     assert!(
-        goldens.len() >= 200,
+        goldens.len() >= 360,
         "the goldens hold {} cases",
         goldens.len()
     );
@@ -129,26 +121,22 @@ async fn every_operation_matches_python() {
             .and_then(|request| run_code_operation(graph, &request, query));
         match (outcome, case.get("error")) {
             (Ok(result), None) => {
-                let expected = expected_result(name, case["result"].clone());
+                let expected = &case["result"];
                 // `Value` equality ignores object key order; the serialized
                 // forms keep it (preserve_order), so Python's dict insertion
                 // order — what an unsorted JSON response shows — is checked.
-                if result != expected
+                if &result != expected
                     || serde_json::to_string(&result).unwrap()
-                        != serde_json::to_string(&expected).unwrap()
+                        != serde_json::to_string(expected).unwrap()
                 {
                     failures.push(format!(
                         "{name}: result differs\n  rust:   {}\n  python: {}",
                         json_key(&result),
-                        json_key(&expected)
+                        json_key(expected)
                     ));
                     continue;
                 }
-                let context = if result["operation"] == "capabilities" {
-                    json_key(&expected)
-                } else {
-                    case["context"].as_str().expect("context").to_string()
-                };
+                let context = case["context"].as_str().expect("context");
                 if json_key(&result) != context {
                     failures.push(format!(
                         "{name}: context differs\n  rust:   {}\n  python: {context}",
@@ -264,12 +252,11 @@ fn renderers_match_python() {
     }
 }
 
-/// The text and flow operations are not ported yet: each fails with
-/// `feature_unavailable`, a validation error.
+/// Every one of the fifteen operations runs; `capabilities` lists them all,
+/// sorted, as Python's `sorted(_OPERATIONS)`.
 #[tokio::test]
-async fn unported_operations_are_feature_unavailable() {
+async fn every_operation_runs() {
     let snapshot = fixture_snapshot().await;
-    let mut unported = Vec::new();
     for operation in CodeOperation::ALL {
         let config = json!({"operation": operation.as_str()})
             .as_object()
@@ -277,26 +264,30 @@ async fn unported_operations_are_feature_unavailable() {
             .clone();
         let request = CodeRequest::parse(config).expect("a known operation");
         let outcome = run_code_operation(&snapshot, &request, "orders/api.create_order");
-        if operation.is_implemented() {
-            // It runs (find_path still wants a target: a usage error).
-            assert!(
-                outcome
-                    .as_ref()
-                    .err()
-                    .is_none_or(|error| error.code.as_str() != "feature_unavailable"),
-                "{}: {outcome:?}",
-                operation.as_str()
-            );
+        // find_path still wants a target: a usage error, not a missing
+        // operation.
+        if operation == CodeOperation::FindPath {
+            let error = outcome.expect_err("no target");
+            assert_eq!(error.code.as_str(), "invalid_argument");
             continue;
         }
-        unported.push(operation.as_str());
-        let error = outcome.expect_err("not implemented");
-        assert_eq!(error.code.as_str(), "feature_unavailable");
-        assert_eq!(error.param.as_deref(), Some("operation"));
-        // A validation error: every dataset would fail it the same way.
-        assert!(!error.is_seed_miss());
+        let result = outcome.unwrap_or_else(|error| panic!("{}: {error:?}", operation.as_str()));
+        assert_eq!(result["operation"], operation.as_str());
     }
-    assert_eq!(unported, ["ask", "flows", "hubs", "search"]);
+
+    let request = CodeRequest::parse(
+        json!({"operation": "capabilities"})
+            .as_object()
+            .expect("object")
+            .clone(),
+    )
+    .expect("capabilities");
+    let capabilities = run_code_operation(&snapshot, &request, "").expect("capabilities");
+    let names: Vec<&str> = CodeOperation::ALL.iter().map(|op| op.as_str()).collect();
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    assert_eq!(names, sorted);
+    assert_eq!(capabilities["operations"], json!(names));
 
     // No operation means explore.
     let request = CodeRequest::parse(serde_json::Map::new()).expect("explore");

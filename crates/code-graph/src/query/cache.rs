@@ -166,7 +166,7 @@ impl CacheState {
 }
 
 /// A bounded, concurrency-safe cache of parsed code-graph snapshots
-/// (`_CodeGraphSnapshotCache`). See the [module docs](self).
+/// (`_CodeGraphSnapshotCache`). See the `query::cache` module docs.
 pub struct CodeGraphSnapshotCache {
     state: Mutex<CacheState>,
     clock: Arc<dyn Fn() -> Instant + Send + Sync>,

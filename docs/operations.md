@@ -691,11 +691,16 @@ over the dataset's code graph — the one `cognify`'s code routes and
 `remember(content_type="code")` write — with no LLM, embedding or vector
 search. The request's `code_query` names the operation and its arguments and
 is merged over `retriever_specific_config`; `code_query` with any other search
-type is refused (`code_query requires query_type=SearchType.CODE.`). This
-build runs `query_facts`, `explore` (the default), `traverse`, `find_path`,
-`impact_analysis`, `insights`, `architecture`, `neighbors`, `subgraph`,
-`delta` and `capabilities`; `search`, `flows`, `hubs` and `ask` fail with
-`feature_unavailable` until they are ported. `diagram` (`true`/`"mermaid"`,
+type is refused (`code_query requires query_type=SearchType.CODE.`). All
+fifteen of Python's operations run: `query_facts`, `explore` (the default),
+`traverse`, `find_path`, `impact_analysis`, `insights`, `architecture`,
+`neighbors`, `subgraph`, `delta`, `capabilities`, and the text and flow
+operations `search` (field-weighted BM25 over names, docstrings, paths and
+flow summaries, scores rounded as Python rounds them), `flows` (`list`,
+`show`, `through`), `hubs` and `ask` (seeds, flows, a one-hop neighbourhood,
+file:line citations and a `coverage` block, with no model involved); a
+dataset without flows answers `flows` with `feature_unavailable`, a per-dataset
+miss. `diagram` (`true`/`"mermaid"`,
 `"dot"`) adds the result drawn as Mermaid or Graphviz DOT source under
 `result["diagram"]`, byte-identical to Python's; `architecture` draws Mermaid
 unless `diagram` is `false`. The result is structured JSON

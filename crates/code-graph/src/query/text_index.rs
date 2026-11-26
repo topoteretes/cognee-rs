@@ -198,7 +198,8 @@ pub fn query_terms(text: &str) -> Vec<String> {
 pub struct SearchMatch {
     /// The weighted BM25 score.
     pub score: f64,
-    /// The fields a term matched in, in [`FIELDS`] order.
+    /// The fields a term matched in, in field order (name, doc, file,
+    /// summary).
     pub fields: Vec<&'static str>,
 }
 
@@ -430,6 +431,195 @@ mod tests {
         );
         assert_eq!(query_terms("token tokens validate"), vec!["token", "valid"]);
         assert!(tokenize(None).is_empty());
+    }
+
+    /// `code_search_index_test.py`: identifier splitting.
+    #[test]
+    fn identifiers_split_like_python() {
+        for (identifier, parts) in [
+            ("validateToken", vec!["validate", "Token"]),
+            ("HTTPServer", vec!["HTTP", "Server"]),
+            ("getHTTPResponse", vec!["get", "HTTP", "Response"]),
+            ("IOError", vec!["IO", "Error"]),
+            ("sha256Hash", vec!["sha256", "Hash"]),
+            ("parse", vec!["parse"]),
+            ("URL", vec!["URL"]),
+        ] {
+            assert_eq!(split_identifier(identifier), parts, "{identifier}");
+        }
+    }
+
+    /// `code_search_index_test.py`: camel, snake, dotted and path forms meet
+    /// on the same terms; stopwords, filler and short tokens drop out.
+    #[test]
+    fn tokenizer_matches_python_cases() {
+        assert_eq!(tokenize(Some("validateToken")), ["valid", "token"]);
+        assert_eq!(tokenize(Some("validate_token")), ["valid", "token"]);
+        assert_eq!(
+            tokenize(Some("auth.validate-token:v2")),
+            ["auth", "valid", "token", "v2"]
+        );
+        assert_eq!(
+            tokenize(Some("app/auth/tokens.py")),
+            ["app", "auth", "token", "py"]
+        );
+        assert_eq!(tokenize(Some("HTTPServer")), ["http", "serv"]);
+        assert_eq!(
+            tokenize(Some("How does checkout work in this repo?")),
+            ["checkout"]
+        );
+        assert!(tokenize(Some("Which code deals with a codebase repository?")).is_empty());
+        assert_eq!(tokenize(Some("x y 7 ab")), ["ab"]);
+        assert!(tokenize(Some("")).is_empty());
+        for word in ["how", "what", "work", "code", "repo"] {
+            assert!(STOPWORDS.contains(&word), "{word}");
+        }
+        assert_eq!(
+            query_terms("validate the token, validating tokens"),
+            ["valid", "token"]
+        );
+        // Non-ASCII letters are word characters, as in Python's `[^\W_]+`.
+        assert_eq!(tokenize(Some("Größe_straße")), ["größ", "straß"]);
+    }
+
+    /// `code_search_index_test.py`: each family of word forms shares one
+    /// stem; short stems and words ending in ss, us or is stay whole.
+    #[test]
+    fn stemmer_matches_python_cases() {
+        for forms in [
+            "validate validates validated validating validation validator",
+            "authenticate authentication authenticator",
+            "authorize authorization authorized",
+            "process processes processing processed processor",
+            "handle handles handled handling handler",
+            "token tokens",
+            "query queries",
+        ] {
+            let stems: BTreeSet<String> = forms.split(' ').map(stem).collect();
+            assert_eq!(stems.len(), 1, "{forms}: {stems:?}");
+        }
+        for (word, expected) in [
+            ("class", "class"),
+            ("status", "status"),
+            ("analysis", "analysis"),
+            ("user", "user"),
+            ("users", "user"),
+            ("create", "creat"),
+            ("created", "creat"),
+        ] {
+            assert_eq!(stem(word), expected, "{word}");
+        }
+    }
+
+    /// `code_search_index_test.py`'s weighting case, with the exact scores
+    /// CPython 3.12 computes (compared bit for bit).
+    #[test]
+    fn bm25_scores_are_pythons_floats() {
+        let document = |name: &str, doc: Option<&str>, file: &str| DocumentFields {
+            name: Some(name.into()),
+            doc: doc.map(Into::into),
+            file: Some(file.into()),
+            summary: None,
+        };
+        let index = CodeSearchIndex::new([
+            (
+                "in-name".to_string(),
+                document("auth.validate_token", None, "auth/a.py"),
+            ),
+            (
+                "in-doc".to_string(),
+                document("auth.check", Some("Validates a token."), "auth/b.py"),
+            ),
+            (
+                "in-file".to_string(),
+                document("auth.run", None, "auth/token_validation.py"),
+            ),
+            (
+                "unrelated".to_string(),
+                document("orders.place", Some("Places an order."), "o.py"),
+            ),
+        ]);
+        let matches = index.search(&query_terms("validate token"));
+        assert_eq!(matches.len(), 3);
+        for (key, score, field) in [
+            ("in-name", 1.883243703996507, "name"),
+            ("in-doc", 1.4266997757549296, "doc"),
+            ("in-file", 0.5411619839070423, "file"),
+        ] {
+            assert_eq!(matches[key].score.to_bits(), f64::to_bits(score), "{key}");
+            assert_eq!(matches[key].fields, [field], "{key}");
+        }
+        assert_eq!(
+            index.idf("token").to_bits(),
+            0.3566749439387324_f64.to_bits()
+        );
+        assert!(index.search(&["missing".to_string()]).is_empty());
+    }
+
+    /// `code_search_index_test.py`: idf and field-length normalisation.
+    #[test]
+    fn bm25_idf_and_length_normalisation() {
+        let named = |name: &str| DocumentFields {
+            name: Some(name.into()),
+            ..DocumentFields::default()
+        };
+        let index = CodeSearchIndex::new([
+            ("short".to_string(), named("token")),
+            (
+                "long".to_string(),
+                named("token cache entry builder factory"),
+            ),
+            ("other".to_string(), named("order")),
+        ]);
+        // Two of three documents hold "token": ln(1 + (3 - 2 + 0.5) / (2 + 0.5)).
+        assert!((index.idf("token") - (1.0_f64 + 1.5 / 2.5).ln()).abs() < 1e-12);
+        let matches = index.search(&["token".to_string()]);
+        assert!(matches["short"].score > matches["long"].score);
+        assert_eq!(index.len(), 3);
+        assert!(!index.is_empty());
+    }
+
+    /// `code_search_index_test.py`: a flow's summary is searched.
+    #[test]
+    fn summary_field_is_searched_for_flows() {
+        let index = CodeSearchIndex::new([
+            (
+                "flow".to_string(),
+                DocumentFields {
+                    name: Some("POST /orders".into()),
+                    summary: Some("Checks the token, then charges.".into()),
+                    ..DocumentFields::default()
+                },
+            ),
+            (
+                "symbol".to_string(),
+                DocumentFields {
+                    name: Some("orders.place".into()),
+                    ..DocumentFields::default()
+                },
+            ),
+        ]);
+        assert_eq!(
+            index.search(&query_terms("charge"))["flow"].fields,
+            ["summary"]
+        );
+    }
+
+    /// Term frequencies are capped at 255 per field, as Python packs them
+    /// into eight bits; the field length is not.
+    #[test]
+    fn term_frequency_is_capped_at_eight_bits() {
+        let many = |count: usize| DocumentFields {
+            doc: Some(vec!["token"; count].join(" ")),
+            ..DocumentFields::default()
+        };
+        let index = CodeSearchIndex::new([
+            ("capped".to_string(), many(255)),
+            ("over".to_string(), many(400)),
+        ]);
+        let matches = index.search(&["token".to_string()]);
+        // Same frequency (255), longer field: the longer one scores lower.
+        assert!(matches["capped"].score > matches["over"].score);
     }
 
     #[test]

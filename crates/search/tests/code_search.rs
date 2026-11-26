@@ -169,7 +169,8 @@ async fn one_dataset_and_bad_requests_still_fail_the_search() {
     for code_query in [
         json!({"operation": "neighbors", "name": ["create_order"]}),
         json!({"operation": "bogus"}),
-        json!({"operation": "flows"}),
+        json!({"operation": "flows", "mode": "draw"}),
+        json!({"operation": "search", "text": "order", "kinds": ["widget"]}),
     ] {
         let error = orchestrator
             .search_datasets(&code_request(code_query.clone(), "x", &[a, b]))
@@ -180,6 +181,119 @@ async fn one_dataset_and_bad_requests_still_fail_the_search() {
             "{code_query}: {error:?}"
         );
     }
+}
+
+/// A graph without flows cannot answer `flows`: Python's
+/// `CodeGraphUnavailableError(feature_unavailable)`, a per-dataset miss
+/// like an unresolved seed (`search.py` `_report_code_seed_miss`), so a
+/// multi-dataset search reports it as each dataset's result.
+#[tokio::test]
+async fn flows_without_flows_json_are_a_per_dataset_miss() {
+    let (orchestrator, a, b) = world().await;
+    let results = orchestrator
+        .search_datasets(&code_request(json!({"operation": "flows"}), "", &[a, b]))
+        .await
+        .unwrap();
+    assert_eq!(results.len(), 2);
+    for result in &results {
+        let SearchOutput::Structured(value) = &result.response.result else {
+            panic!("structured: {:?}", result.response.result);
+        };
+        assert_eq!(value["seed_not_found"], json!(true));
+        assert_eq!(value["code"], json!("feature_unavailable"));
+        assert_eq!(value["param"], json!("operation"));
+        assert_eq!(
+            value["error"],
+            json!(format!(
+                "CodeSearchValidationError: {} (Status code: 422)",
+                cognee_code_graph::query::NO_FLOWS_MESSAGE
+            ))
+        );
+    }
+}
+
+/// The text operations run per dataset: `search` ranks each dataset's own
+/// facts, and `hubs` counts each dataset's own edges.
+#[tokio::test]
+async fn search_and_hubs_answer_per_dataset() {
+    let (orchestrator, a, b) = world().await;
+    let request = code_request(json!({"operation": "search", "text": "order"}), "", &[a, b]);
+    let results = orchestrator.search_datasets(&request).await.unwrap();
+    let hits: Vec<Vec<Value>> = results
+        .iter()
+        .map(|result| {
+            let SearchOutput::Structured(value) = &result.response.result else {
+                panic!("structured: {:?}", result.response.result);
+            };
+            assert_eq!(value["operation"], json!("search"));
+            assert_eq!(value["terms"], json!(["order"]));
+            value["hits"]
+                .as_array()
+                .expect("hits")
+                .iter()
+                .map(|hit| hit["id"].clone())
+                .collect()
+        })
+        .collect();
+    // Dataset `a` holds the order symbol; `b` has no match, an empty list
+    // rather than a miss.
+    assert_eq!(hits, vec![vec![json!("create")], vec![]]);
+    let request = code_request(json!({"operation": "hubs"}), "", &[a, b]);
+    let results = orchestrator.search_datasets(&request).await.unwrap();
+    for result in &results {
+        let SearchOutput::Structured(value) = &result.response.result else {
+            panic!("structured: {:?}", result.response.result);
+        };
+        // Neither graph has an edge: no fact has a degree, so no hub.
+        assert_eq!(
+            value,
+            &json!({"operation": "hubs", "hubs": [], "total": 0, "limit": 20})
+        );
+    }
+}
+
+/// `ask` answers per dataset too: the dataset with a match seeds on it, the
+/// other reports no match in its `coverage` notes rather than a miss.
+#[tokio::test]
+async fn ask_answers_per_dataset() {
+    let (orchestrator, a, b) = world().await;
+    let request = code_request(
+        json!({"operation": "ask", "question": "create order"}),
+        "",
+        &[a, b],
+    );
+    let results = orchestrator.search_datasets(&request).await.unwrap();
+    assert_eq!(results.len(), 2);
+    let answers: Vec<&Value> = results
+        .iter()
+        .map(|result| {
+            assert_eq!(result.error, None);
+            let SearchOutput::Structured(value) = &result.response.result else {
+                panic!("structured: {:?}", result.response.result);
+            };
+            assert_eq!(value["operation"], json!("ask"));
+            assert_eq!(value["terms"], json!(["creat", "order"]));
+            value
+        })
+        .collect();
+    assert_eq!(answers[0]["seeds"][0]["id"], json!("create"));
+    assert_eq!(
+        answers[0]["citations"][0]["cite"],
+        json!("orders.create_order.py")
+    );
+    assert_eq!(answers[0]["coverage"]["seeds"], json!(1));
+    assert_eq!(answers[1]["seeds"], json!([]));
+    assert_eq!(
+        answers[1]["coverage"]["notes"][0],
+        json!(
+            "No symbol, route or flow matched these terms: creat, order. Try an exact \
+             identifier with neighbors, or grep."
+        )
+    );
+    assert_eq!(
+        answers[1]["next"][0]["code_query"],
+        json!({"operation": "hubs"})
+    );
 }
 
 #[tokio::test]

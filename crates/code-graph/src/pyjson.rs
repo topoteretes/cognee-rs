@@ -427,6 +427,22 @@ pub fn float_repr(value: f64) -> String {
     }
 }
 
+/// Python's `round(value, ndigits)` of a float: the double nearest to the
+/// decimal the exact binary value rounds to at `ndigits` places, ties to
+/// even. A tie is a tie of the binary value itself (`round(0.03125, 4)` is
+/// `0.0312`, `round(0.21875, 4)` is `0.2188`), never of its shortest decimal
+/// form (`round(0.00015, 4)` is `0.0001`: that double lies below the tie).
+///
+/// Rust's `{:.N}` formatting is exact and rounds ties to even, as CPython's
+/// `_Py_dg_dtoa` does, and parsing the digits back is correctly rounded, as
+/// CPython's `strtod` is. Non-finite values come back unchanged.
+pub fn py_round(value: f64, ndigits: usize) -> f64 {
+    if !value.is_finite() {
+        return value;
+    }
+    format!("{value:.ndigits$}").parse().unwrap_or(value)
+}
+
 /// `str(value)` of a JSON value as Python prints it: a string bare,
 /// anything else as [`py_repr`] writes it (Python's `str` of a list or dict
 /// is its `repr`).
@@ -819,6 +835,47 @@ mod tests {
         assert_eq!(py_str_truthy_or(Some(&json!(7)), ""), "7");
         assert_eq!(py_str_truthy_or(Some(&json!(true)), ""), "True");
         assert_eq!(py_str_truthy_or(Some(&json!(["a"])), ""), "['a']");
+    }
+
+    /// The expected values are CPython 3.12's `round(value, 4)`: exact
+    /// binary ties (odd multiples of 1/32) go to the even digit, near-ties
+    /// go the way their binary value lies.
+    #[test]
+    fn round_matches_python_round_half_even() {
+        let cases = [
+            (0.03125, 0.0312),
+            (0.09375, 0.0938),
+            (0.15625, 0.1562),
+            (0.21875, 0.2188),
+            (0.65625, 0.6562),
+            (0.96875, 0.9688),
+            (1.03125, 1.0312),
+            (2.84375, 2.8438),
+            (12.34375, 12.3438),
+            (123456.78125, 123456.7812),
+            (-0.03125, -0.0312),
+            (-1.09375, -1.0938),
+            (7.00005, 7.0),
+            (0.00005, 0.0001),
+            (0.00015, 0.0001),
+            (1.23456789, 1.2346),
+            (0.33333333333333, 0.3333),
+            (5.0, 5.0),
+            (2.5, 2.5),
+            (1e-9, 0.0),
+        ];
+        for (value, expected) in cases {
+            let rounded = py_round(value, 4);
+            assert_eq!(
+                rounded.to_bits(),
+                f64::to_bits(expected),
+                "{value}: {rounded}"
+            );
+        }
+        assert!(py_round(f64::NAN, 4).is_nan());
+        assert_eq!(py_round(f64::INFINITY, 4), f64::INFINITY);
+        assert_eq!(py_round(0.5, 0), 0.0);
+        assert_eq!(py_round(1.5, 0), 2.0);
     }
 
     #[test]

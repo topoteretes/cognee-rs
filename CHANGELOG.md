@@ -376,6 +376,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicit `source_uri` in the item's metadata still wins. Unset, nothing
   changes. The closed HTTP server sets it, so `/cognify`'s
   `data_location` is `null` for an upload instead of its spool path.
+- **CODE search: `search`, `flows`, `hubs` and `ask` (SDK-1056 P2).** The last
+  four of Python's fifteen operations now run: `search` ranks facts and flows
+  with the field-weighted BM25 of `code_search_index.py` (tokenizer, stemmer,
+  k1/b/idf as Python; scores rounded with Python's round-half-even), `flows`
+  lists, shows and traces Enola's flows (`list`, `show`, `through`), `hubs`
+  ranks facts by degree, and `ask` assembles seeds, flows, a one-hop
+  neighbourhood, file:line citations and a `coverage` block without a model.
+  `capabilities` lists all fifteen operations, sorted, as Python does. A
+  dataset without flows answers `flows` with `feature_unavailable` (param
+  `operation`) as Python's `CodeGraphUnavailableError`, a per-dataset miss, and
+  one without a code graph answers `flows` and `ask` with `no_code_graph`.
+  `CodeOperation::implemented`/`is_implemented` and
+  `CodeQueryError::not_implemented` are gone. Checked against 368 results
+  Python produced (`scripts/generate_code_search_goldens.py` gained the shop
+  graph without flows or docs, the test-heavy graph with score ties and the
+  checkout graphs of `code_retriever_navigation_test.py`).
 - **CODE search: the graph walks, overviews and diagrams (SDK-1056 P1b).**
   `SearchType::Code` now runs `explore` (the default operation),
   `traverse`, `find_path`, `impact_analysis`, `insights` and `architecture`

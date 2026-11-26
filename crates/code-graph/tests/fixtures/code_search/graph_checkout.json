@@ -1,0 +1,41 @@
+{
+  "nodes": [
+    [
+      "route",
+      {
+        "name": "/checkout",
+        "type": "ApiEndpoint",
+        "file_path": "shop/api.py",
+        "line": 14,
+        "repo": "shop"
+      }
+    ],
+    [
+      "handler",
+      {
+        "name": "shop/api.process_checkout",
+        "type": "CodeSymbol",
+        "kind": "symbol",
+        "file_path": "shop/api.py",
+        "line": 15,
+        "repo": "shop",
+        "symbol_kind": "function",
+        "fact_properties": {
+          "symbol_kind": "function",
+          "language": "python",
+          "doc": "Charge the cart, then create the order."
+        },
+        "description": "Charge the cart, then create the order.",
+        "doc": "Charge the cart, then create the order."
+      }
+    ]
+  ],
+  "edges": [
+    [
+      "route",
+      "handler",
+      "handled_by",
+      {}
+    ]
+  ]
+}

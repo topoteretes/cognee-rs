@@ -23,7 +23,7 @@ use super::error::{CodeQueryError, CodeQueryResult};
 use super::normalize::{json_key, normalize_properties, normalize_value, py_str_or, scalar_text};
 use super::text_index::{CodeSearchIndex, DocumentFields, query_terms};
 use crate::error::CodeGraphResult;
-use crate::pyjson::{casefold, is_truthy, py_repr_str, py_str, py_strip};
+use crate::pyjson::{casefold, is_truthy, py_repr_str, py_round, py_str, py_strip};
 
 /// One graph node's properties, as plain JSON.
 pub type NodeProperties = Map<String, Value>;
@@ -708,7 +708,7 @@ impl CodeGraphSnapshot {
 
     /// `flow_rank_key` as an ordering: rank (none last), casefolded name,
     /// repo, id.
-    fn flow_rank_order(&self, left: &str, right: &str) -> Ordering {
+    pub fn flow_rank_order(&self, left: &str, right: &str) -> Ordering {
         let key = |flow_id: &str| {
             let flow = &self.flows[flow_id];
             let rank = int_or_none(properties_of(flow).get("rank"));
@@ -1177,7 +1177,7 @@ impl CodeGraphSnapshot {
                 }
             }
             if score > 0.0 {
-                ranked.push((key.clone(), round4(score), fields));
+                ranked.push((key.clone(), py_round(score, 4), fields));
             }
         }
         if let Some(limit) = limit
@@ -1200,11 +1200,6 @@ impl CodeGraphSnapshot {
         }
         (terms, ranked)
     }
-}
-
-/// Python's `round(score, 4)`: correctly rounded to four decimals.
-fn round4(score: f64) -> f64 {
-    format!("{score:.4}").parse().unwrap_or(score)
 }
 
 /// `node_sort_key` of one fact node.

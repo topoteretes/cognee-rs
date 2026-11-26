@@ -12,19 +12,21 @@
 //! invalidate.
 //!
 //! [`CodeRequest::parse`] validates the operation and the `diagram` argument
-//! exactly as Python's `CodeRetriever.__init__` does, for all fifteen
-//! operations. This build runs eleven of them ([`CodeOperation::implemented`]):
-//! `query_facts`, `explore`, `traverse`, `find_path`, `impact_analysis`,
-//! `insights`, `architecture`, `delta`, `capabilities`, `neighbors` and
-//! `subgraph`, and draws any of their results as a Mermaid or DOT diagram
-//! (Python's `code_graph_diagram.py`, see [`render_result_diagram`]). The
-//! text and flow operations (`search`, `flows`, `hubs`, `ask`) fail with
-//! `feature_unavailable` until they are ported.
+//! exactly as Python's `CodeRetriever.__init__` does, and
+//! [`run_code_operation`] runs any of the fifteen: `query_facts`, `explore`,
+//! `traverse`, `find_path`, `impact_analysis`, `insights`, `architecture`,
+//! `delta`, `capabilities`, `neighbors`, `subgraph`, and the text and flow
+//! operations `search`, `flows`, `hubs` and `ask` (BM25 over the
+//! [`CodeSearchIndex`], Python's `code_search_index.py`). Any result with a
+//! graph can be drawn as a Mermaid or DOT diagram (Python's
+//! `code_graph_diagram.py`, see [`render_result_diagram`]).
 
 mod args;
 mod cache;
 mod diagram;
 mod error;
+mod flows;
+mod navigation;
 mod normalize;
 mod ops;
 mod overview;
@@ -48,6 +50,8 @@ pub use diagram::{
 pub use error::{
     CODE_ERROR_STATUS, CodeErrorClass, CodeErrorCode, CodeQueryError, CodeQueryResult,
 };
+pub use flows::{CallsReach, FLOW_WALK_MAX_DEPTH, FLOW_WALK_MAX_VISITED, FlowReach, FlowVia};
+pub use navigation::{NO_CODE_GRAPH_MESSAGE, NO_FLOWS_MESSAGE};
 pub use normalize::{json_key, normalize_properties, normalize_value, scalar_text};
 pub use snapshot::{
     CODE_NODE_TYPES, CodeGraphSnapshot, CodeTextIndex, FACT_TYPE_BY_KIND, FLOW_TYPE, FlowMembers,
@@ -142,23 +146,6 @@ impl CodeOperation {
         Self::Traverse,
     ];
 
-    /// The operations this build runs, sorted by name.
-    pub fn implemented() -> &'static [CodeOperation] {
-        &[
-            Self::Architecture,
-            Self::Capabilities,
-            Self::Delta,
-            Self::Explore,
-            Self::FindPath,
-            Self::ImpactAnalysis,
-            Self::Insights,
-            Self::Neighbors,
-            Self::QueryFacts,
-            Self::Subgraph,
-            Self::Traverse,
-        ]
-    }
-
     /// The wire name: `query_facts`, `neighbors`, ...
     pub fn as_str(self) -> &'static str {
         match self {
@@ -194,11 +181,6 @@ impl CodeOperation {
             self,
             Self::Capabilities | Self::Search | Self::Flows | Self::Hubs | Self::Ask
         )
-    }
-
-    /// Whether this build runs the operation.
-    pub fn is_implemented(self) -> bool {
-        Self::implemented().contains(&self)
     }
 }
 
@@ -317,9 +299,9 @@ fn diagram_format(
 ///
 /// # Errors
 ///
-/// The operation's own errors (`invalid_argument`, `not_found`,
-/// `ambiguous`), or `feature_unavailable` (as a validation error, param
-/// `operation`) for an operation this build does not implement yet.
+/// The operation's own errors: `invalid_argument`, `not_found` and
+/// `ambiguous`, and for `flows` and `ask` `no_code_graph` /
+/// `feature_unavailable` (a dataset without a code graph, or without flows).
 pub fn run_code_operation(
     snapshot: &CodeGraphSnapshot,
     request: &CodeRequest,
@@ -338,20 +320,10 @@ pub fn run_code_operation(
         CodeOperation::Subgraph => ops::subgraph(snapshot, config, query)?,
         CodeOperation::Delta => ops::delta(snapshot, config, query),
         CodeOperation::Capabilities => ops::capabilities(snapshot),
-        other => {
-            let implemented: Vec<&str> = CodeOperation::implemented()
-                .iter()
-                .map(|operation| operation.as_str())
-                .collect();
-            return Err(CodeQueryError::not_implemented(
-                format!(
-                    "CODE {} is not available in this build yet; the operations it runs are {}.",
-                    other.as_str(),
-                    implemented.join(", ")
-                ),
-                "operation",
-            ));
-        }
+        CodeOperation::Search => navigation::search(snapshot, config, query)?,
+        CodeOperation::Flows => navigation::flows(snapshot, config, query)?,
+        CodeOperation::Hubs => navigation::hubs(snapshot, config)?,
+        CodeOperation::Ask => navigation::ask(snapshot, config, query)?,
     };
     let Some(format) = request.diagram else {
         return Ok(result);

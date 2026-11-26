@@ -249,8 +249,8 @@ members) and the text index is built on first use. Sort orders compare
 Python's `str()` of each field and casefold names (`pyjson::casefold`, Python's
 `str.casefold`, not `to_lowercase`).
 
-**Operations.** Eleven of Python's fifteen run here, with Python's keys,
-ordering, defaults, bounds and argument-error precedence:
+**Operations.** All fifteen of Python's operations run here, with Python's
+keys, ordering, defaults, bounds and argument-error precedence:
 
 | Operation | What it answers | Bounds (default, max) |
 |---|---|---|
@@ -262,12 +262,28 @@ ordering, defaults, bounds and argument-error precedence:
 | `insights` | explainer findings with their evidence, by confidence, paged; `by_source` | `limit` 50, 500 |
 | `architecture` | modules and the routes, storage and services they declare, other edges rolled up to module edges with a `count`; best-connected first | `max_nodes` 80, 300 |
 | `neighbors`, `subgraph` | every edge of one fact; the graph around up to 20 seeds | see `capabilities.limits` |
-| `delta`, `capabilities` | the last ingestion's changes; what the build and graph hold | — |
+| `delta`, `capabilities` | the last ingestion's changes; what the build and graph hold (`operations` is all fifteen, sorted, and `limits` the navigation bounds) | — |
+| `search` | facts and flows ranked against free text (`text`, `query`, `q`); `kinds` (symbol, route, flow, module, storage, service by default; `all`), `repo`, `file_prefix`, `include_tests` | `limit` 10, 50 |
+| `flows` | Enola's flows: `list` (ranked, `mechanism`, `include_side`), `show` (one flow and its stages, by id, Enola id or name), `through` (the flows whose calls reach a symbol, with `via` and `distance`) | `limit` 20, 50 |
+| `hubs` | the most connected facts, containment edges left out; test code neither listed nor counted unless `include_tests` | `limit` 20, 100 |
+| `ask` | evidence for a question: seeds, up to three flows, the seeds' one-hop neighbourhood (callers, callees, route links, the rest), file:line citations, `coverage` (docs, flows, unresolved calls, cuts, notes) and `next` follow-up queries | `max_seeds` 5, 10; `max_nodes` 60, 200; `max_citations` 25, 60 |
 
-The text and flow operations (`search`, `flows`, `hubs`, `ask`) are
-validated as Python validates them and then fail with `feature_unavailable`
-(param `operation`). The default operation, as in Python, is `explore`.
-`capabilities` lists the operations this build runs, not Python's fifteen.
+The default operation, as in Python, is `explore`.
+
+**Text search.** `query::text_index` is `code_search_index.py`: the
+tokenizer (alphanumeric runs split at camelCase and acronym boundaries,
+lowercased, stopwords and one-letter tokens dropped), the light suffix
+stemmer (`validate`, `validation`, `validator` -> `valid`) and the
+field-weighted BM25 index (name 3, doc 2, file 1, summary 1; k1 1.2, b 0.75;
+idf `ln(1 + (N - df + 0.5) / (df + 0.5))`; per-field term frequency capped at
+255). Sums run in Python's order, so scores are the same floats; an exact
+name (+5) or short name (+2.5) match adds a bonus, and scores are rounded to
+four places with `pyjson::py_round`, Python's `round` (ties of the binary
+value go to even). Python memoizes `_run_terms` with an `lru_cache`; here the
+index is built once per snapshot, which is what that cache speeds up. A
+dataset without a code graph answers `flows` and `ask` with `no_code_graph`,
+one without flows answers `flows` with `feature_unavailable` (param
+`operation`): both are per-dataset misses, as in Python.
 
 **Diagrams.** `diagram` (`true` or `"mermaid"`, `"dot"`, `false`) attaches
 `{"format", "source", "nodes", "edges"}` to the result as its last key, the

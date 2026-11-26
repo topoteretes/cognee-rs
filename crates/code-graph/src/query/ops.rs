@@ -71,12 +71,9 @@ pub fn delta(snapshot: &CodeGraphSnapshot, config: &CodeConfig, query: &str) -> 
 
 /// `_capabilities`: what this build can do and what the dataset's code graph
 /// holds. Never fails, also not for a dataset without a code graph (the
-/// counts are then zero).
-///
-/// `operations` lists the operations this build serves
-/// ([`CodeOperation::implemented`]), not Python's fifteen: a client probes
-/// it before calling the others, and must not be told about operations that
-/// would fail with `feature_unavailable`.
+/// counts are then zero). `operations` is all fifteen, sorted
+/// ([`CodeOperation::ALL`], Python's `sorted(_OPERATIONS)`), and `limits`
+/// the defaults and caps of the navigation operations ([`limits_json`]).
 pub fn capabilities(snapshot: &CodeGraphSnapshot) -> Value {
     let empty = HashSet::new();
     let symbols = snapshot.by_type.get("CodeSymbol").unwrap_or(&empty);
@@ -93,7 +90,7 @@ pub fn capabilities(snapshot: &CodeGraphSnapshot) -> Value {
         .collect();
     versions.sort();
     versions.dedup();
-    let operations: Vec<&str> = CodeOperation::implemented()
+    let operations: Vec<&str> = CodeOperation::ALL
         .iter()
         .map(|operation| operation.as_str())
         .collect();
