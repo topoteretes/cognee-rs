@@ -1105,6 +1105,11 @@ impl DeleteService {
         // degree sweep. Rust currently leaves those orphans on soft delete.
         // Closing this gap requires a deletion-scoped cleanup rather than the
         // global degree heuristic; tracked for a follow-up.
+        //
+        // The sweep never removes a node a ledger row still names (SDK-1694
+        // O9): Python's ledger delete keeps every slug another row names, and
+        // its degree sweep runs only for data with no ledger rows. See
+        // `sweep_orphan_nodes`.
 
         let mut deleted_orphan_entities = 0usize;
         let mut deleted_orphan_entity_types = 0usize;
@@ -1952,14 +1957,19 @@ impl DeleteService {
     /// Hard-mode orphan sweep: find and delete degree-one Entity/EntityType
     /// nodes from the graph and their corresponding vector points.
     ///
-    /// An `EntityType` a document's ledger row still claims is kept (SDK-1694
-    /// O6): the data-scoped delete removes a type with its last declaring
-    /// document, so a degree-one type is one entity's type, not an orphan.
-    /// Python's degree sweep (`legacy_delete`) predates its per-document
-    /// ledger and runs only for a legacy document, which has no such row;
-    /// a legacy type, claimed by a nil-`data_id` row only, is still swept.
+    /// A node any ledger row still names is kept, an `Entity` as well as an
+    /// `EntityType` (SDK-1694 O6, O9). The data-scoped delete already removed
+    /// what the deleted document alone claimed, so a degree-one node a row
+    /// still names is another document's — an ontology class (`class`,
+    /// `organization`) whose only edge is its `is_a`, or a type one entity
+    /// still has — not an orphan. Python never removes a node another ledger
+    /// row names (`get_global_data_related_nodes`, nil rows included), and
+    /// runs its degree-one sweep only for data the ledger does not know
+    /// (`legacy_delete`); a legacy nil-`data_id` row is therefore a claim
+    /// here too. What the sweep still removes is a node no row names.
     /// `dataset_id` narrows the claims to one dataset under per-dataset
-    /// storage, where the sweep reads that dataset's graph alone.
+    /// storage, where the sweep reads that dataset's graph alone. The claims
+    /// of both node kinds are read in one batched lookup.
     ///
     /// Returns `(orphan_entities, orphan_entity_types, warnings)`.
     async fn sweep_orphan_nodes(
@@ -1977,7 +1987,7 @@ impl DeleteService {
             }
         };
 
-        let orphan_entities = graph_db.get_degree_one_nodes("Entity").await.map_err(|e| {
+        let mut orphan_entities = graph_db.get_degree_one_nodes("Entity").await.map_err(|e| {
             DeleteError::GraphCleanup(format!("Failed to query degree-one Entity nodes: {e}"))
         })?;
 
@@ -1989,24 +1999,27 @@ impl DeleteService {
                     "Failed to query degree-one EntityType nodes: {e}"
                 ))
             })?;
-        if !orphan_types.is_empty() {
-            let slugs: Vec<Uuid> = orphan_types
+        if !orphan_entities.is_empty() || !orphan_types.is_empty() {
+            let slugs: Vec<Uuid> = orphan_entities
                 .iter()
+                .chain(orphan_types.iter())
                 .filter_map(|(id, _)| Uuid::parse_str(id).ok())
                 .collect();
-            let owned: HashSet<String> = self
+            let claimed: HashSet<String> = self
                 .database
-                .get_node_slugs_owned_by_data(&slugs, dataset_id)
+                .get_claimed_node_slugs(&slugs, dataset_id)
                 .await
                 .map_err(|e| {
                     DeleteError::Runtime(format!(
-                        "Failed to read the ledger claims on degree-one EntityType nodes: {e}"
+                        "Failed to read the ledger claims on degree-one Entity and EntityType nodes: {e}"
                     ))
                 })?
                 .into_iter()
                 .map(|slug| slug.to_string())
                 .collect();
-            orphan_types.retain(|(id, _)| !owned.contains(id));
+            // The graph ids are `Uuid::to_string()`s, as the claims are.
+            orphan_entities.retain(|(id, _)| !claimed.contains(id));
+            orphan_types.retain(|(id, _)| !claimed.contains(id));
         }
 
         let entity_count = orphan_entities.len();

@@ -274,26 +274,31 @@ async fn test_hard_mode_sweeps_orphan_entities() {
         result.deleted_orphan_edge_types,
     );
 
-    // ── Verify hard mode leaves no orphan type ──────────────────────────────
+    // ── Verify hard mode leaves no orphan entity or type ────────────────────
     // Since SDK-1694 O6 the data-scoped delete removes the types only doc1
-    // declared itself, and the degree-one sweep keeps a type doc2's ledger
-    // row still claims, so the sweep's own counts may be zero. What must hold
-    // is the outcome: every degree-one EntityType left is still a document's.
-    let degree_one: Vec<Uuid> = graph_db
-        .get_degree_one_nodes("EntityType")
-        .await
-        .expect("degree-one EntityType nodes")
-        .into_iter()
-        .filter_map(|(id, _)| Uuid::parse_str(&id).ok())
-        .collect();
-    let owned = DeleteDb::get_node_slugs_owned_by_data(database.as_ref(), &degree_one, None)
+    // declared itself, and since O9 the degree-one sweep keeps an entity or a
+    // type any ledger row still names, so the sweep's own counts may be zero.
+    // What must hold is the outcome: every degree-one Entity and EntityType
+    // left is still claimed.
+    let mut degree_one: Vec<Uuid> = Vec::new();
+    for node_type in ["Entity", "EntityType"] {
+        degree_one.extend(
+            graph_db
+                .get_degree_one_nodes(node_type)
+                .await
+                .expect("degree-one nodes")
+                .into_iter()
+                .filter_map(|(id, _)| Uuid::parse_str(&id).ok()),
+        );
+    }
+    let owned = DeleteDb::get_claimed_node_slugs(database.as_ref(), &degree_one, None)
         .await
         .expect("owned slugs");
     let mut unowned = degree_one.clone();
     unowned.retain(|slug| !owned.contains(slug));
     assert!(
         unowned.is_empty(),
-        "hard delete left degree-one EntityTypes no document claims: {unowned:?} \
+        "hard delete left degree-one nodes no ledger row claims: {unowned:?} \
          (swept entities={}, entity_types={}, edge_types={})",
         result.deleted_orphan_entities,
         result.deleted_orphan_entity_types,
