@@ -711,26 +711,20 @@ impl DatasetStorage {
     }
 }
 
-/// What a [`DatasetStorage`] depends on in a build context. In memory only:
-/// it carries the resolved database URLs, credentials included.
+/// What a [`DatasetStorage`] depends on in a build context: the shared-store
+/// inputs of both kinds ([`crate::graph_store_inputs`] /
+/// [`crate::vector_store_inputs`], the same ones the shared stores are keyed
+/// on), plus what only per-dataset storage reads — the relational database
+/// its `dataset_database` rows live in, and the embedding model it records
+/// and checks per dataset. In memory only: it carries resolved URLs.
 fn storage_fingerprint(ctx: &BackendBuildContext) -> String {
-    let graph = ctx.section::<crate::sections::GraphConfig>();
-    let vector = ctx.section::<crate::sections::VectorConfig>();
     format!(
         "{:?}",
         (
-            ctx.graph_provider.to_lowercase(),
-            ctx.vector_provider.to_lowercase(),
-            &ctx.graph_file_path,
-            &ctx.vector_db_url,
-            &ctx.graph_postgres_url,
-            &ctx.vector_postgres_url,
+            crate::graph_store_inputs(ctx, &[]),
+            crate::vector_store_inputs(ctx, &[]),
             &ctx.relational_db_url,
-            &ctx.system_root_directory,
-            ctx.embedding_dimensions,
             &ctx.embedding.model,
-            graph.dataset_database_handler,
-            vector.dataset_database_handler,
         )
     )
 }
@@ -774,12 +768,21 @@ fn db_error(error: cognee_database::DatabaseError) -> ComponentError {
     ComponentError::Database(error.to_string())
 }
 
+/// A per-dataset binding failure as a graph error. A refused second open of
+/// the dataset's store keeps its type (and so its `STORE_IN_USE` code).
 fn graph_error(error: ComponentError) -> GraphDBError {
-    GraphDBError::ConnectionError(format!("per-dataset storage: {error}"))
+    match error {
+        ComponentError::StoreInUse(in_use) => GraphDBError::StoreInUse(in_use),
+        other => GraphDBError::ConnectionError(format!("per-dataset storage: {other}")),
+    }
 }
 
+/// The vector twin of [`graph_error`].
 fn vector_error(error: ComponentError) -> VectorDBError {
-    VectorDBError::StorageError(format!("per-dataset storage: {error}"))
+    match error {
+        ComponentError::StoreInUse(in_use) => VectorDBError::StoreInUse(in_use),
+        other => VectorDBError::StorageError(format!("per-dataset storage: {other}")),
+    }
 }
 
 #[async_trait]
@@ -956,9 +959,32 @@ mod tests {
         assert_eq!(fx.database.list_dataset_databases().await.unwrap().len(), 1);
 
         // A second storage (another process, or a rebuilt one) reuses the row.
+        // In one process an embedded graph may be open only once (a second
+        // instance is refused with `StoreInUse`), so the first lets go of it.
+        storage.evict(id).await;
         let other = super::tests::storage(&fx);
         other.graph_for(id).await.unwrap();
         assert_eq!(fx.database.list_dataset_databases().await.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_refused_second_open_keeps_its_type_through_the_routing_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let _held = cognee_utils::StoreClaim::acquire(dir.path(), "test").unwrap();
+        let in_use = || {
+            ComponentError::StoreInUse(
+                cognee_utils::StoreClaim::acquire(dir.path(), "test").unwrap_err(),
+            )
+        };
+        assert!(matches!(graph_error(in_use()), GraphDBError::StoreInUse(_)));
+        assert!(matches!(
+            vector_error(in_use()),
+            VectorDBError::StoreInUse(_)
+        ));
+        assert!(matches!(
+            graph_error(ComponentError::Config("x".into())),
+            GraphDBError::ConnectionError(_)
+        ));
     }
 
     #[tokio::test]
@@ -1100,11 +1126,15 @@ mod tests {
         assert!(storage.existing_vector_for(id).await.unwrap().is_some());
         assert_eq!(storage.open_dataset_count(), 1);
 
-        // Another storage (another process) binds from the row it finds.
+        // Another storage (another process) binds from the row it finds. In
+        // one process an embedded graph may be open only once (a second
+        // instance is refused with `StoreInUse`), so each lets go in turn.
+        storage.evict(id).await;
         let other = super::tests::storage(&fx);
         assert!(other.existing_graph_for(id).await.unwrap().is_some());
         assert_eq!(other.open_dataset_count(), 1);
         assert_eq!(fx.database.list_dataset_databases().await.unwrap().len(), 1);
+        other.evict(id).await;
 
         assert!(storage.delete_dataset_storage(id).await.unwrap());
         assert_eq!(storage.open_dataset_count(), 0);

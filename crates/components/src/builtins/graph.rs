@@ -46,6 +46,10 @@ impl GraphDbFactory for LadybugGraphFactory {
         self.provider
     }
 
+    fn store_fingerprint(&self, ctx: &BackendBuildContext) -> String {
+        crate::graph_store_inputs(ctx, &self.config_sections())
+    }
+
     fn config_sections(&self) -> Vec<&'static cognee_config_core::SectionSchema> {
         vec![<cognee_graph::LadybugConfig as cognee_config_core::ConfigSection>::schema()]
     }
@@ -70,7 +74,7 @@ impl GraphDbFactory for LadybugGraphFactory {
         let graph_db =
             cognee_graph::LadybugAdapter::with_max_db_size(&graph_path, config.max_db_size)
                 .await
-                .map_err(|e| ComponentError::GraphDb(format!("initialization failed: {e}")))?;
+                .map_err(|e| ComponentError::from_graph_db("initialization failed", e))?;
         graph_db
             .initialize()
             .await
@@ -100,6 +104,10 @@ impl PgGraphFactory {
 impl GraphDbFactory for PgGraphFactory {
     fn provider(&self) -> &str {
         self.provider
+    }
+
+    fn store_fingerprint(&self, ctx: &BackendBuildContext) -> String {
+        crate::graph_store_inputs(ctx, &self.config_sections())
     }
 
     async fn build(
@@ -136,10 +144,51 @@ impl GraphDbFactory for MockGraphFactory {
         "mock"
     }
 
+    fn store_fingerprint(&self, ctx: &BackendBuildContext) -> String {
+        crate::graph_store_inputs(ctx, &self.config_sections())
+    }
+
     async fn build(
         &self,
         _ctx: &BackendBuildContext,
     ) -> Result<Arc<dyn GraphDBTrait>, ComponentError> {
         Ok(Arc::new(cognee_graph::MockGraphDB::new()))
+    }
+}
+
+#[cfg(all(test, feature = "ladybug"))]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod tests {
+    use super::*;
+    use crate::registry::tests::test_ctx;
+
+    /// A second live engine on one graph file is refused with the typed
+    /// `StoreInUse` — not flattened into a `GraphDb` string — so the bindings
+    /// can report `STORE_IN_USE`.
+    #[tokio::test]
+    async fn a_second_live_ladybug_engine_is_store_in_use() {
+        let root = tempfile::tempdir().unwrap();
+        let mut ctx = test_ctx();
+        ctx.system_root_directory = root.path().to_path_buf();
+        let factory = LadybugGraphFactory::new("ladybug");
+
+        let first = factory.build(&ctx).await.unwrap();
+        let Err(ComponentError::StoreInUse(in_use)) = factory.build(&ctx).await else {
+            panic!("a second live engine on the same graph file must be refused");
+        };
+        assert_eq!(
+            in_use.path(),
+            root.path().canonicalize().unwrap().join("graph")
+        );
+
+        first.close().await.unwrap();
+        factory
+            .build(&ctx)
+            .await
+            .expect("free once the first engine is closed");
     }
 }
