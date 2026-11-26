@@ -148,6 +148,12 @@ pub struct SearchParams {
     /// Default when `None`: `"answer_per_subquery"`.
     pub decomposition_mode: Option<String>,
 
+    /// The configuration of a `CODE` search: the request's
+    /// `retriever_specific_config` with its `code_query` merged over it
+    /// ([`SearchRequest::code_config`]). `None` for every other search type.
+    #[serde(default)]
+    pub code_config: Option<serde_json::Map<String, serde_json::Value>>,
+
     /// The requesting user, whose `prefers` weights and preference text
     /// personalize the graph and RAG completions (`SearchRequest.user_id`).
     pub user_id: Option<Uuid>,
@@ -310,6 +316,8 @@ impl From<&SearchRequest> for SearchParams {
                 .and_then(|c| c.get("decomposition_mode"))
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
+            code_config: (req.search_type == crate::types::SearchType::Code)
+                .then(|| req.code_config()),
             user_id: req.user_id,
             // The orchestrator stamps it from its tuning.
             personalization: None,

@@ -22,6 +22,10 @@ pub enum SearchType {
     GraphReport,
     #[default]
     HybridCompletion,
+    /// Deterministic, model-free queries over a dataset's code graph
+    /// (Python's `SearchType.CODE`): the request's `code_query` names one
+    /// operation and its arguments.
+    Code,
 }
 
 impl SearchType {
@@ -75,6 +79,15 @@ mod tests {
             let parsed: SearchType = serde_json::from_value(value).unwrap();
             assert_eq!(parsed, search_type);
         }
+    }
+
+    #[test]
+    fn code_uses_the_python_name() {
+        let value = serde_json::to_value(SearchType::Code).unwrap();
+        assert_eq!(value, serde_json::Value::String("CODE".to_string()));
+        let parsed: SearchType = serde_json::from_str("\"CODE\"").unwrap();
+        assert_eq!(parsed, SearchType::Code);
+        assert_eq!(SearchType::Code.wire_name(), "CODE");
     }
 
     #[test]

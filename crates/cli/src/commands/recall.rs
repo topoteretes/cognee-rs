@@ -153,6 +153,9 @@ fn map_query_type(query_type: QueryTypeArg) -> SearchType {
         QueryTypeArg::RagCompletion => SearchType::RagCompletion,
         QueryTypeArg::Chunks => SearchType::Chunks,
         QueryTypeArg::Summaries => SearchType::Summaries,
+        // recall's code lane (Python's `code_query` / `_run_code`) is not
+        // ported yet (RecallScope::Code is refused), so recall keeps the
+        // coding-rules stand-in; `search -t CODE` runs the real CODE type.
         QueryTypeArg::Code => SearchType::CodingRules,
         QueryTypeArg::Cypher => SearchType::Cypher,
         QueryTypeArg::Temporal => SearchType::Temporal,

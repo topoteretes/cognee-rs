@@ -26,7 +26,7 @@ feature-gated).
 | `add <inputs…>` | Ingest text / file paths / HTTP(S) URLs into a dataset | `-d/--dataset-name` (the `default_dataset_name` setting, `main_dataset`), `--tenant-id` | — |
 | `cognify` | Build the knowledge graph from one or more datasets | `-d/--datasets`, `--chunk-size`, `--chunker` (`TextChunker`/`LangchainChunker`/`CsvChunker`/`JsonListChunker`; overrides the `chunk_strategy` setting for the run, see [Chunking](../configuration.md#chunking--tokenizer)), `--ontology-file`, `-b/--background`, `--llm-max-retries`, `--llm-max-parallel-requests`, `--graph-schema <FILE>` (a custom graph model's JSON Schema; see [the guide](../guides/custom-graph-schema.md)), `--graph-spec <FILE>` (the same model in the spec DSL; not with `--graph-schema`), `--chunk-attachment` (`direct`/`all`; requires `--graph-schema` or `--graph-spec`), `--extractor` (graph extractor for this run: `auto`/`llm`/`gliner`/another registered kind; overrides `GRAPH_EXTRACTOR`, see [Keyless cognify](../configuration.md#keyless-cognify)), `--tenant-id` (strict tenant match; without `--datasets`, the owner's datasets in that tenant) | — |
 | `add-and-cognify <inputs…>` | `add` then `cognify` in one step | union of the above; `--tenant-id` applies to both the add and the dataset lookup; `--graph-schema` / `--graph-spec` / `--chunk-attachment` are validated before anything is added | — |
-| `search <query>` | Query the graph/vectors | `-t/--query-type` (`GRAPH_COMPLETION`), `-d/--datasets`, `-k/--top-k` (10), `--system-prompt` / `--system-prompt-path`, `--session-id`, `-f/--output-format` (`pretty`/`json`), `--llm-max-retries`, `--tenant-id` (strict tenant match; omit = tenant-less data only) | — |
+| `search <query>` | Query the graph/vectors | `-t/--query-type` (`GRAPH_COMPLETION`), `-d/--datasets`, `-k/--top-k` (10), `--system-prompt` / `--system-prompt-path`, `--session-id`, `-f/--output-format` (`pretty`/`json`), `--llm-max-retries`, `--tenant-id` (strict tenant match; omit = tenant-less data only), `--code-query` (with `-t CODE`: the code-graph operation as a JSON object) | — |
 | `export` | Write the graph as a COGX archive that Python cognee can re-import (`cognee.remember(COGXArchiveSource(path))`, or upload the packed tarball to `/api/v1/remember` with `content_type=cogx-archive`) | `-o/--output` (dir; default `<dataset>_cogx`), `-d/--dataset` (**label only — does not scope the export; the whole graph store is written**), `--pack` (also write `<output>.cogx.tar.gz`), `--format` (`cogx`; the only value that round-trips) | — |
 | `delete` | Remove data/datasets across all backends. Names and ids must be the acting user's datasets in `--tenant-id` and are deleted by id | `-d/--dataset-name` \| `--dataset-id`, `--data-id` (optionally with a dataset reference: that item in that dataset), `--all` (the acting user's datasets in `--tenant-id`, like Python's `datasets.delete_all` — **not** a store-wide wipe), `-u/--user-id` (the acting user; alone, selects that user's datasets in `--tenant-id`), `--tenant-id` (strict tenant match), `--delete-dataset-if-empty` (with `--data-id`), `--mode` (`soft`/`hard`), `--dry-run`, `-f/--force`. `--enforce-acl` is not available in OSS (no ACL backend) | — |
 | `vector-reindex` | Build the ANN index on every vector collection missing one. pgvector only — the index is created per collection, so one can be missing either because it predates the index or because its best-effort build failed (pgvector without the `hnsw` access method, a restricted role, too little `maintenance_work_mem`), which is logged and leaves a working but sequential-scan collection. Online (`CREATE INDEX CONCURRENTLY`) and idempotent, so it does the work rather than reporting first; on any other backend it says so and does nothing | — | — |
@@ -85,6 +85,7 @@ cognee-cli add ./notes.txt "some inline text" -d my_dataset
 cognee-cli cognify -d my_dataset
 cognee-cli search "what did we learn about X?" -t GRAPH_COMPLETION -d my_dataset -k 10
 cognee-cli search "what did we learn about X?" -t HYBRID_COMPLETION -d my_dataset -k 10
+cognee-cli search "" -t CODE -d my_code --code-query '{"operation": "neighbors", "name": "create_order"}'
 ```
 
 A `cognify` run that the configured failure policy let *complete* despite
@@ -99,7 +100,9 @@ Which failures are tolerated at all is the two-axis policy in
 The full set of accepted `-t/--query-type` values is the `QueryTypeArg` enum in
 [`crates/cli/src/cli.rs`](../../crates/cli/src/cli.rs), which maps onto the
 library's [`SearchType`](../../crates/search/src/types/search_type.rs) (see also
-`cognee-cli search --help`). The hybrid retriever's
+`cognee-cli search --help`). `search -t CODE` runs the deterministic code-graph
+search (`SearchType::Code`, with `--code-query`); `recall -t CODE` still maps
+to `CODING_RULES` until recall's code lane is ported. The hybrid retriever's
 tuning knobs are not exposed as CLI flags in Phase 1 — see
 [configuration.md §Search — hybrid retriever knobs](../configuration.md#search--hybrid-retriever-knobs).
 

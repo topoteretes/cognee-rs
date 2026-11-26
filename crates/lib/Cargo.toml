@@ -171,6 +171,8 @@ cognee-cognify = { path = "../cognify", version = "0.2.0" }
 cognee-components = { path = "../components", version = "0.2.0", default-features = false }
 cognee-core = { path = "../core", version = "0.2.0", features = ["pipeline-run-registry"] }
 cognee-delete = { path = "../delete", version = "0.2.0" }
+# `prune` clears the CODE search's parsed code-graph snapshots.
+cognee-code-graph = { path = "../code-graph", version = "0.2.0" }
 cognee-database = { path = "../database", version = "0.2.0" }
 cognee-embedding = { path = "../embedding", version = "0.2.0" }
 cognee-graph = { path = "../graph", version = "0.2.0" }
@@ -231,7 +233,6 @@ required-features = ["visualization"]
 
 [dev-dependencies]
 cognee-test-utils = { path = "../test-utils" }
-cognee-code-graph = { path = "../code-graph" }
 cognee-storage = { path = "../storage", features = ["testing"] }
 cognee-graph = { path = "../graph", features = ["testing"] }
 cognee-vector = { path = "../vector", features = ["testing"] }

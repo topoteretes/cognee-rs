@@ -666,6 +666,13 @@ pub struct SearchArgs {
     /// first. All of them when unset.
     #[arg(long = "neighborhood-seed-top-k")]
     pub neighborhood_seed_top_k: Option<std::num::NonZeroUsize>,
+
+    /// With `-t CODE`: the code-graph operation and its arguments, as a JSON
+    /// object (Python's `--code-query`), e.g.
+    /// `'{"operation": "neighbors", "name": "create_order"}'`. Without it a
+    /// CODE search runs `explore`.
+    #[arg(long = "code-query")]
+    pub code_query: Option<String>,
 }
 
 /// Arguments for `cognee-cli remember` — one-call store (add + cognify + improve).

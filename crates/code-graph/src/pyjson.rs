@@ -117,6 +117,221 @@ fn write_object(map: &Map<String, Value>, out: &mut String) {
     out.push('}');
 }
 
+/// `json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",",
+/// ":"))`: the compact, key-sorted form Python's CODE retriever uses as its
+/// context text and as a sort key for JSON values (`code_retriever._json_key`).
+///
+/// Unlike [`dumps_sorted`] it keeps every character outside ASCII as is: only
+/// `"`, `\` and the control characters below U+0020 are escaped, as Python's
+/// `ensure_ascii=False` encoder does. Floats are `float.__repr__`. The
+/// workspace builds serde_json with `preserve_order`, so the keys are sorted
+/// here explicitly.
+pub fn dumps_compact(value: &Value) -> String {
+    let mut out = String::new();
+    write_compact(value, &mut out);
+    out
+}
+
+fn write_compact(value: &Value, out: &mut String) {
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(true) => out.push_str("true"),
+        Value::Bool(false) => out.push_str("false"),
+        Value::Number(number) => out.push_str(&number_repr(number)),
+        Value::String(text) => write_unicode_string(text, out),
+        Value::Array(items) => {
+            out.push('[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                write_compact(item, out);
+            }
+            out.push(']');
+        }
+        Value::Object(map) => {
+            let mut entries: Vec<(&String, &Value)> = map.iter().collect();
+            entries.sort_by(|left, right| left.0.cmp(right.0));
+            out.push('{');
+            for (index, (key, item)) in entries.into_iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                write_unicode_string(key, out);
+                out.push(':');
+                write_compact(item, out);
+            }
+            out.push('}');
+        }
+    }
+}
+
+/// A JSON string as Python's `ensure_ascii=False` encoder writes it
+/// (`py_encode_basestring`): `"`, `\` and the C0 controls escaped, the
+/// usual ones with their short escape, the rest as `\u00XX`.
+fn write_unicode_string(text: &str, out: &mut String) {
+    out.push('"');
+    for character in text.chars() {
+        match character {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0c}' => out.push_str("\\f"),
+            '\u{00}'..='\u{1f}' => out.push_str(&format!("\\u{:04x}", u32::from(character))),
+            _ => out.push(character),
+        }
+    }
+    out.push('"');
+}
+
+/// Python's `str.casefold()`.
+///
+/// Rust has no full case folding in `std`, and `to_lowercase` is not it: `ß`
+/// lowercases to itself but folds to `ss`, the final sigma lowercases to `ς`
+/// but folds to `σ`, and the ligatures and the Greek letters with a
+/// subscript iota fold to several characters. Each character is folded on
+/// its own (case folding has no context): first through the `F` (full) and
+/// `C` entries of Unicode's `CaseFolding.txt` whose folding differs from the
+/// character's simple lowercase, then through its lowercase. A character
+/// added to `CaseFolding.txt` after Unicode 15.1 (Python 3.12's table) may
+/// still fold differently.
+pub fn casefold(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for character in text.chars() {
+        if let Some(folded) = special_fold(character) {
+            out.push_str(folded);
+        } else if let Some(folded) = cherokee_fold(character) {
+            out.push(folded);
+        } else {
+            out.extend(character.to_lowercase());
+        }
+    }
+    out
+}
+
+/// The Cherokee letters fold to their uppercase forms (`CaseFolding.txt`
+/// maps the lowercase block onto the uppercase one, unlike every other
+/// script).
+fn cherokee_fold(character: char) -> Option<char> {
+    let code = u32::from(character);
+    let folded = match code {
+        0xAB70..=0xABBF => code - 0xAB70 + 0x13A0,
+        0x13F8..=0x13FD => code - 0x13F8 + 0x13F0,
+        // The uppercase block is already the folded form.
+        0x13A0..=0x13F5 => code,
+        _ => return None,
+    };
+    char::from_u32(folded)
+}
+
+/// The `CaseFolding.txt` entries (status `C` and `F`) whose folding is not
+/// the character's lowercase.
+fn special_fold(character: char) -> Option<&'static str> {
+    Some(match character {
+        // Status F: one character folds to several.
+        'ß' | 'ẞ' => "ss",
+        'İ' => "i\u{307}",
+        'ŉ' => "\u{2bc}n",
+        'ǰ' => "j\u{30c}",
+        'ΐ' => "\u{3b9}\u{308}\u{301}",
+        'ΰ' => "\u{3c5}\u{308}\u{301}",
+        'և' => "\u{565}\u{582}",
+        'ẖ' => "h\u{331}",
+        'ẗ' => "t\u{308}",
+        'ẘ' => "w\u{30a}",
+        'ẙ' => "y\u{30a}",
+        'ẚ' => "a\u{2be}",
+        'ὐ' => "\u{3c5}\u{313}",
+        'ὒ' => "\u{3c5}\u{313}\u{300}",
+        'ὔ' => "\u{3c5}\u{313}\u{301}",
+        'ὖ' => "\u{3c5}\u{313}\u{342}",
+        'ᾀ' | 'ᾈ' => "\u{1f00}\u{3b9}",
+        'ᾁ' | 'ᾉ' => "\u{1f01}\u{3b9}",
+        'ᾂ' | 'ᾊ' => "\u{1f02}\u{3b9}",
+        'ᾃ' | 'ᾋ' => "\u{1f03}\u{3b9}",
+        'ᾄ' | 'ᾌ' => "\u{1f04}\u{3b9}",
+        'ᾅ' | 'ᾍ' => "\u{1f05}\u{3b9}",
+        'ᾆ' | 'ᾎ' => "\u{1f06}\u{3b9}",
+        'ᾇ' | 'ᾏ' => "\u{1f07}\u{3b9}",
+        'ᾐ' | 'ᾘ' => "\u{1f20}\u{3b9}",
+        'ᾑ' | 'ᾙ' => "\u{1f21}\u{3b9}",
+        'ᾒ' | 'ᾚ' => "\u{1f22}\u{3b9}",
+        'ᾓ' | 'ᾛ' => "\u{1f23}\u{3b9}",
+        'ᾔ' | 'ᾜ' => "\u{1f24}\u{3b9}",
+        'ᾕ' | 'ᾝ' => "\u{1f25}\u{3b9}",
+        'ᾖ' | 'ᾞ' => "\u{1f26}\u{3b9}",
+        'ᾗ' | 'ᾟ' => "\u{1f27}\u{3b9}",
+        'ᾠ' | 'ᾨ' => "\u{1f60}\u{3b9}",
+        'ᾡ' | 'ᾩ' => "\u{1f61}\u{3b9}",
+        'ᾢ' | 'ᾪ' => "\u{1f62}\u{3b9}",
+        'ᾣ' | 'ᾫ' => "\u{1f63}\u{3b9}",
+        'ᾤ' | 'ᾬ' => "\u{1f64}\u{3b9}",
+        'ᾥ' | 'ᾭ' => "\u{1f65}\u{3b9}",
+        'ᾦ' | 'ᾮ' => "\u{1f66}\u{3b9}",
+        'ᾧ' | 'ᾯ' => "\u{1f67}\u{3b9}",
+        'ᾲ' => "\u{1f70}\u{3b9}",
+        'ᾳ' | 'ᾼ' => "\u{3b1}\u{3b9}",
+        'ᾴ' => "\u{3ac}\u{3b9}",
+        'ᾶ' => "\u{3b1}\u{342}",
+        'ᾷ' => "\u{3b1}\u{342}\u{3b9}",
+        'ῂ' => "\u{1f74}\u{3b9}",
+        'ῃ' | 'ῌ' => "\u{3b7}\u{3b9}",
+        'ῄ' => "\u{3ae}\u{3b9}",
+        'ῆ' => "\u{3b7}\u{342}",
+        'ῇ' => "\u{3b7}\u{342}\u{3b9}",
+        'ῒ' => "\u{3b9}\u{308}\u{300}",
+        '\u{1fd3}' => "\u{3b9}\u{308}\u{301}",
+        'ῖ' => "\u{3b9}\u{342}",
+        'ῗ' => "\u{3b9}\u{308}\u{342}",
+        'ῢ' => "\u{3c5}\u{308}\u{300}",
+        '\u{1fe3}' => "\u{3c5}\u{308}\u{301}",
+        'ῤ' => "\u{3c1}\u{313}",
+        'ῦ' => "\u{3c5}\u{342}",
+        'ῧ' => "\u{3c5}\u{308}\u{342}",
+        'ῲ' => "\u{1f7c}\u{3b9}",
+        'ῳ' | 'ῼ' => "\u{3c9}\u{3b9}",
+        'ῴ' => "\u{3ce}\u{3b9}",
+        'ῶ' => "\u{3c9}\u{342}",
+        'ῷ' => "\u{3c9}\u{342}\u{3b9}",
+        'ﬀ' => "ff",
+        'ﬁ' => "fi",
+        'ﬂ' => "fl",
+        'ﬃ' => "ffi",
+        'ﬄ' => "ffl",
+        'ﬅ' | 'ﬆ' => "st",
+        'ﬓ' => "\u{574}\u{576}",
+        'ﬔ' => "\u{574}\u{565}",
+        'ﬕ' => "\u{574}\u{56b}",
+        'ﬖ' => "\u{57e}\u{576}",
+        'ﬗ' => "\u{574}\u{56d}",
+        // Status C: folds to a character other than its lowercase.
+        'µ' => "\u{3bc}",
+        'ſ' => "s",
+        '\u{345}' | '\u{1fbe}' => "\u{3b9}",
+        'ς' => "\u{3c3}",
+        'ϐ' => "\u{3b2}",
+        'ϑ' => "\u{3b8}",
+        'ϕ' => "\u{3c6}",
+        'ϖ' => "\u{3c0}",
+        'ϰ' => "\u{3ba}",
+        'ϱ' => "\u{3c1}",
+        'ϵ' => "\u{3b5}",
+        'ẛ' => "\u{1e61}",
+        '\u{1c80}' => "\u{432}",
+        '\u{1c81}' => "\u{434}",
+        '\u{1c82}' => "\u{43e}",
+        '\u{1c83}' => "\u{441}",
+        '\u{1c84}' | '\u{1c85}' => "\u{442}",
+        '\u{1c86}' => "\u{44a}",
+        '\u{1c87}' => "\u{463}",
+        '\u{1c88}' => "\u{a64b}",
+        _ => return None,
+    })
+}
+
 /// `json.dumps(text)` for one string: Python's `ensure_ascii=True` escaping,
 /// double-quoted.
 pub fn dumps_str(text: &str) -> String {
@@ -391,6 +606,41 @@ mod tests {
         for (value, expected) in cases {
             assert_eq!(float_repr(value), expected, "{value}");
         }
+    }
+
+    #[test]
+    fn casefold_matches_python() {
+        // Expected values are Python 3.12's `str.casefold()`.
+        for (text, folded) in [
+            ("Straße", "strasse"),
+            ("ẞ", "ss"),
+            ("ΌΣΟΣ", "όσοσ"),
+            ("ὀδυσσεύς", "ὀδυσσεύσ"),
+            ("ﬁle", "file"),
+            ("İstanbul", "i\u{307}stanbul"),
+            ("ᾈ", "\u{1f00}\u{3b9}"),
+            ("µ", "\u{3bc}"),
+            ("ſ", "s"),
+            ("ꭰ", "Ꭰ"),
+            ("MixedCase_ID", "mixedcase_id"),
+        ] {
+            assert_eq!(casefold(text), folded, "{text}");
+        }
+    }
+
+    #[test]
+    fn dumps_compact_matches_python_json_key() {
+        // json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        let value = json!({
+            "b": [1, 2.5, true, null],
+            "a": {"z": "x", "y": "é\u{1F600}\"\\\n\u{7f}\u{1}"},
+        });
+        assert_eq!(
+            dumps_compact(&value),
+            "{\"a\":{\"y\":\"é\u{1F600}\\\"\\\\\\n\u{7f}\\u0001\",\"z\":\"x\"},\"b\":[1,2.5,true,null]}"
+        );
+        assert_eq!(dumps_compact(&json!(1.0)), "1.0");
+        assert_eq!(dumps_compact(&json!({})), "{}");
     }
 
     #[test]

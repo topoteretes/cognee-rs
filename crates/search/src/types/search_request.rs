@@ -70,6 +70,13 @@ pub struct SearchRequest {
     /// answer byte-identical and `SearchResponse::evidence` empty.
     #[serde(default)]
     pub include_references: bool,
+    /// The structured `CODE` operation and its arguments, e.g.
+    /// `{"operation": "neighbors", "name": "create_order"}` (Python's
+    /// `code_query`, `api/v1/search/search.py:73`). Only valid with
+    /// [`SearchType::Code`]; it is merged over `retriever_specific_config`
+    /// (its keys win), as Python merges it.
+    #[serde(default)]
+    pub code_query: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl SearchRequest {
@@ -107,6 +114,40 @@ impl SearchRequest {
             .unwrap_or(default)
     }
 
+    /// The configuration a `CODE` search runs with: `retriever_specific_config`
+    /// with `code_query` merged over it (Python's
+    /// `retriever_specific_config.update(code_query)`, `search.py:410-412`).
+    pub fn code_config(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut config: serde_json::Map<String, serde_json::Value> = self
+            .retriever_specific_config
+            .iter()
+            .flatten()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        if let Some(code_query) = &self.code_query {
+            for (key, value) in code_query {
+                config.insert(key.clone(), value.clone());
+            }
+        }
+        config
+    }
+
+    /// Python's check that `code_query` comes with the `CODE` search type
+    /// (`api/v1/search/search.py:282-286`).
+    ///
+    /// # Errors
+    ///
+    /// [`SearchError::QueryValidation`](crate::types::SearchError::QueryValidation)
+    /// with Python's message when `code_query` is set for another type.
+    pub fn validate_code_query(&self) -> Result<(), crate::types::SearchError> {
+        if self.code_query.is_some() && self.search_type != SearchType::Code {
+            return Err(crate::types::SearchError::QueryValidation(
+                "code_query requires query_type=SearchType.CODE.".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Get a `usize` value from `retriever_specific_config`, with a fallback.
     pub fn retriever_config_usize(&self, key: &str, default: usize) -> usize {
         self.retriever_specific_config
@@ -126,6 +167,58 @@ impl SearchRequest {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn code_query_round_trips_and_merges_over_the_retriever_config() {
+        let json = r#"{
+            "query_text": "create_order",
+            "search_type": "CODE",
+            "retriever_specific_config": {"operation": "explore", "limit": 3},
+            "code_query": {"operation": "neighbors", "name": "create_order"}
+        }"#;
+        let request: SearchRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request.search_type, SearchType::Code);
+        let config = request.code_config();
+        assert_eq!(config["operation"], serde_json::json!("neighbors"));
+        assert_eq!(config["name"], serde_json::json!("create_order"));
+        assert_eq!(config["limit"], serde_json::json!(3));
+        request.validate_code_query().unwrap();
+
+        let value = serde_json::to_value(&request).unwrap();
+        assert_eq!(value["search_type"], serde_json::json!("CODE"));
+        assert_eq!(
+            value["code_query"],
+            serde_json::json!({"operation": "neighbors", "name": "create_order"})
+        );
+        let back: SearchRequest = serde_json::from_value(value).unwrap();
+        assert_eq!(back.code_query, request.code_query);
+
+        let absent: SearchRequest = serde_json::from_str(r#"{"query_text": "q"}"#).unwrap();
+        assert_eq!(absent.code_query, None);
+        assert!(
+            serde_json::from_str::<SearchRequest>(
+                r#"{"query_text": "q", "search_type": "CODE", "code_query": [1]}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn code_query_requires_the_code_search_type() {
+        let request: SearchRequest = serde_json::from_str(
+            r#"{"query_text": "q", "search_type": "CHUNKS", "code_query": {"operation": "delta"}}"#,
+        )
+        .unwrap();
+        let error = request.validate_code_query().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "code_query requires query_type=SearchType.CODE."
+        );
+        assert!(matches!(
+            error,
+            crate::types::SearchError::QueryValidation(_)
+        ));
+    }
 
     #[test]
     fn node_name_deserializes_as_vec() {

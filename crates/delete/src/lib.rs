@@ -60,6 +60,24 @@ fn resolved_data_id(request: &DeleteRequest, targets: &ResolvedDeleteTargets) ->
     }
 }
 
+/// Invalidate the CODE search's parsed code-graph snapshots a delete of
+/// `scope` may have made stale: the one dataset a by-id scope names (and the
+/// unscoped snapshots), else every snapshot, since a by-name or store-wide
+/// scope may reach any dataset.
+///
+/// A deliberate divergence from Python, which invalidates on delete only when
+/// a code repository is deleted from a dataset that survives
+/// (`cluster.mark_dataset_code_repos_for_rebuild`) and otherwise serves the
+/// pre-delete snapshot until its entry expires (60 seconds by default).
+fn invalidate_code_snapshots(scope: &DeleteScope) {
+    match scope {
+        DeleteScope::DataInDataset { dataset_id, .. } | DeleteScope::DatasetById { dataset_id } => {
+            cognee_code_graph::query::invalidate_code_graph_snapshots(Some(*dataset_id));
+        }
+        _ => cognee_code_graph::query::clear_code_graph_snapshot_cache(),
+    }
+}
+
 /// Map a `DeleteScope` variant to a human-readable label matching Python's
 /// `COGNEE_FORGET_TARGET` values.
 fn scope_label(scope: &DeleteScope) -> &'static str {
@@ -783,7 +801,21 @@ impl DeleteService {
     /// [`Self::execute`] for every scope but `User` (expanded per dataset
     /// before it gets here). Never calls [`Self::execute`], so the per-dataset
     /// loops built on it do not recurse.
+    ///
+    /// Whatever the outcome, the CODE search's parsed code-graph snapshots of
+    /// the affected datasets are invalidated afterwards
+    /// ([`invalidate_code_snapshots`]), since a delete that failed part way
+    /// may still have changed the graph.
     async fn execute_resolved(&self, request: &DeleteRequest) -> Result<DeleteResult, DeleteError> {
+        let outcome = self.execute_resolved_inner(request).await;
+        invalidate_code_snapshots(&request.scope);
+        outcome
+    }
+
+    async fn execute_resolved_inner(
+        &self,
+        request: &DeleteRequest,
+    ) -> Result<DeleteResult, DeleteError> {
         let targets = self.resolve_targets(request).await?;
 
         info!(
@@ -9289,5 +9321,63 @@ mod tests {
             vec![triplet_vector_id(&structural[1])]
         );
         assert_eq!(result.deleted_vector_points, 1);
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod code_snapshot_tests {
+    use std::sync::Arc;
+
+    use cognee_code_graph::query::{
+        CodeGraphSnapshot, SnapshotCacheKey, code_graph_snapshot_cache,
+    };
+    use cognee_graph::{GraphDBTrait, MockGraphDB};
+    use uuid::Uuid;
+
+    use super::{DeleteScope, invalidate_code_snapshots};
+
+    async fn cached(dataset: Uuid, graph: &Arc<dyn GraphDBTrait>) -> SnapshotCacheKey {
+        code_graph_snapshot_cache()
+            .get_or_load(Some(dataset), graph, || async {
+                Ok(CodeGraphSnapshot::empty())
+            })
+            .await
+            .unwrap();
+        SnapshotCacheKey::new(Some(dataset), graph)
+    }
+
+    /// Other tests of this binary delete concurrently and may clear the
+    /// process-wide cache too, so only the invalidation itself is asserted.
+    #[tokio::test]
+    async fn deletes_invalidate_the_code_snapshots_they_may_have_changed() {
+        let graph: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
+        let dataset = Uuid::new_v4();
+        let key = cached(dataset, &graph).await;
+        invalidate_code_snapshots(&DeleteScope::DatasetById {
+            dataset_id: dataset,
+        });
+        assert!(!code_graph_snapshot_cache().contains(&key));
+
+        let key = cached(dataset, &graph).await;
+        invalidate_code_snapshots(&DeleteScope::DataInDataset {
+            dataset_id: dataset,
+            data_id: Uuid::new_v4(),
+            delete_dataset_if_empty: false,
+        });
+        assert!(!code_graph_snapshot_cache().contains(&key));
+
+        // A by-name scope may reach any dataset: every snapshot goes.
+        let key = cached(dataset, &graph).await;
+        invalidate_code_snapshots(&DeleteScope::Dataset {
+            owner_id: Uuid::new_v4(),
+            dataset_name: "code".into(),
+            tenant_id: None,
+        });
+        assert!(!code_graph_snapshot_cache().contains(&key));
     }
 }

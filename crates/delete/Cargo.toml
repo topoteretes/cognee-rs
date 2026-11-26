@@ -15,6 +15,8 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+# A delete invalidates the CODE search's parsed code-graph snapshots.
+cognee-code-graph = { path = "../code-graph", version = "0.2.0" }
 cognee-core = { path = "../core", version = "0.2.0", features = ["pipeline-run-registry"] }
 cognee-database = { path = "../database", version = "0.2.0" }
 cognee-graph = { path = "../graph", version = "0.2.0" }

@@ -1,6 +1,7 @@
 mod advanced_graph_retrievers;
 mod base_retriever;
 mod chunks_retriever;
+mod code_retriever;
 mod completion_retriever;
 mod context_items;
 mod cypher_nl_retrievers;
@@ -26,6 +27,7 @@ pub use base_retriever::{DatasetScoping, SearchRetriever, SearchRetrieverRef};
     reason = "internal API for the later hybrid-assembly task (P1-07/P1-09)"
 )]
 pub use chunks_retriever::ChunksRetriever;
+pub use code_retriever::CodeRetriever;
 pub use completion_retriever::CompletionRetriever;
 pub use cypher_nl_retrievers::{CypherSearchRetriever, NaturalLanguageRetriever};
 pub use decomposition_retriever::{

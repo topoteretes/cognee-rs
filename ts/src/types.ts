@@ -203,7 +203,7 @@ export interface CogneeCognifyResult {
 // Phase 4 types
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** All 17 search type wire names (SCREAMING_SNAKE_CASE, matching Rust serde). */
+/** All 18 search type wire names (SCREAMING_SNAKE_CASE, matching Rust serde). */
 export type SearchTypeString =
   | "SUMMARIES"
   | "CHUNKS"
@@ -221,7 +221,8 @@ export type SearchTypeString =
   | "CODING_RULES"
   | "CHUNKS_LEXICAL"
   | "GRAPH_REPORT"
-  | "HYBRID_COMPLETION";
+  | "HYBRID_COMPLETION"
+  | "CODE";
 
 /**
  * Recall scope wire names (snake_case). "all" expands to "graph", "session",
@@ -323,6 +324,13 @@ export interface CogneeSearchOptions {
    * lane, defaulting to the chunk lane's own top-k.
    */
   retrieverSpecificConfig?: Record<string, unknown>;
+  /**
+   * With `searchType: "CODE"` only: the code-graph operation and its
+   * arguments (Python's `code_query`), e.g.
+   * `{ operation: "neighbors", name: "create_order" }`. Merged over
+   * `retrieverSpecificConfig`; any other search type refuses it.
+   */
+  codeQuery?: Record<string, unknown>;
   /** User UUID override (defaults to the handle's owner). */
   userId?: string;
 }

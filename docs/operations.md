@@ -641,12 +641,13 @@ item its fail-fast run cancelled; Rust reports it `Unreached`.
 
 ### search (retrieval)
 
-Unified orchestration across 17 retrieval strategies selected by `SearchType`
+Unified orchestration across 18 retrieval strategies selected by `SearchType`
 ([`crates/search/src/types/search_type.rs`](../crates/search/src/types/search_type.rs)):
 `GraphCompletion`, `GraphCompletionCot`, `GraphCompletionContextExtension`,
 `GraphCompletionDecomposition`, `GraphSummaryCompletion`, `GraphReport`, `RagCompletion`, `Chunks`,
 `Summaries`, `Temporal`, `Cypher`, `NaturalLanguage`, `FeelingLucky`, `Feedback`,
-`CodingRules`, `ChunksLexical`, `HybridCompletion` (default; combines vector search over
+`CodingRules`, `ChunksLexical`, `Code` (deterministic code-graph operations, see
+below), `HybridCompletion` (default; combines vector search over
 chunks/summaries/entities/edge-facts and
 1-hop graph-neighborhood expansion around matched entities, then answers via
 LLM completion). A hybrid search falls back to `GraphCompletion` when it sets
@@ -684,6 +685,24 @@ bound it, and `wide_search_top_k`, `node_name` (in the vector search) and
 `neighborhood_depth` do not apply. Unlike Python it skips `Triplet_text`, whose
 ids are never graph nodes. `GraphRetrieverCore::search_batch` sends a lone
 query to the single-query search instead, as `get_triplets_batch` does.
+
+`Code` (`CodeRetriever`, Python's `CodeRetriever`) runs one exact operation
+over the dataset's code graph — the one `cognify`'s code routes and
+`remember(content_type="code")` write — with no LLM, embedding or vector
+search. The request's `code_query` names the operation and its arguments and
+is merged over `retriever_specific_config`; `code_query` with any other search
+type is refused (`code_query requires query_type=SearchType.CODE.`). This
+build runs `query_facts`, `neighbors`, `subgraph`, `delta` and
+`capabilities`; the other Python operations and diagrams fail with
+`feature_unavailable` until they are ported. The result is structured JSON
+(an `only_context` search returns it as compact, key-sorted JSON text), and
+errors are `SearchError::Code` with Python's `error_code` / `error_param`.
+Over several datasets (per-dataset storage) a seed one dataset cannot resolve
+is that dataset's result, `{"seed_not_found": true, ...}`, not a failed
+search, and `search` returns one result per dataset. The code graph is read
+through a process-wide snapshot cache (`code_graph.snapshot_cache_*`) that
+code-graph loads and deletes invalidate. See
+[`crates/code-graph/README.md`](../crates/code-graph/README.md#querying-the-graph-the-code-search-engine).
 
 `GraphCompletionDecomposition` (`GraphCompletionDecompositionRetriever`, Python's
 retriever of the same name) is its main caller. One structured LLM call splits the

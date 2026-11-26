@@ -315,6 +315,7 @@ fn temporal_request() -> SearchRequest {
         neighborhood_depth: None,
         neighborhood_seed_top_k: None,
         include_references: false,
+        code_query: None,
     }
 }
 

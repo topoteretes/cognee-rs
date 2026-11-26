@@ -219,6 +219,75 @@ completion stamps, so the next `cognify()` re-extracts the cluster (Python's
 `mark_dataset_code_repos_for_rebuild`; this SDK's data-item delete already
 clears every row's stamps in the dataset).
 
+## Querying the graph: the CODE search engine
+
+`cognee_code_graph::query` is the engine behind the `CODE` search type
+(`cognee-search`'s `CodeRetriever`): deterministic queries over a dataset's
+code graph, with no LLM, embedding or vector search. A port of Python's
+`cognee/modules/retrieval/code_retriever.py` and `code_search_index.py` at the
+same pin.
+
+| Piece | Rust | Python |
+|---|---|---|
+| Read the code subgraph | `load_code_graph_snapshot` (`get_filtered_graph_data` over the 14 fact types and `CodeRepository`) | `CodeRetriever._snapshot` |
+| Indexes, adjacency, flows | `CodeGraphSnapshot` | `_CodeGraphSnapshot` |
+| Backend values as JSON | `normalize_value`, `normalize_properties`, `scalar_text`, `json_key` | `_normalize_value`, `_normalize_properties`, `_scalar_text`, `_json_key` |
+| Text search | `CodeSearchIndex`, `tokenize`, `query_terms`, `CodeGraphSnapshot::text_matches` | `code_search_index.py`, `_text_matches` |
+| Snapshot cache | `CodeGraphSnapshotCache`, `code_graph_snapshot_cache`, `invalidate_code_graph_snapshots` | `_CodeGraphSnapshotCache`, `invalidate_code_graph_snapshot_cache` |
+| Operation and diagram validation | `CodeRequest::parse` | `CodeRetriever.__init__`, `_diagram_format` |
+| Run an operation | `run_code_operation` | `CodeRetriever.get_retrieved_objects` |
+| Errors | `CodeQueryError` (`code`, `param`, `class`) | `CodeSearchValidationError`, `CodeSeedNotFoundError`, `CodeGraphUnavailableError` |
+
+**Snapshot.** Nodes are normalized as Python reads them: a string that starts
+with `{` or `[` and parses is JSON (Ladybug returns stored dicts as text), a
+nested `properties` object (or its JSON text) is flattened under the
+top-level keys, and a `doc` that is null or blank is dropped. Repository and
+flow nodes are held aside; everything else is indexed once (by type, name,
+file, repo, enola id and property, declarations, docs, test code, flow
+members) and the text index is built on first use. Sort orders compare
+Python's `str()` of each field and casefold names (`pyjson::casefold`, Python's
+`str.casefold`, not `to_lowercase`).
+
+**Operations.** `query_facts`, `neighbors`, `subgraph`, `delta` and
+`capabilities` run here, with Python's keys, ordering, defaults and bounds.
+The other ten (`explore`, `traverse`, `find_path`, `impact_analysis`,
+`insights`, `architecture`, `search`, `flows`, `hubs`, `ask`) are validated as
+Python validates them and then fail with `feature_unavailable` (param
+`operation`); so does a diagram of any result (param `diagram`), while the
+five undrawable operations reject a diagram with Python's `invalid_argument`.
+The default operation, as in Python, is `explore`. `capabilities` lists the
+operations this build runs, not Python's fifteen.
+
+**Errors.** Every error carries Python's message, `error_code`
+(`unknown_operation`, `invalid_argument`, `not_found`, `ambiguous`,
+`no_code_graph`, `feature_unavailable`) and `error_param`.
+`CodeQueryError::is_seed_miss` is Python's `CodeSeedNotFoundError` family: a
+multi-dataset search reports such an error as that dataset's result.
+
+**Cache.** One process-wide cache (`code_graph_snapshot_cache`), keyed by the
+dataset scope (`cognee_models::dataset_scope::current_dataset`, empty outside
+one) and the graph engine, bounded by `code_graph.snapshot_cache_max_entries`
+(16) and `code_graph.snapshot_cache_ttl_secs` (60). Loads are single-flight
+per key; an invalidation that overlaps a load makes its callers load again.
+`add_code_graph_data_points` and `add_code_graph_edges` invalidate the
+dataset they wrote (from the ledger owner, else the current dataset scope,
+else every entry), whatever their outcome, as Python's `finally` does. Two
+divergences, both towards fresher answers: invalidating a dataset also
+invalidates the unscoped entries (the shared store holds every dataset), and
+`cognee-delete` invalidates on every delete or forget, where Python
+invalidates only when a code repository is deleted from a surviving dataset;
+`prune` with `graph` clears the cache too.
+
+**Goldens.** `tests/code_query_goldens.rs` runs 80 cases (every operation,
+every validation message, the adapter quirks above) over
+`tests/fixtures/code_search/graph.json` and compares results, context text
+and errors with what Python's retriever returned
+(`tests/fixtures/code_search/goldens.json`, written by
+`scripts/generate_code_search_goldens.py`, which loads Python's retriever
+from a checkout at the pin with nothing but the standard library).
+`tests/code_query_ingested.rs` queries a graph this crate's writer loaded and
+checks the writer's invalidation.
+
 ## Nodes
 
 There are 15 node types. `CodeRepository` is one. The other 14 are

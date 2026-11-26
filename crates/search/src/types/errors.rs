@@ -54,6 +54,15 @@ pub enum SearchError {
     #[error("{0}")]
     QueryValidation(String),
 
+    /// A `CODE` operation failed: Python's `CodeSearchValidationError`
+    /// family, with its stable `error_code` and `error_param`
+    /// ([`CodeQueryError::code`](cognee_code_graph::query::CodeQueryError),
+    /// `param`). Displays as the bare message. In a search of several
+    /// datasets a seed miss ([`CodeQueryError::is_seed_miss`]) is reported
+    /// as that dataset's result instead of failing the search.
+    #[error(transparent)]
+    Code(#[from] cognee_code_graph::query::CodeQueryError),
+
     #[error("unsupported search type: {0:?}")]
     UnsupportedSearchType(crate::types::SearchType),
 

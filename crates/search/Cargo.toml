@@ -20,6 +20,8 @@ telemetry = ["cognee-telemetry/telemetry"]
 
 [dependencies]
 futures.workspace = true
+# The CODE search type: the code-graph query engine and its snapshot cache.
+cognee-code-graph = { path = "../code-graph", version = "0.2.0" }
 cognee-embedding = { path = "../embedding", version = "0.2.0" }
 cognee-database = { path = "../database", version = "0.2.0" }
 cognee-graph = { path = "../graph", version = "0.2.0" }

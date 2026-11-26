@@ -1313,6 +1313,72 @@
   "CHUNK_SIZE=\"{\\\"a\\\":1}\"": {},
   "CHUNK_SIZE=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "CHUNK_SIZE=\"{\\\"ssl\\\":true}\"": {},
+  "CODE_GRAPH_CACHE_MAX_ENTRIES=\"  \"": {},
+  "CODE_GRAPH_CACHE_MAX_ENTRIES=\"\"": {},
+  "CODE_GRAPH_CACHE_MAX_ENTRIES=\"-1\"": {},
+  "CODE_GRAPH_CACHE_MAX_ENTRIES=\"0\"": {
+    "code_graph.snapshot_cache_max_entries": 0
+  },
+  "CODE_GRAPH_CACHE_MAX_ENTRIES=\"1\"": {
+    "code_graph.snapshot_cache_max_entries": 1
+  },
+  "CODE_GRAPH_CACHE_MAX_ENTRIES=\"1.5\"": {},
+  "CODE_GRAPH_CACHE_MAX_ENTRIES=\"42\"": {
+    "code_graph.snapshot_cache_max_entries": 42
+  },
+  "CODE_GRAPH_CACHE_MAX_ENTRIES=\"5000000000\"": {},
+  "CODE_GRAPH_CACHE_MAX_ENTRIES=\"70000\"": {
+    "code_graph.snapshot_cache_max_entries": 70000
+  },
+  "CODE_GRAPH_CACHE_MAX_ENTRIES=\"TRUE\"": {},
+  "CODE_GRAPH_CACHE_MAX_ENTRIES=\"[1]\"": {},
+  "CODE_GRAPH_CACHE_MAX_ENTRIES=\"abc\"": {},
+  "CODE_GRAPH_CACHE_MAX_ENTRIES=\"false\"": {},
+  "CODE_GRAPH_CACHE_MAX_ENTRIES=\"no\"": {},
+  "CODE_GRAPH_CACHE_MAX_ENTRIES=\"on\"": {},
+  "CODE_GRAPH_CACHE_MAX_ENTRIES=\"require\"": {},
+  "CODE_GRAPH_CACHE_MAX_ENTRIES=\"true\"": {},
+  "CODE_GRAPH_CACHE_MAX_ENTRIES=\"v\"": {},
+  "CODE_GRAPH_CACHE_MAX_ENTRIES=\"yes\"": {},
+  "CODE_GRAPH_CACHE_MAX_ENTRIES=\"{\\\"a\\\":1}\"": {},
+  "CODE_GRAPH_CACHE_MAX_ENTRIES=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "CODE_GRAPH_CACHE_MAX_ENTRIES=\"{\\\"ssl\\\":true}\"": {},
+  "CODE_GRAPH_CACHE_TTL_SECONDS=\"  \"": {},
+  "CODE_GRAPH_CACHE_TTL_SECONDS=\"\"": {},
+  "CODE_GRAPH_CACHE_TTL_SECONDS=\"-1\"": {
+    "code_graph.snapshot_cache_ttl_secs": -1.0
+  },
+  "CODE_GRAPH_CACHE_TTL_SECONDS=\"0\"": {
+    "code_graph.snapshot_cache_ttl_secs": 0.0
+  },
+  "CODE_GRAPH_CACHE_TTL_SECONDS=\"1\"": {
+    "code_graph.snapshot_cache_ttl_secs": 1.0
+  },
+  "CODE_GRAPH_CACHE_TTL_SECONDS=\"1.5\"": {
+    "code_graph.snapshot_cache_ttl_secs": 1.5
+  },
+  "CODE_GRAPH_CACHE_TTL_SECONDS=\"42\"": {
+    "code_graph.snapshot_cache_ttl_secs": 42.0
+  },
+  "CODE_GRAPH_CACHE_TTL_SECONDS=\"5000000000\"": {
+    "code_graph.snapshot_cache_ttl_secs": 5000000000.0
+  },
+  "CODE_GRAPH_CACHE_TTL_SECONDS=\"70000\"": {
+    "code_graph.snapshot_cache_ttl_secs": 70000.0
+  },
+  "CODE_GRAPH_CACHE_TTL_SECONDS=\"TRUE\"": {},
+  "CODE_GRAPH_CACHE_TTL_SECONDS=\"[1]\"": {},
+  "CODE_GRAPH_CACHE_TTL_SECONDS=\"abc\"": {},
+  "CODE_GRAPH_CACHE_TTL_SECONDS=\"false\"": {},
+  "CODE_GRAPH_CACHE_TTL_SECONDS=\"no\"": {},
+  "CODE_GRAPH_CACHE_TTL_SECONDS=\"on\"": {},
+  "CODE_GRAPH_CACHE_TTL_SECONDS=\"require\"": {},
+  "CODE_GRAPH_CACHE_TTL_SECONDS=\"true\"": {},
+  "CODE_GRAPH_CACHE_TTL_SECONDS=\"v\"": {},
+  "CODE_GRAPH_CACHE_TTL_SECONDS=\"yes\"": {},
+  "CODE_GRAPH_CACHE_TTL_SECONDS=\"{\\\"a\\\":1}\"": {},
+  "CODE_GRAPH_CACHE_TTL_SECONDS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "CODE_GRAPH_CACHE_TTL_SECONDS=\"{\\\"ssl\\\":true}\"": {},
   "COGNEE_ALLOWED_LOCAL_FILE_ROOTS=\"  \"": {
     "allowed_local_file_roots": "  "
   },

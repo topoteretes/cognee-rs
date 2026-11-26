@@ -338,6 +338,7 @@ fn request(search_type: SearchType, query: &str) -> SearchRequest {
         neighborhood_depth: None,
         neighborhood_seed_top_k: None,
         include_references: false,
+        code_query: None,
     }
 }
 

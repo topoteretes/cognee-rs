@@ -502,12 +502,12 @@ void cg_sdk_add_and_cognify(const CgSdk*        sdk,
  *                                          //  structured, source: "graph"}
  *     }
  *
- * SearchType strings (SCREAMING_SNAKE_CASE — all 17 valid values):
+ * SearchType strings (SCREAMING_SNAKE_CASE — all 18 valid values):
  *   SUMMARIES, CHUNKS, RAG_COMPLETION, GRAPH_COMPLETION,
  *   GRAPH_COMPLETION_DECOMPOSITION, GRAPH_SUMMARY_COMPLETION, CYPHER,
  *   NATURAL_LANGUAGE, GRAPH_COMPLETION_COT, GRAPH_COMPLETION_CONTEXT_EXTENSION,
  *   FEELING_LUCKY, FEEDBACK, TEMPORAL, CODING_RULES, CHUNKS_LEXICAL,
- *   GRAPH_REPORT, HYBRID_COMPLETION
+ *   GRAPH_REPORT, HYBRID_COMPLETION, CODE
  *
  * RecallScope strings (10 valid values, Python's sorted list):
  *   "all" | "auto" | "code" | "graph" | "graph_context" | "session" |

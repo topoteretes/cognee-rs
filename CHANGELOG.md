@@ -376,6 +376,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicit `source_uri` in the item's metadata still wins. Unset, nothing
   changes. The closed HTTP server sets it, so `/cognify`'s
   `data_location` is `null` for an upload instead of its spool path.
+- **The `CODE` search type, first stage (SDK-1056 P1a).** A port of Python's
+  deterministic code-graph search (`code_retriever.py`, parity pin
+  `a59433e6b`): `SearchType::Code` (`"CODE"`), `SearchRequest::code_query`
+  (merged over `retriever_specific_config`; refused with any other type, with
+  Python's message), the `CodeRetriever` (no LLM, no session turn, a
+  `Structured` result whose `only_context` form is Python's compact,
+  key-sorted JSON context) and `SearchError::Code`, which carries Python's
+  `error_code` and `error_param`. The engine lives in
+  `cognee_code_graph::query`: the snapshot loader and indexes, Python's
+  value normalization (JSON text, nested `properties`, blank docs), the BM25
+  text index, `casefold`, and the operations `query_facts`, `neighbors`,
+  `subgraph`, `delta` and `capabilities`, checked against 80 results Python
+  produced (`scripts/generate_code_search_goldens.py`). The other ten
+  operations and diagrams are validated as in Python but fail with
+  `feature_unavailable` for now. Under per-dataset storage a seed that one of
+  several datasets cannot resolve is that dataset's result
+  (`{"seed_not_found": true, "error", "code", "param"}`), not a failed search,
+  and a merged CODE search returns one result per dataset. Parsed snapshots
+  are cached per dataset and graph engine (`code_graph.snapshot_cache_max_entries`
+  / `CODE_GRAPH_CACHE_MAX_ENTRIES`, default 16; `code_graph.snapshot_cache_ttl_secs`
+  / `CODE_GRAPH_CACHE_TTL_SECONDS`, default 60) and invalidated by every
+  code-graph load and, unlike Python, by every delete, forget and graph prune.
+  `cognee-cli search -t CODE` now runs it (with `--code-query`) instead of
+  the `CODING_RULES` stand-in, and the bindings take `codeQuery` (`CODE` is in
+  the Python, TS, Java and C search-type lists). `FEELING_LUCKY` no longer
+  reads a selector's `CODE` answer as `CODING_RULES`: as in Python's
+  `select_search_type`, CODE is never auto-selected and the answer falls back.
+  `SearchRequest` gained a field, so struct literals need `code_query: None`.
+
 - **`allowed_local_file_roots` (`COGNEE_ALLOWED_LOCAL_FILE_ROOTS`, SDK-1701).**
   Python's opt-in allowlist for local repository paths: empty is no
   restriction; set (even to `:`), a local repository must resolve under one

@@ -24,6 +24,8 @@
     "code_graph.clones_dir",
     "code_graph.enola_path",
     "code_graph.enola_timeout_secs",
+    "code_graph.snapshot_cache_max_entries",
+    "code_graph.snapshot_cache_ttl_secs",
     "cognee_tracing_enabled",
     "cognify.cascade_rounds",
     "cognify.chunks_per_batch",
@@ -356,6 +358,8 @@
     "code_graph.enola_path",
     "code_graph.enola_timeout_secs",
     "code_graph.clones_dir",
+    "code_graph.snapshot_cache_max_entries",
+    "code_graph.snapshot_cache_ttl_secs",
     "vector.pgvector.hnsw_m",
     "vector.pgvector.hnsw_ef_construction",
     "vector.pgvector.maintenance_workers",
@@ -2567,6 +2571,114 @@
     "err": true
   },
   "set code_graph.enola_timeout_secs <- {\"a\":1}": {
+    "err": true
+  },
+  "set code_graph.snapshot_cache_max_entries <- \"\"": {
+    "err": true
+  },
+  "set code_graph.snapshot_cache_max_entries <- \"1\"": {
+    "err": true
+  },
+  "set code_graph.snapshot_cache_max_entries <- \"s\"": {
+    "err": true
+  },
+  "set code_graph.snapshot_cache_max_entries <- \"true\"": {
+    "err": true
+  },
+  "set code_graph.snapshot_cache_max_entries <- -1": {
+    "err": true
+  },
+  "set code_graph.snapshot_cache_max_entries <- 0": {
+    "ok": {
+      "code_graph.snapshot_cache_max_entries": 0
+    }
+  },
+  "set code_graph.snapshot_cache_max_entries <- 1": {
+    "ok": {
+      "code_graph.snapshot_cache_max_entries": 1
+    }
+  },
+  "set code_graph.snapshot_cache_max_entries <- 1.5": {
+    "err": true
+  },
+  "set code_graph.snapshot_cache_max_entries <- 5000000000": {
+    "err": true
+  },
+  "set code_graph.snapshot_cache_max_entries <- 70000": {
+    "ok": {
+      "code_graph.snapshot_cache_max_entries": 70000
+    }
+  },
+  "set code_graph.snapshot_cache_max_entries <- [1]": {
+    "err": true
+  },
+  "set code_graph.snapshot_cache_max_entries <- false": {
+    "err": true
+  },
+  "set code_graph.snapshot_cache_max_entries <- null": {
+    "err": true
+  },
+  "set code_graph.snapshot_cache_max_entries <- true": {
+    "err": true
+  },
+  "set code_graph.snapshot_cache_max_entries <- {\"a\":1}": {
+    "err": true
+  },
+  "set code_graph.snapshot_cache_ttl_secs <- \"\"": {
+    "err": true
+  },
+  "set code_graph.snapshot_cache_ttl_secs <- \"1\"": {
+    "err": true
+  },
+  "set code_graph.snapshot_cache_ttl_secs <- \"s\"": {
+    "err": true
+  },
+  "set code_graph.snapshot_cache_ttl_secs <- \"true\"": {
+    "err": true
+  },
+  "set code_graph.snapshot_cache_ttl_secs <- -1": {
+    "ok": {
+      "code_graph.snapshot_cache_ttl_secs": -1.0
+    }
+  },
+  "set code_graph.snapshot_cache_ttl_secs <- 0": {
+    "ok": {
+      "code_graph.snapshot_cache_ttl_secs": 0.0
+    }
+  },
+  "set code_graph.snapshot_cache_ttl_secs <- 1": {
+    "ok": {
+      "code_graph.snapshot_cache_ttl_secs": 1.0
+    }
+  },
+  "set code_graph.snapshot_cache_ttl_secs <- 1.5": {
+    "ok": {
+      "code_graph.snapshot_cache_ttl_secs": 1.5
+    }
+  },
+  "set code_graph.snapshot_cache_ttl_secs <- 5000000000": {
+    "ok": {
+      "code_graph.snapshot_cache_ttl_secs": 5000000000.0
+    }
+  },
+  "set code_graph.snapshot_cache_ttl_secs <- 70000": {
+    "ok": {
+      "code_graph.snapshot_cache_ttl_secs": 70000.0
+    }
+  },
+  "set code_graph.snapshot_cache_ttl_secs <- [1]": {
+    "err": true
+  },
+  "set code_graph.snapshot_cache_ttl_secs <- false": {
+    "err": true
+  },
+  "set code_graph.snapshot_cache_ttl_secs <- null": {
+    "err": true
+  },
+  "set code_graph.snapshot_cache_ttl_secs <- true": {
+    "err": true
+  },
+  "set code_graph.snapshot_cache_ttl_secs <- {\"a\":1}": {
     "err": true
   },
   "set cognee_tracing_enabled <- \"\"": {
@@ -16167,6 +16279,20 @@
     }
   },
   "unset code_graph.enola_timeout_secs": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset code_graph.snapshot_cache_max_entries": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset code_graph.snapshot_cache_ttl_secs": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

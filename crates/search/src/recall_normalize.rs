@@ -66,6 +66,7 @@ impl RecallResultKind {
             S::CodingRules => Self::CodingRule,
             S::Chunks | S::ChunksLexical => Self::Chunk,
             S::Summaries => Self::Summary,
+            S::Code => Self::Code,
             S::FeelingLucky | S::GraphReport | S::Feedback => Self::Unknown,
         }
     }

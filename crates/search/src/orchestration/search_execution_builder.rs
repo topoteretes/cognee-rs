@@ -13,12 +13,12 @@ use crate::graph_warmup::GraphWarmup;
 use crate::orchestration::{SearchOrchestrator, SearchTypeRegistry, SessionSearchMode};
 use crate::query_router::RoutingConstraints;
 use crate::retrievers::{
-    ChunksRetriever, CodingRulesRetriever, CompletionRetriever, CypherSearchRetriever,
-    FeedbackRetriever, FeelingLuckyRetriever, GraphCompletionContextExtensionRetriever,
-    GraphCompletionCotRetriever, GraphCompletionDecompositionRetriever, GraphCompletionRetriever,
-    GraphReportRetriever, GraphSummaryCompletionRetriever, HybridBudget, HybridRetriever,
-    LexicalRetriever, NaturalLanguageRetriever, SearchRetrieverRef, SummariesRetriever,
-    TemporalHybridRetriever,
+    ChunksRetriever, CodeRetriever, CodingRulesRetriever, CompletionRetriever,
+    CypherSearchRetriever, FeedbackRetriever, FeelingLuckyRetriever,
+    GraphCompletionContextExtensionRetriever, GraphCompletionCotRetriever,
+    GraphCompletionDecompositionRetriever, GraphCompletionRetriever, GraphReportRetriever,
+    GraphSummaryCompletionRetriever, HybridBudget, HybridRetriever, LexicalRetriever,
+    NaturalLanguageRetriever, SearchRetrieverRef, SummariesRetriever, TemporalHybridRetriever,
 };
 use crate::types::SearchType;
 use crate::user_preferences::PreferenceConfig;
@@ -56,6 +56,10 @@ pub struct SearchTuning {
     /// Feedback-weight influence of a graph search whose request leaves
     /// `feedback_influence` unset (`default_feedback_influence`). Default 0.
     pub default_feedback_influence: f32,
+    /// The bounds of the process-wide CODE snapshot cache
+    /// (`code_graph.snapshot_cache_max_entries` / `_ttl_secs`), applied by
+    /// [`SearchBuilder::build`]. Default 16 entries, 60 seconds.
+    pub code_graph_cache: cognee_code_graph::query::SnapshotCacheLimits,
 }
 
 impl Default for SearchTuning {
@@ -70,6 +74,7 @@ impl Default for SearchTuning {
             default_system_prompt_path: None,
             personalization: PreferenceConfig::default(),
             default_feedback_influence: 0.0,
+            code_graph_cache: cognee_code_graph::query::SnapshotCacheLimits::default(),
         }
     }
 }
@@ -444,6 +449,16 @@ impl SearchBuilder {
             )),
         );
 
+        // Not in FEELING_LUCKY's pool: a CODE search needs a `code_query`
+        // naming its operation, which no auto-selected search carries.
+        retrievers.insert(
+            SearchType::Code,
+            // Python wires CODE to `CodeRetriever(config=retriever_specific_config)`
+            // (`get_search_type_retriever_instance.py:162`); the config is read
+            // per search from `SearchParams::code_config`.
+            Arc::new(CodeRetriever::new(graph_db)),
+        );
+
         retrievers
     }
 
@@ -455,6 +470,9 @@ impl SearchBuilder {
     /// uses its own engines everywhere. A retriever added with
     /// [`Self::register_retriever`] keeps the engines it was built with.
     pub fn build(mut self) -> SearchOrchestrator {
+        // The cache is process-wide (the code-graph writer invalidates it),
+        // so the last orchestrator built sets its bounds.
+        cognee_code_graph::query::configure_code_graph_snapshot_cache(self.tuning.code_graph_cache);
         self.engines.llm = Arc::new(RoutedLlm::new(self.engines.llm));
         self.engines.embedding_engine =
             Arc::new(RoutedEmbedding::new(self.engines.embedding_engine));
@@ -873,6 +891,7 @@ mod tests {
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
             include_references: false,
+            code_query: None,
         }
     }
 
@@ -1308,6 +1327,7 @@ mod tests {
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
             include_references: false,
+            code_query: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -1388,6 +1408,7 @@ mod tests {
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
             include_references: false,
+            code_query: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -1442,6 +1463,7 @@ mod tests {
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
             include_references: false,
+            code_query: None,
         };
 
         let result = orchestrator.search(&request).await;
@@ -1521,6 +1543,8 @@ mod tests {
             (SearchType::ChunksLexical, false),
             (SearchType::GraphReport, false),
             (SearchType::HybridCompletion, true),
+            // Python's `CodeRetriever.supports_session_turn_preparation = False`.
+            (SearchType::Code, false),
         ];
         assert_eq!(expected.len(), retrievers.len());
         for (search_type, prepares) in expected {

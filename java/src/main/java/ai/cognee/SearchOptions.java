@@ -54,6 +54,15 @@ public final class SearchOptions extends Options {
      */
     public SearchOptions retrieverSpecificConfig(Map<String, Object> c) { put("retrieverSpecificConfig", c); return this; }
     /**
+     * With {@link SearchType#CODE} only: the code-graph operation and its
+     * arguments (Python's {@code code_query}), e.g.
+     * {@code {"operation": "neighbors", "name": "create_order"}}. Merged over
+     * {@link #retrieverSpecificConfig}; any other search type refuses it.
+     *
+     * @param q the operation and its snake_case arguments
+     */
+    public SearchOptions codeQuery(Map<String, Object> q) { put("codeQuery", q); return this; }
+    /**
      * Run this search with its own LLM (Python's {@code llm_config}): {@code llm.*}
      * settings keyed by their Python names ({@code llm_provider}, {@code llm_model},
      * {@code llm_api_key}, ...). It replaces the whole configured LLM section for

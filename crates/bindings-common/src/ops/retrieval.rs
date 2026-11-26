@@ -56,7 +56,7 @@ use crate::{HandleState, SdkError};
 /// Uses `serde_json::from_value` so the exact path matches what the HTTP
 /// server uses and is guaranteed to stay in sync with the serde attribute.
 ///
-/// Returns `SdkError::Validation` on unknown string, listing all 17 valid values.
+/// Returns `SdkError::Validation` on unknown string, listing all 18 valid values.
 pub fn parse_search_type(s: &str) -> Result<SearchType, SdkError> {
     serde_json::from_value(serde_json::Value::String(s.to_string())).map_err(|_| {
         SdkError::Validation(format!(
@@ -64,7 +64,7 @@ pub fn parse_search_type(s: &str) -> Result<SearchType, SdkError> {
              GRAPH_COMPLETION, GRAPH_COMPLETION_DECOMPOSITION, \
              GRAPH_SUMMARY_COMPLETION, CYPHER, NATURAL_LANGUAGE, GRAPH_COMPLETION_COT, \
              GRAPH_COMPLETION_CONTEXT_EXTENSION, FEELING_LUCKY, FEEDBACK, TEMPORAL, CODING_RULES, \
-             CHUNKS_LEXICAL, GRAPH_REPORT, HYBRID_COMPLETION"
+             CHUNKS_LEXICAL, GRAPH_REPORT, HYBRID_COMPLETION, CODE"
         ))
     })
 }
@@ -539,6 +539,19 @@ pub fn build_search_request(
                 .collect()
         });
 
+    // `codeQuery`: the CODE operation and its arguments (Python's
+    // `code_query`). An object or nothing; the orchestrator refuses it with
+    // any other search type, as Python's `search()` does.
+    let code_query = match opts.get("codeQuery").filter(|v| !v.is_null()) {
+        None => None,
+        Some(serde_json::Value::Object(map)) => Some(map.clone()),
+        Some(other) => {
+            return Err(SdkError::Validation(format!(
+                "`codeQuery` must be an object, got {other}"
+            )));
+        }
+    };
+
     Ok(SearchRequest {
         query_text: query.to_string(),
         search_type,
@@ -575,6 +588,7 @@ pub fn build_search_request(
         neighborhood_depth,
         neighborhood_seed_top_k,
         include_references: parse_include_references(opts),
+        code_query,
     })
 }
 
@@ -1360,6 +1374,29 @@ mod tests {
     /// every knob it had not heard of. `text_summaries_top_k` is the one the
     /// hybrid retriever's chunk lane reads; the nonsense key alongside it
     /// asserts the pass-through is not a whitelist.
+    #[test]
+    fn build_search_request_carries_the_code_query() {
+        let opts = json!({
+            "searchType": "CODE",
+            "codeQuery": {"operation": "neighbors", "name": "create_order"},
+        });
+        let request = build_search_request("q", &opts, Uuid::nil()).unwrap();
+        assert_eq!(request.search_type, SearchType::Code);
+        assert_eq!(
+            request
+                .code_query
+                .as_ref()
+                .map(|query| query["operation"].clone()),
+            Some(json!("neighbors"))
+        );
+        let none = build_search_request("q", &json!({"codeQuery": null}), Uuid::nil()).unwrap();
+        assert_eq!(none.code_query, None);
+        let error =
+            build_search_request("q", &json!({"codeQuery": "delta"}), Uuid::nil()).unwrap_err();
+        assert!(matches!(error, SdkError::Validation(message) if message.contains("codeQuery")));
+        assert!(parse_search_type("CODE").is_ok());
+    }
+
     #[test]
     fn build_search_request_carries_retriever_specific_config() {
         let opts = json!({

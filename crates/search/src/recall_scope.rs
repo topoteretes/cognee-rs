@@ -1038,6 +1038,7 @@ pub async fn run_graph(
         neighborhood_depth: options.and_then(|o| o.neighborhood_depth),
         neighborhood_seed_top_k: options.and_then(|o| o.neighborhood_seed_top_k),
         include_references: options.is_some_and(|o| o.include_references),
+        code_query: None,
     };
 
     let (response, search_type) = plan

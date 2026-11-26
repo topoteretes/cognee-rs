@@ -20,6 +20,7 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
     }
 
     let mapped_query_type = map_query_type(args.query_type);
+    let code_query = parse_code_query(args.code_query.as_deref())?;
 
     if requires_llm(mapped_query_type) && settings.llm().api_key.is_empty() {
         warn!("Warning: llm_api_key is empty. LLM-based search types may fail at runtime.");
@@ -119,6 +120,7 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             neighborhood_seed_top_k: args.neighborhood_seed_top_k.map(usize::from),
             // The CLI prints the answer text only; it has no flag for references.
             include_references: false,
+            code_query,
         };
 
         let response = orchestrator
@@ -138,12 +140,27 @@ fn map_query_type(query_type: QueryTypeArg) -> SearchType {
         QueryTypeArg::RagCompletion => SearchType::RagCompletion,
         QueryTypeArg::Chunks => SearchType::Chunks,
         QueryTypeArg::Summaries => SearchType::Summaries,
-        QueryTypeArg::Code => {
-            warn!("Warning: CODE is mapped to CODING_RULES compatibility mode.");
-            SearchType::CodingRules
-        }
+        QueryTypeArg::Code => SearchType::Code,
         QueryTypeArg::Cypher => SearchType::Cypher,
         QueryTypeArg::Temporal => SearchType::Temporal,
+    }
+}
+
+/// `--code-query`: a JSON object, or nothing.
+fn parse_code_query(
+    text: Option<&str>,
+) -> Result<Option<serde_json::Map<String, serde_json::Value>>, CliError> {
+    let Some(text) = text else {
+        return Ok(None);
+    };
+    match serde_json::from_str(text) {
+        Ok(serde_json::Value::Object(object)) => Ok(Some(object)),
+        Ok(_) => Err(CliError::Validation(
+            "--code-query must be a JSON object".to_string(),
+        )),
+        Err(error) => Err(CliError::Validation(format!(
+            "--code-query is not valid JSON: {error}"
+        ))),
     }
 }
 
@@ -247,9 +264,45 @@ fn render_output(
                 }
             }
             SearchOutput::Ack { message } => println!("{message}"),
-            SearchOutput::Structured(value) => println!("{}", value),
+            SearchOutput::Structured(value) => println!(
+                "{}",
+                serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+            ),
         },
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn code_is_the_code_search_type_and_needs_no_llm() {
+        assert_eq!(map_query_type(QueryTypeArg::Code), SearchType::Code);
+        assert!(!requires_llm(SearchType::Code));
+    }
+
+    #[test]
+    fn code_query_must_be_a_json_object() {
+        assert_eq!(parse_code_query(None).unwrap(), None);
+        let parsed = parse_code_query(Some(r#"{"operation": "delta"}"#))
+            .unwrap()
+            .unwrap();
+        assert_eq!(parsed["operation"], serde_json::json!("delta"));
+        assert!(matches!(
+            parse_code_query(Some("[1]")),
+            Err(CliError::Validation(message)) if message == "--code-query must be a JSON object"
+        ));
+        assert!(matches!(
+            parse_code_query(Some("{")),
+            Err(CliError::Validation(message)) if message.starts_with("--code-query is not valid JSON")
+        ));
+    }
 }
