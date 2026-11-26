@@ -248,6 +248,58 @@ pub fn identifier_arg(config: &CodeConfig, fields: &[&str]) -> CodeQueryResult<O
     Ok(None)
 }
 
+/// `_confidence`: a number (not a boolean) between 0 and 1 as `f64`, `None`
+/// when missing.
+pub fn confidence(value: Option<&Value>, field: &str) -> CodeQueryResult<Option<f64>> {
+    let Some(value) = value.filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    match value.as_f64() {
+        Some(number) if (0.0..=1.0).contains(&number) => Ok(Some(number)),
+        _ => Err(CodeQueryError::invalid(
+            format!("CODE {field} must be a number between 0 and 1."),
+            field,
+        )),
+    }
+}
+
+/// `_optional_bool`: a boolean, or the text `true`/`false` (any case, outer
+/// whitespace ignored); `None` when missing.
+pub fn optional_bool(value: Option<&Value>, field: &str) -> CodeQueryResult<Option<bool>> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(flag)) => Ok(Some(*flag)),
+        Some(Value::String(text)) if py_strip(text).to_lowercase() == "true" => Ok(Some(true)),
+        Some(Value::String(text)) if py_strip(text).to_lowercase() == "false" => Ok(Some(false)),
+        Some(_) => Err(CodeQueryError::invalid(
+            format!("CODE {field} must be a boolean."),
+            field,
+        )),
+    }
+}
+
+/// Python's `config.get(a) or config.get(b) or ...`: the first truthy value
+/// among `fields`.
+pub fn first_truthy<'a>(config: &'a CodeConfig, fields: &[&str]) -> Option<&'a Value> {
+    fields
+        .iter()
+        .filter_map(|field| config.get(*field))
+        .find(|value| is_truthy(value))
+}
+
+/// [`first_truthy`] as Python's `str()` of it: how `resolve` reads a name or
+/// an id it was handed straight from the configuration (so a number or a
+/// list is looked up as its text, and simply does not resolve).
+pub fn first_truthy_text(config: &CodeConfig, fields: &[&str]) -> Option<String> {
+    first_truthy(config, fields).map(py_str)
+}
+
+/// `config.get(field, default)` read as a truth value: `default` only when
+/// the key is absent (a present `null` is falsy, as in Python).
+pub fn flag_or(config: &CodeConfig, field: &str, default: bool) -> bool {
+    config.get(field).map_or(default, is_truthy)
+}
+
 /// `str(config[field])` when the field is truthy (`if self.config.get(field):
 /// ...append(str(self.config[field]))`).
 pub fn truthy_text(config: &CodeConfig, field: &str) -> Option<String> {

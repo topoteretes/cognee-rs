@@ -229,3 +229,70 @@ async fn code_query_requires_the_code_search_type() {
         "code_query requires query_type=SearchType.CODE."
     );
 }
+
+#[tokio::test]
+async fn walks_soften_seed_misses_and_draw_per_dataset() {
+    let (orchestrator, a, b) = world().await;
+
+    // explore, traverse and impact_analysis seeds miss in b like neighbors.
+    for code_query in [
+        json!({"operation": "explore", "diagram": "dot"}),
+        json!({"operation": "traverse"}),
+        json!({"operation": "impact_analysis", "diagram": true}),
+    ] {
+        let request = code_request(code_query.clone(), "create_order", &[a, b]);
+        let results = orchestrator.search_datasets(&request).await.unwrap();
+        let SearchOutput::Structured(found) = &results[0].response.result else {
+            panic!("{code_query}: structured");
+        };
+        assert_eq!(found["operation"], code_query["operation"]);
+        if code_query.get("diagram").is_some() {
+            assert!(
+                found["diagram"]["source"]
+                    .as_str()
+                    .is_some_and(|source| source.contains("orders.create_order")),
+                "{code_query}: {found}"
+            );
+        }
+        let SearchOutput::Structured(miss) = &results[1].response.result else {
+            panic!("{code_query}: structured miss");
+        };
+        assert_eq!(miss["seed_not_found"], json!(true), "{code_query}");
+        assert_eq!(miss["code"], json!("not_found"), "{code_query}");
+    }
+
+    // A path with no target is a usage error in every dataset.
+    let error = orchestrator
+        .search_datasets(&code_request(
+            json!({"operation": "find_path"}),
+            "create_order",
+            &[a, b],
+        ))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, SearchError::Code(error) if !error.is_seed_miss() && error.param.as_deref() == Some("name")),
+        "{error:?}"
+    );
+
+    // The architecture overview needs no seed and draws itself.
+    let results = orchestrator
+        .search_datasets(&code_request(
+            json!({"operation": "architecture", "node_types": ["symbol"]}),
+            "",
+            &[a, b],
+        ))
+        .await
+        .unwrap();
+    let shown: Vec<Value> = results
+        .iter()
+        .map(|result| match &result.response.result {
+            SearchOutput::Structured(value) => {
+                assert_eq!(value["diagram"]["format"], json!("mermaid"));
+                value["stats"]["nodes_shown"].clone()
+            }
+            other => panic!("structured: {other:?}"),
+        })
+        .collect();
+    assert_eq!(shown, vec![json!(1), json!(2)]);
+}

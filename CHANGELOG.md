@@ -376,6 +376,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicit `source_uri` in the item's metadata still wins. Unset, nothing
   changes. The closed HTTP server sets it, so `/cognify`'s
   `data_location` is `null` for an upload instead of its spool path.
+- **CODE search: the graph walks, overviews and diagrams (SDK-1056 P1b).**
+  `SearchType::Code` now runs `explore` (the default operation),
+  `traverse`, `find_path`, `impact_analysis`, `insights` and `architecture`
+  with Python's result shapes, bounds, type/constructor roll-up and argument
+  errors, and draws any graph-shaped result as Mermaid or Graphviz DOT source
+  (`code_query={"diagram": "mermaid" | "dot" | true}`; `architecture` draws
+  Mermaid by default, `delta` gets a null source and a note) — a port of
+  `code_graph_diagram.py` in `cognee_code_graph::query` (`render_mermaid`,
+  `render_dot`, `collect_diagram_graph`, `render_result_diagram`). The P1a
+  `feature_unavailable` refusal of diagrams is gone; only `search`, `flows`,
+  `hubs` and `ask` still answer `feature_unavailable`, and `capabilities`
+  lists the eleven operations that run. Checked against 225 results and 4
+  direct renders Python produced (`scripts/generate_code_search_goldens.py`
+  now also loads the graphs of Python's `code_retriever_test.py`).
 - **The `CODE` search type, first stage (SDK-1056 P1a).** A port of Python's
   deterministic code-graph search (`code_retriever.py`, parity pin
   `a59433e6b`): `SearchType::Code` (`"CODE"`), `SearchRequest::code_query`

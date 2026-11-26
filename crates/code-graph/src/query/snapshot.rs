@@ -18,6 +18,7 @@ use std::sync::OnceLock;
 use cognee_graph::{EdgeData, GraphDBTrait, GraphNode};
 use serde_json::{Map, Value, json};
 
+use super::args::Direction;
 use super::error::{CodeQueryError, CodeQueryResult};
 use super::normalize::{json_key, normalize_properties, normalize_value, py_str_or, scalar_text};
 use super::text_index::{CodeSearchIndex, DocumentFields, query_terms};
@@ -751,6 +752,33 @@ impl CodeGraphSnapshot {
             .into_iter()
             .flatten()
             .map(|position| &self.edges[*position])
+    }
+
+    /// `adjacent`: the (neighbour, edge) pairs of `node_id` in `direction`,
+    /// keeping only `relation_types` when given, ordered by the neighbour's
+    /// node order and then the edge order (a stable sort, so an edge seen in
+    /// both directions — a self loop — is listed twice).
+    pub fn adjacent(
+        &self,
+        node_id: &str,
+        direction: Direction,
+        relation_types: Option<&HashSet<String>>,
+    ) -> Vec<(&String, &SnapshotEdge)> {
+        let mut adjacent: Vec<(&String, &SnapshotEdge)> = Vec::new();
+        if direction.forward() {
+            adjacent.extend(self.forward(node_id).map(|edge| (&edge.target_id, edge)));
+        }
+        if direction.reverse() {
+            adjacent.extend(self.reverse(node_id).map(|edge| (&edge.source_id, edge)));
+        }
+        if let Some(relation_types) = relation_types {
+            adjacent.retain(|(_, edge)| relation_types.contains(&edge.relation));
+        }
+        adjacent.sort_by(|left, right| {
+            self.node_order(left.0, right.0)
+                .then_with(|| self.edge_order(left.1, right.1))
+        });
+        adjacent
     }
 
     /// A fact node or a flow node, by id (`entity`).

@@ -13,18 +13,24 @@
 //!
 //! [`CodeRequest::parse`] validates the operation and the `diagram` argument
 //! exactly as Python's `CodeRetriever.__init__` does, for all fifteen
-//! operations. This build runs `query_facts`, `neighbors`, `subgraph`,
-//! `delta` and `capabilities` ([`CodeOperation::implemented`]); the others,
-//! and a diagram of any result, fail with `feature_unavailable` until they
-//! are ported.
+//! operations. This build runs eleven of them ([`CodeOperation::implemented`]):
+//! `query_facts`, `explore`, `traverse`, `find_path`, `impact_analysis`,
+//! `insights`, `architecture`, `delta`, `capabilities`, `neighbors` and
+//! `subgraph`, and draws any of their results as a Mermaid or DOT diagram
+//! (Python's `code_graph_diagram.py`, see [`render_result_diagram`]). The
+//! text and flow operations (`search`, `flows`, `hubs`, `ask`) fail with
+//! `feature_unavailable` until they are ported.
 
 mod args;
 mod cache;
+mod diagram;
 mod error;
 mod normalize;
 mod ops;
+mod overview;
 mod snapshot;
 mod text_index;
+mod traversal;
 
 use serde_json::{Value, json};
 
@@ -34,6 +40,10 @@ pub use cache::{
     SnapshotCacheKey, SnapshotCacheLimits, clear_code_graph_snapshot_cache,
     code_graph_snapshot_cache, configure_code_graph_snapshot_cache,
     invalidate_code_graph_snapshots,
+};
+pub use diagram::{
+    DiagramGraph, DiagramItem, collect_diagram_graph, dot_text, mermaid_text, render_dot,
+    render_mermaid, render_result_diagram,
 };
 pub use error::{
     CODE_ERROR_STATUS, CodeErrorClass, CodeErrorCode, CodeQueryError, CodeQueryResult,
@@ -135,11 +145,17 @@ impl CodeOperation {
     /// The operations this build runs, sorted by name.
     pub fn implemented() -> &'static [CodeOperation] {
         &[
+            Self::Architecture,
             Self::Capabilities,
             Self::Delta,
+            Self::Explore,
+            Self::FindPath,
+            Self::ImpactAnalysis,
+            Self::Insights,
             Self::Neighbors,
             Self::QueryFacts,
             Self::Subgraph,
+            Self::Traverse,
         ]
     }
 
@@ -296,14 +312,14 @@ fn diagram_format(
 
 /// Run a validated CODE call over `snapshot`, with `query` as the
 /// human-readable seed (Python's `get_retrieved_objects` without the
-/// snapshot load).
+/// snapshot load). When the request asks for a diagram, the result gets a
+/// `diagram` entry last ([`render_result_diagram`]).
 ///
 /// # Errors
 ///
 /// The operation's own errors (`invalid_argument`, `not_found`,
 /// `ambiguous`), or `feature_unavailable` (as a validation error, param
-/// `operation` or `diagram`) for an operation or a diagram this build does
-/// not implement yet.
+/// `operation`) for an operation this build does not implement yet.
 pub fn run_code_operation(
     snapshot: &CodeGraphSnapshot,
     request: &CodeRequest,
@@ -312,6 +328,12 @@ pub fn run_code_operation(
     let config = &request.config;
     let result = match request.operation {
         CodeOperation::QueryFacts => ops::query_facts(snapshot, config, query)?,
+        CodeOperation::Explore => traversal::explore(snapshot, config, query)?,
+        CodeOperation::Traverse => traversal::traverse(snapshot, config, query)?,
+        CodeOperation::FindPath => traversal::find_path(snapshot, config, query)?,
+        CodeOperation::ImpactAnalysis => traversal::impact_analysis(snapshot, config, query)?,
+        CodeOperation::Insights => overview::insights(snapshot, config, query)?,
+        CodeOperation::Architecture => overview::architecture(snapshot, config)?,
         CodeOperation::Neighbors => ops::neighbors(snapshot, config, query)?,
         CodeOperation::Subgraph => ops::subgraph(snapshot, config, query)?,
         CodeOperation::Delta => ops::delta(snapshot, config, query),
@@ -331,11 +353,13 @@ pub fn run_code_operation(
             ));
         }
     };
-    if request.diagram.is_some() {
-        return Err(CodeQueryError::not_implemented(
-            "CODE diagrams are not available in this build yet; drop diagram.",
-            "diagram",
-        ));
+    let Some(format) = request.diagram else {
+        return Ok(result);
+    };
+    let diagram = render_result_diagram(&result, format);
+    let mut result = result;
+    if let Value::Object(fields) = &mut result {
+        fields.insert("diagram".into(), diagram);
     }
     Ok(result)
 }

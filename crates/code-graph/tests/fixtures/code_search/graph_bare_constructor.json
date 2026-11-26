@@ -1,0 +1,35 @@
+{
+  "nodes": [
+    [
+      "bare-type",
+      {
+        "name": "Widget",
+        "type": "CodeSymbol",
+        "file_path": "pkg/widget.py",
+        "repo": "repo-a",
+        "symbol_kind": "class"
+      }
+    ],
+    [
+      "bare-constructor",
+      {
+        "name": "NewWidget",
+        "type": "CodeSymbol",
+        "file_path": "pkg/factory.py",
+        "repo": "repo-a",
+        "symbol_kind": "function"
+      }
+    ],
+    [
+      "wrong-package",
+      {
+        "name": "NewWidget",
+        "type": "CodeSymbol",
+        "file_path": "other/factory.py",
+        "repo": "repo-a",
+        "symbol_kind": "function"
+      }
+    ]
+  ],
+  "edges": []
+}

@@ -224,8 +224,8 @@ clears every row's stamps in the dataset).
 `cognee_code_graph::query` is the engine behind the `CODE` search type
 (`cognee-search`'s `CodeRetriever`): deterministic queries over a dataset's
 code graph, with no LLM, embedding or vector search. A port of Python's
-`cognee/modules/retrieval/code_retriever.py` and `code_search_index.py` at the
-same pin.
+`cognee/modules/retrieval/code_retriever.py`, `code_search_index.py` and
+`code_graph_diagram.py` at the same pin.
 
 | Piece | Rust | Python |
 |---|---|---|
@@ -236,6 +236,7 @@ same pin.
 | Snapshot cache | `CodeGraphSnapshotCache`, `code_graph_snapshot_cache`, `invalidate_code_graph_snapshots` | `_CodeGraphSnapshotCache`, `invalidate_code_graph_snapshot_cache` |
 | Operation and diagram validation | `CodeRequest::parse` | `CodeRetriever.__init__`, `_diagram_format` |
 | Run an operation | `run_code_operation` | `CodeRetriever.get_retrieved_objects` |
+| Diagrams | `render_result_diagram`, `collect_diagram_graph`, `render_mermaid`, `render_dot` | `code_graph_diagram.py` |
 | Errors | `CodeQueryError` (`code`, `param`, `class`) | `CodeSearchValidationError`, `CodeSeedNotFoundError`, `CodeGraphUnavailableError` |
 
 **Snapshot.** Nodes are normalized as Python reads them: a string that starts
@@ -248,15 +249,36 @@ members) and the text index is built on first use. Sort orders compare
 Python's `str()` of each field and casefold names (`pyjson::casefold`, Python's
 `str.casefold`, not `to_lowercase`).
 
-**Operations.** `query_facts`, `neighbors`, `subgraph`, `delta` and
-`capabilities` run here, with Python's keys, ordering, defaults and bounds.
-The other ten (`explore`, `traverse`, `find_path`, `impact_analysis`,
-`insights`, `architecture`, `search`, `flows`, `hubs`, `ask`) are validated as
-Python validates them and then fail with `feature_unavailable` (param
-`operation`); so does a diagram of any result (param `diagram`), while the
-five undrawable operations reject a diagram with Python's `invalid_argument`.
-The default operation, as in Python, is `explore`. `capabilities` lists the
-operations this build runs, not Python's fifteen.
+**Operations.** Eleven of Python's fifteen run here, with Python's keys,
+ordering, defaults, bounds and argument-error precedence:
+
+| Operation | What it answers | Bounds (default, max) |
+|---|---|---|
+| `query_facts` | facts matching structured filters, paged | `limit` 100, 500 |
+| `explore` (the default) | one seed's neighbourhood, both ways; `focus` carries its relations | `max_depth` 1, 2; `max_nodes` 100, 500 |
+| `traverse` | a walk from several seeds, forward by default; a reverse walk from a type also starts from its methods and constructor (`type_rollup`) | `max_depth` 5, 20; `max_nodes` 100, 500 |
+| `find_path` | the shortest forward path, neighbours in node order; a type target is reached through its members too (`target_rollup`, reported as `matched_to`) | `max_depth` 10, 20 |
+| `impact_analysis` | dependents by depth, `total_dependents` past the display cap, `cross_repo_impact`, a summary line, optional `forward_dependencies` | `max_depth` 3, 10; `max_nodes` 200, 500 |
+| `insights` | explainer findings with their evidence, by confidence, paged; `by_source` | `limit` 50, 500 |
+| `architecture` | modules and the routes, storage and services they declare, other edges rolled up to module edges with a `count`; best-connected first | `max_nodes` 80, 300 |
+| `neighbors`, `subgraph` | every edge of one fact; the graph around up to 20 seeds | see `capabilities.limits` |
+| `delta`, `capabilities` | the last ingestion's changes; what the build and graph hold | — |
+
+The text and flow operations (`search`, `flows`, `hubs`, `ask`) are
+validated as Python validates them and then fail with `feature_unavailable`
+(param `operation`). The default operation, as in Python, is `explore`.
+`capabilities` lists the operations this build runs, not Python's fifteen.
+
+**Diagrams.** `diagram` (`true` or `"mermaid"`, `"dot"`, `false`) attaches
+`{"format", "source", "nodes", "edges"}` to the result as its last key, the
+source rendered byte for byte as Python's `code_graph_diagram.py` renders it:
+a Mermaid `flowchart LR` (YAML front-matter title, entity-escaped labels,
+shapes by fact kind, one subgraph per repository when there are several,
+`x<count>` on rolled-up edges, the focus/seeds/path highlighted) or a
+Graphviz `digraph` with the same grouping. `architecture` draws Mermaid
+unless told `false`; `delta` has no graph, so its diagram has a null
+`source` and a `note`; the five undrawable operations (`capabilities`,
+`search`, `flows`, `hubs`, `ask`) reject a diagram with `invalid_argument`.
 
 **Errors.** Every error carries Python's message, `error_code`
 (`unknown_operation`, `invalid_argument`, `not_found`, `ambiguous`,
@@ -278,13 +300,19 @@ invalidates the unscoped entries (the shared store holds every dataset), and
 invalidates only when a code repository is deleted from a surviving dataset;
 `prune` with `graph` clears the cache too.
 
-**Goldens.** `tests/code_query_goldens.rs` runs 80 cases (every operation,
-every validation message, the adapter quirks above) over
-`tests/fixtures/code_search/graph.json` and compares results, context text
-and errors with what Python's retriever returned
-(`tests/fixtures/code_search/goldens.json`, written by
-`scripts/generate_code_search_goldens.py`, which loads Python's retriever
-from a checkout at the pin with nothing but the standard library).
+**Goldens.** `tests/code_query_goldens.rs` runs 225 cases (every
+implemented operation and its seed misses, ambiguities, bounds and argument
+errors, every validation message, the adapter quirks above, 36 diagrams in
+both formats) over `tests/fixtures/code_search/graph.json` and the graphs of
+Python's `code_retriever_test.py` (`graph_widget.json`, `graph_insights.json`,
+`graph_architecture.json`, `graph_bare_constructor.json`), and compares
+results (key order included), context text and errors with what Python's
+retriever returned (`goldens.json`); `diagrams.json` holds Python's
+`render_mermaid` / `render_dot` output for direct calls (every shape and
+escape). All are written by `scripts/generate_code_search_goldens.py`,
+which loads Python's retriever from a checkout at the pin (a `git archive` of
+`cognee/modules/retrieval/` is enough) with nothing but the standard
+library.
 `tests/code_query_ingested.rs` queries a graph this crate's writer loaded and
 checks the writer's invalidation.
 

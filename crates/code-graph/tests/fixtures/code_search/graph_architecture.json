@@ -1,0 +1,233 @@
+{
+  "nodes": [
+    [
+      "repo",
+      {
+        "name": "shop",
+        "type": "CodeRepository",
+        "path": "/src/shop"
+      }
+    ],
+    [
+      "m_root",
+      {
+        "name": ".",
+        "type": "CodeModule",
+        "file_path": ".",
+        "repo": "shop"
+      }
+    ],
+    [
+      "m_inv",
+      {
+        "name": "inventory",
+        "type": "CodeModule",
+        "file_path": "inventory",
+        "repo": "shop"
+      }
+    ],
+    [
+      "m_api",
+      {
+        "name": "api",
+        "type": "CodeModule",
+        "file_path": "api",
+        "repo": "shop"
+      }
+    ],
+    [
+      "s_main",
+      {
+        "name": "main.main",
+        "type": "CodeSymbol",
+        "file_path": "main.py",
+        "repo": "shop",
+        "symbol_kind": "function"
+      }
+    ],
+    [
+      "s_total",
+      {
+        "name": "inventory/pricing.total",
+        "type": "CodeSymbol",
+        "file_path": "inventory/pricing.py",
+        "repo": "shop",
+        "symbol_kind": "function"
+      }
+    ],
+    [
+      "s_line",
+      {
+        "name": "inventory/pricing.line",
+        "type": "CodeSymbol",
+        "file_path": "inventory/pricing.py",
+        "repo": "shop",
+        "symbol_kind": "function"
+      }
+    ],
+    [
+      "s_handler",
+      {
+        "name": "api/routes.orders",
+        "type": "CodeSymbol",
+        "file_path": "api/routes.py",
+        "repo": "shop",
+        "symbol_kind": "function"
+      }
+    ],
+    [
+      "route",
+      {
+        "name": "GET /orders",
+        "type": "ApiEndpoint",
+        "file_path": "api/routes.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "db",
+      {
+        "name": "orders_table",
+        "type": "StorageResource",
+        "file_path": "inventory/store.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "dep",
+      {
+        "name": "main -> requests",
+        "type": "ExternalDependency",
+        "file_path": "main.py",
+        "repo": "shop"
+      }
+    ],
+    [
+      "s_deep",
+      {
+        "name": "inventory/deep/x.helper",
+        "type": "CodeSymbol",
+        "file_path": "inventory/deep/x.py",
+        "repo": "shop",
+        "symbol_kind": "function"
+      }
+    ],
+    [
+      "m_other",
+      {
+        "name": "lib",
+        "type": "CodeModule",
+        "file_path": "lib",
+        "repo": "other"
+      }
+    ],
+    [
+      "s_other",
+      {
+        "name": "lib/util.go",
+        "type": "CodeSymbol",
+        "file_path": "lib/util.py",
+        "repo": "other",
+        "symbol_kind": "function"
+      }
+    ]
+  ],
+  "edges": [
+    [
+      "s_main",
+      "m_root",
+      "declares",
+      {}
+    ],
+    [
+      "s_total",
+      "m_inv",
+      "declares",
+      {}
+    ],
+    [
+      "s_line",
+      "m_inv",
+      "declares",
+      {}
+    ],
+    [
+      "s_handler",
+      "m_api",
+      "declares",
+      {}
+    ],
+    [
+      "route",
+      "m_api",
+      "declares",
+      {}
+    ],
+    [
+      "db",
+      "m_inv",
+      "declares",
+      {}
+    ],
+    [
+      "s_main",
+      "s_total",
+      "calls",
+      {}
+    ],
+    [
+      "s_main",
+      "s_line",
+      "calls",
+      {}
+    ],
+    [
+      "s_handler",
+      "s_total",
+      "calls",
+      {}
+    ],
+    [
+      "s_total",
+      "s_line",
+      "calls",
+      {}
+    ],
+    [
+      "route",
+      "s_handler",
+      "handled_by",
+      {}
+    ],
+    [
+      "s_total",
+      "db",
+      "uses",
+      {}
+    ],
+    [
+      "dep",
+      "m_root",
+      "declares",
+      {}
+    ],
+    [
+      "s_main",
+      "repo",
+      "part_of",
+      {}
+    ],
+    [
+      "s_deep",
+      "s_handler",
+      "calls",
+      {}
+    ],
+    [
+      "s_other",
+      "s_main",
+      "calls",
+      {}
+    ]
+  ]
+}

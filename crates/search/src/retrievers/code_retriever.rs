@@ -293,14 +293,61 @@ mod tests {
             };
             assert_eq!((error.code, error.param.as_deref()), (code, Some(param)));
         }
-        // No configuration at all is Python's default operation, explore.
-        let error = retriever
-            .get_context("x", &SearchParams::default())
+    }
+
+    #[tokio::test]
+    async fn no_configuration_explores_the_query() {
+        // Python's default operation is explore, seeded by the query text.
+        let retriever = CodeRetriever::new(shop_graph().await);
+        let context = retriever
+            .get_context("create_order", &SearchParams::default())
             .await
-            .unwrap_err();
-        assert!(
-            matches!(error, SearchError::Code(ref error) if error.code == CodeErrorCode::FeatureUnavailable)
+            .unwrap();
+        let result = &context[0].payload;
+        assert_eq!(result["operation"], json!("explore"));
+        assert_eq!(result["focus"]["id"], json!("create"));
+        assert_eq!(
+            result["nodes"][1]["name"],
+            json!("orders/service.place_order")
         );
+        assert!(result.get("diagram").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_diagram_rides_in_the_result_and_its_context_text() {
+        let retriever = CodeRetriever::new(shop_graph().await);
+        let params = params(json!({
+            "operation": "find_path",
+            "target": "place_order",
+            "diagram": "mermaid",
+        }));
+        let context = retriever
+            .get_context("create_order", &params)
+            .await
+            .unwrap();
+        let diagram = &context[0].payload["diagram"];
+        // The YAML title swaps `>` for its look-alike `›`, as Python does.
+        assert_eq!(diagram["format"], json!("mermaid"));
+        assert_eq!(
+            diagram["source"],
+            json!(
+                "---\ntitle: \"path: orders/api.create_order -› orders/service.place_order\"\n---\n\
+                 flowchart LR\n    n0([\"orders/api.create_order\"])\n    \
+                 n1([\"orders/service.place_order\"])\n    n0 -- \"calls\" --> n1\n    \
+                 classDef highlight stroke:#d64545,stroke-width:3px\n    class n0,n1 highlight\n"
+            )
+        );
+        let Some(SearchOutput::Text(text)) = retriever
+            .only_context_output("create_order", &context, &params)
+            .await
+            .unwrap()
+        else {
+            panic!("context text");
+        };
+        // Keys sorted: the diagram block sits between "edges" and "found".
+        assert!(text.contains(
+            r#""diagram":{"edges":1,"format":"mermaid","nodes":2,"source":"---\ntitle:"#
+        ));
     }
 
     #[tokio::test]

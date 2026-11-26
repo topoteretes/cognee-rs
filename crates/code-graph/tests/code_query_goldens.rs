@@ -3,10 +3,13 @@
 //! `fixtures/code_search/graph.json` is the raw graph an adapter returns
 //! (Python's navigation-test shop repository plus the adapter quirks: JSON
 //! text properties, a Ladybug-style nested `properties` column, a null and a
-//! blank doc, duplicate edges, non-code nodes) and `goldens.json` what
-//! Python's `CodeRetriever` at the parity pin returned for each case —
-//! result and context text, or error message, code and param. Both are
-//! written by `scripts/generate_code_search_goldens.py`.
+//! blank doc, duplicate edges, non-code nodes), `graph_<name>.json` the
+//! graphs of Python's `code_retriever_test.py` (a case's `graph` names one),
+//! and `goldens.json` what Python's `CodeRetriever` at the parity pin
+//! returned for each case — result (with its diagram, when asked for) and
+//! context text, or error message, code and param. `diagrams.json` holds
+//! what Python's `render_mermaid` and `render_dot` returned when called
+//! directly. All are written by `scripts/generate_code_search_goldens.py`.
 //!
 //! The graph goes through a mock adapter and the real snapshot loader, so
 //! the type filter and the normalization are under test too.
@@ -21,8 +24,8 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use cognee_code_graph::query::{
-    CodeGraphSnapshot, CodeOperation, CodeRequest, json_key, load_code_graph_snapshot,
-    run_code_operation,
+    CodeGraphSnapshot, CodeOperation, CodeRequest, DiagramItem, json_key, load_code_graph_snapshot,
+    render_dot, render_mermaid, run_code_operation,
 };
 use cognee_graph::{EdgeData, GraphDBTrait, MockGraphDB};
 use serde_json::{Value, json};
@@ -36,7 +39,12 @@ fn read_json(name: &str) -> Value {
 }
 
 async fn fixture_snapshot() -> CodeGraphSnapshot {
-    let graph = read_json("graph.json");
+    graph_snapshot("graph.json").await
+}
+
+/// The snapshot of one fixture graph, loaded through a mock adapter.
+async fn graph_snapshot(file: &str) -> CodeGraphSnapshot {
+    let graph = read_json(file);
     let mock = MockGraphDB::new();
     let mut nodes = Vec::new();
     for node in graph["nodes"].as_array().expect("nodes") {
@@ -89,12 +97,19 @@ fn expected_result(name: &str, mut result: Value) -> Value {
 
 #[tokio::test]
 async fn every_operation_matches_python() {
-    let snapshot = fixture_snapshot().await;
+    let mut graphs: HashMap<String, CodeGraphSnapshot> = HashMap::new();
+    graphs.insert("shop".into(), fixture_snapshot().await);
+    for name in ["widget", "insights", "architecture", "bare_constructor"] {
+        graphs.insert(
+            name.into(),
+            graph_snapshot(&format!("graph_{name}.json")).await,
+        );
+    }
     let empty = CodeGraphSnapshot::empty();
     let goldens = read_json("goldens.json");
     let goldens = goldens.as_array().expect("a list of cases");
     assert!(
-        goldens.len() >= 80,
+        goldens.len() >= 200,
         "the goldens hold {} cases",
         goldens.len()
     );
@@ -107,7 +122,8 @@ async fn every_operation_matches_python() {
         let graph = if name.ends_with("_empty_graph") {
             &empty
         } else {
-            &snapshot
+            let graph_name = case.get("graph").and_then(Value::as_str).unwrap_or("shop");
+            &graphs[graph_name]
         };
         let outcome = CodeRequest::parse(config)
             .and_then(|request| run_code_operation(graph, &request, query));
@@ -208,37 +224,82 @@ async fn the_loader_drops_what_is_not_code() {
     );
 }
 
+/// The renderers called directly, byte for byte against Python's output:
+/// every shape, the label, title and repository escapes, missing ends and
+/// highlights, an empty graph with and without a title.
+#[test]
+fn renderers_match_python() {
+    let cases = read_json("diagrams.json");
+    let cases = cases.as_array().expect("a list of diagrams");
+    assert!(cases.len() >= 4, "the diagrams hold {} cases", cases.len());
+    let objects = |value: &Value| -> Vec<DiagramItem> {
+        value
+            .as_array()
+            .expect("a list")
+            .iter()
+            .map(|item| item.as_object().expect("an object").clone())
+            .collect()
+    };
+    for case in cases {
+        let name = case["name"].as_str().expect("name");
+        let nodes = objects(&case["nodes"]);
+        let edges = objects(&case["edges"]);
+        let highlight: Vec<String> = case["highlight_ids"]
+            .as_array()
+            .expect("highlight ids")
+            .iter()
+            .map(|id| id.as_str().expect("an id").to_string())
+            .collect();
+        let title = case["title"].as_str();
+        assert_eq!(
+            render_mermaid(&nodes, &edges, &highlight, title),
+            case["mermaid"].as_str().expect("mermaid"),
+            "{name}: mermaid"
+        );
+        assert_eq!(
+            render_dot(&nodes, &edges, &highlight, title),
+            case["dot"].as_str().expect("dot"),
+            "{name}: dot"
+        );
+    }
+}
+
+/// The text and flow operations are not ported yet: each fails with
+/// `feature_unavailable`, a validation error.
 #[tokio::test]
-async fn unported_operations_and_diagrams_are_feature_unavailable() {
+async fn unported_operations_are_feature_unavailable() {
     let snapshot = fixture_snapshot().await;
+    let mut unported = Vec::new();
     for operation in CodeOperation::ALL {
         let config = json!({"operation": operation.as_str()})
             .as_object()
             .expect("object")
             .clone();
         let request = CodeRequest::parse(config).expect("a known operation");
-        let outcome = run_code_operation(&snapshot, &request, "create_order");
+        let outcome = run_code_operation(&snapshot, &request, "orders/api.create_order");
         if operation.is_implemented() {
-            assert!(outcome.is_ok(), "{}: {outcome:?}", operation.as_str());
+            // It runs (find_path still wants a target: a usage error).
+            assert!(
+                outcome
+                    .as_ref()
+                    .err()
+                    .is_none_or(|error| error.code.as_str() != "feature_unavailable"),
+                "{}: {outcome:?}",
+                operation.as_str()
+            );
             continue;
         }
+        unported.push(operation.as_str());
         let error = outcome.expect_err("not implemented");
         assert_eq!(error.code.as_str(), "feature_unavailable");
         assert_eq!(error.param.as_deref(), Some("operation"));
         // A validation error: every dataset would fail it the same way.
         assert!(!error.is_seed_miss());
     }
+    assert_eq!(unported, ["ask", "flows", "hubs", "search"]);
 
-    let config = json!({"operation": "neighbors", "diagram": "dot"})
-        .as_object()
-        .expect("object")
-        .clone();
-    let request = CodeRequest::parse(config).expect("neighbors can be drawn");
-    let error = run_code_operation(&snapshot, &request, "create_order").expect_err("no diagrams");
-    assert_eq!(error.code.as_str(), "feature_unavailable");
-    assert_eq!(error.param.as_deref(), Some("diagram"));
-
-    // No operation means explore, which is not ported yet.
+    // No operation means explore.
     let request = CodeRequest::parse(serde_json::Map::new()).expect("explore");
     assert_eq!(request.operation, CodeOperation::Explore);
+    assert!(run_code_operation(&snapshot, &request, "cli.main").is_ok());
 }

@@ -21,12 +21,19 @@ named in crates/code-graph/README.md):
     python3 scripts/generate_code_search_goldens.py /tmp/cognee-pin
 
 It writes crates/code-graph/tests/fixtures/code_search/graph.json (the raw nodes
-and edges, as an adapter returns them) and .../goldens.json:
+and edges, as an adapter returns them), one graph_<name>.json per extra graph
+(the graphs of Python's code_retriever_test.py: "widget", "insights",
+"architecture" and "bare_constructor"), .../goldens.json:
 
-    [{"name": ..., "config": {...}, "query": "...",
+    [{"name": ..., "config": {...}, "query": "...", ["graph": "<name>",]
       "result": {...}, "context": "<json.dumps(sort_keys)>"}            # success
-     or {"name": ..., "config": {...}, "query": "...",
+     or {"name": ..., "config": {...}, "query": "...", ["graph": "<name>",]
          "error": {"type": ..., "message": ..., "code": ..., "param": ...}}]
+
+(no "graph" means the shop graph; a name ending in _empty_graph runs over no
+graph at all; a result carries the "diagram" block get_retrieved_objects
+attaches), and .../diagrams.json: render_mermaid and render_dot called
+directly, for the label and title escapes no fixture name reaches.
 """
 
 import asyncio
@@ -610,42 +617,622 @@ CASES = [
 ]
 
 
+# --- The graphs of Python's code_retriever_test.py (SDK-1056 P1b) ---------------------
+#
+# Copied from cognee/tests/unit/modules/retrieval/code_retriever_test.py at the
+# pin; the widget's UUID node id is written as its string.
+
+WIDGET_ID = "00000000-0000-0000-0000-000000000001"
+
+
+def widget_graph():
+    """`_code_graph`: a class with a method and a constructor, two repos."""
+    nodes = [
+        ("repo-a", {"name": "repo-a", "type": "CodeRepository", "path": "/src/repo-a"}),
+        (
+            WIDGET_ID,
+            {
+                "name": "pkg.Widget",
+                "type": "CodeSymbol",
+                "properties": json.dumps(
+                    {
+                        "file_path": "pkg/widget.py",
+                        "line": 10,
+                        "repo": "repo-a",
+                        "symbol_kind": "class",
+                        "fact_properties": {"exported": True, "language": "python"},
+                    }
+                ),
+            },
+        ),
+        (
+            "method",
+            {
+                "name": "pkg.Widget.run",
+                "type": "CodeSymbol",
+                "file_path": "pkg/widget.py",
+                "line": 20,
+                "repo": "repo-a",
+                "symbol_kind": "method",
+                "fact_properties": {"exported": False},
+            },
+        ),
+        (
+            "constructor",
+            {
+                "name": "pkg.NewWidget",
+                "type": "CodeSymbol",
+                "file_path": "pkg/widget.py",
+                "line": 5,
+                "repo": "repo-a",
+                "symbol_kind": "function",
+            },
+        ),
+        (
+            "entry",
+            {
+                "name": "pkg.entry",
+                "type": "CodeSymbol",
+                "file_path": "pkg/main.py",
+                "line": 7,
+                "repo": "repo-a",
+                "symbol_kind": "function",
+            },
+        ),
+        (
+            "handler",
+            {
+                "name": "api.handler",
+                "type": "CodeSymbol",
+                "file_path": "api/handler.py",
+                "line": 9,
+                "repo": "repo-b",
+                "symbol_kind": "function",
+            },
+        ),
+        (
+            "route",
+            {
+                "name": "GET /widgets",
+                "type": "ApiEndpoint",
+                "file_path": "api/routes.py",
+                "line": 3,
+                "repo": "repo-b",
+                "fact_properties": {"method": "GET"},
+            },
+        ),
+        (
+            "database",
+            {"name": "widget_db", "type": "StorageResource", "file_path": "pkg/storage.py", "repo": "repo-a"},
+        ),
+        (
+            "helper-a",
+            {"name": "shared.Helper", "type": "CodeSymbol", "file_path": "a/helper.py", "repo": "repo-a", "symbol_kind": "class"},
+        ),
+        (
+            "helper-b",
+            {"name": "shared.Helper", "type": "CodeSymbol", "file_path": "b/helper.py", "repo": "repo-b", "symbol_kind": "class"},
+        ),
+        ("noise", {"name": "ordinary text", "type": "DocumentChunk", "text": "not code"}),
+    ]
+    edges = [
+        (WIDGET_ID, "method", "has_method", {}),
+        ("entry", "method", "calls", {"weight": 1}),
+        ("handler", "entry", "calls", {}),
+        ("route", "handler", "handled_by", {}),
+        ("method", "database", "depends_on", {}),
+        ("noise", "entry", "mentions", {}),
+    ]
+    return nodes, edges
+
+
+ENOLA_ID_DB = "a" * 32
+ENOLA_ID_API = "b" * 32
+
+
+def insight_graph():
+    """`_insight_graph`: three explainer findings and the facts they cite."""
+    nodes = [
+        (
+            "repo-a",
+            {
+                "name": "repo-a",
+                "type": "CodeRepository",
+                "path": "/src/repo-a",
+                "last_snapshot_id": "sha256:abc",
+                "last_receipt": {
+                    "format_version": 1,
+                    "enola_version": "0.4.12",
+                    "quality": {"files_seen": 6, "files_parsed": 5, "parse_errors": 0},
+                },
+            },
+        ),
+        (
+            "db",
+            {
+                "name": "app/db.Database",
+                "type": "CodeSymbol",
+                "file_path": "app/db.py",
+                "line": 4,
+                "end_line": 40,
+                "repo": "repo-a",
+                "symbol_kind": "class",
+                "enola_id": ENOLA_ID_DB,
+            },
+        ),
+        (
+            "api",
+            {
+                "name": "app/api.handler",
+                "type": "CodeSymbol",
+                "file_path": "app/api.py",
+                "repo": "repo-a",
+                "symbol_kind": "function",
+                "enola_id": ENOLA_ID_API,
+            },
+        ),
+        (
+            "hot",
+            {
+                "name": "Call-graph hotspot: app/db.Database",
+                "type": "CodeInsight",
+                "repo": "repo-a",
+                "description": "A pinch point.",
+                "fact_properties": {"source": "hotspots", "confidence": 0.7, "metrics": {"fan_in": 9}},
+            },
+        ),
+        (
+            "cyc",
+            {
+                "name": "Dependency cycle: app/api -> app/db -> app/api",
+                "type": "CodeInsight",
+                "repo": "repo-a",
+                "fact_properties": {"source": "cycles", "confidence": 1.0},
+            },
+        ),
+        (
+            "info",
+            {
+                "name": "Domain findings do not apply to this repository",
+                "type": "CodeInsight",
+                "repo": "repo-a",
+                "fact_properties": {"source": "domain", "confidence": 1.0, "informational": True},
+            },
+        ),
+        # Additions over Python's fixture: an insight without a confidence
+        # (sorted last) and one with a non-string source ("unknown" bucket).
+        (
+            "plain",
+            {
+                "name": "A finding with no score",
+                "type": "CodeInsight",
+                "repo": "repo-a",
+                "fact_properties": {"source": "hotspots"},
+            },
+        ),
+        (
+            "odd",
+            {
+                "name": "An odd finding",
+                "type": "CodeInsight",
+                "repo": "repo-b",
+                "fact_properties": {"source": 7, "confidence": 0, "informational": "yes"},
+            },
+        ),
+        (
+            "extraction",
+            {
+                "name": "python:calls",
+                "type": "CodeExtractionAccount",
+                "repo": "repo-a",
+                "fact_properties": {"extractor": "python", "language": "python"},
+            },
+        ),
+    ]
+    edges = [
+        ("hot", "db", "evidences", {}),
+        ("cyc", "api", "evidences", {}),
+        ("cyc", "db", "evidences", {}),
+        ("api", "db", "calls", {}),
+    ]
+    return nodes, edges
+
+
+def architecture_graph():
+    """`_architecture_graph`: modules, the facts they declare, cross-module calls."""
+    nodes = [
+        ("repo", {"name": "shop", "type": "CodeRepository", "path": "/src/shop"}),
+        ("m_root", {"name": ".", "type": "CodeModule", "file_path": ".", "repo": "shop"}),
+        ("m_inv", {"name": "inventory", "type": "CodeModule", "file_path": "inventory", "repo": "shop"}),
+        ("m_api", {"name": "api", "type": "CodeModule", "file_path": "api", "repo": "shop"}),
+        ("s_main", {"name": "main.main", "type": "CodeSymbol", "file_path": "main.py", "repo": "shop", "symbol_kind": "function"}),
+        (
+            "s_total",
+            {"name": "inventory/pricing.total", "type": "CodeSymbol", "file_path": "inventory/pricing.py", "repo": "shop", "symbol_kind": "function"},
+        ),
+        (
+            "s_line",
+            {"name": "inventory/pricing.line", "type": "CodeSymbol", "file_path": "inventory/pricing.py", "repo": "shop", "symbol_kind": "function"},
+        ),
+        (
+            "s_handler",
+            {"name": "api/routes.orders", "type": "CodeSymbol", "file_path": "api/routes.py", "repo": "shop", "symbol_kind": "function"},
+        ),
+        ("route", {"name": "GET /orders", "type": "ApiEndpoint", "file_path": "api/routes.py", "repo": "shop"}),
+        ("db", {"name": "orders_table", "type": "StorageResource", "file_path": "inventory/store.py", "repo": "shop"}),
+        ("dep", {"name": "main -> requests", "type": "ExternalDependency", "file_path": "main.py", "repo": "shop"}),
+        # Additions over Python's fixture: a symbol with no declares edge,
+        # placed by its file's directory (inventory/deep/x.py -> inventory),
+        # and a second repository with its own module.
+        (
+            "s_deep",
+            {"name": "inventory/deep/x.helper", "type": "CodeSymbol", "file_path": "inventory/deep/x.py", "repo": "shop", "symbol_kind": "function"},
+        ),
+        ("m_other", {"name": "lib", "type": "CodeModule", "file_path": "lib", "repo": "other"}),
+        ("s_other", {"name": "lib/util.go", "type": "CodeSymbol", "file_path": "lib/util.py", "repo": "other", "symbol_kind": "function"}),
+    ]
+    edges = [
+        ("s_main", "m_root", "declares", {}),
+        ("s_total", "m_inv", "declares", {}),
+        ("s_line", "m_inv", "declares", {}),
+        ("s_handler", "m_api", "declares", {}),
+        ("route", "m_api", "declares", {}),
+        ("db", "m_inv", "declares", {}),
+        ("s_main", "s_total", "calls", {}),
+        ("s_main", "s_line", "calls", {}),
+        ("s_handler", "s_total", "calls", {}),
+        ("s_total", "s_line", "calls", {}),
+        ("route", "s_handler", "handled_by", {}),
+        ("s_total", "db", "uses", {}),
+        ("dep", "m_root", "declares", {}),
+        ("s_main", "repo", "part_of", {}),
+        ("s_deep", "s_handler", "calls", {}),
+        ("s_other", "s_main", "calls", {}),
+    ]
+    return nodes, edges
+
+
+def bare_constructor_graph():
+    """`test_impact_rollup_finds_bare_type_constructor_in_same_package`."""
+    nodes = [
+        ("bare-type", {"name": "Widget", "type": "CodeSymbol", "file_path": "pkg/widget.py", "repo": "repo-a", "symbol_kind": "class"}),
+        ("bare-constructor", {"name": "NewWidget", "type": "CodeSymbol", "file_path": "pkg/factory.py", "repo": "repo-a", "symbol_kind": "function"}),
+        ("wrong-package", {"name": "NewWidget", "type": "CodeSymbol", "file_path": "other/factory.py", "repo": "repo-a", "symbol_kind": "function"}),
+    ]
+    return nodes, []
+
+
+EXTRA_GRAPHS = {
+    "widget": widget_graph,
+    "insights": insight_graph,
+    "architecture": architecture_graph,
+    "bare_constructor": bare_constructor_graph,
+}
+
+# (name, config, query[, graph]): explore, traverse, find_path, impact_analysis,
+# insights, architecture and the diagrams (SDK-1056 P1b).
+P1B_CASES = [
+    # explore
+    ("explore_no_operation", {}, "orders/api.create_order"),
+    ("explore_focus_alias", {"operation": "explore", "focus": "place_order"}, "ignored"),
+    ("explore_depth_clamped", {"operation": "explore", "name": "orders/service.place_order", "max_depth": 99}, ""),
+    ("explore_enola_id", {"operation": "explore", "id": E_VALIDATE}, ""),
+    ("explore_node_id", {"operation": "explore", "node_id": "save", "direction": "Reverse"}, ""),
+    (
+        "explore_filters",
+        {"operation": "explore", "name": "create_order", "max_depth": 2, "relation_kinds": "calls", "node_types": "symbol"},
+        "",
+    ),
+    ("explore_walk_through_types", {"operation": "explore", "name": "save", "max_depth": 2, "node_types": ["storage", "module"]}, ""),
+    ("explore_max_nodes", {"operation": "explore", "name": "create_order", "max_nodes": 2}, ""),
+    ("explore_repo", {"operation": "explore", "repo": OTHER_REPO}, "billing.charge_card"),
+    ("explore_ambiguous", {"operation": "explore"}, "billing.charge_card"),
+    ("explore_missing", {"operation": "explore"}, "nowhere.at_all"),
+    ("explore_empty", {"operation": "explore"}, "  "),
+    ("explore_id_wrong_repo", {"operation": "explore", "id": "create", "repo": OTHER_REPO}, ""),
+    ("explore_id_int", {"operation": "explore", "id": 5}, ""),
+    ("explore_name_list", {"operation": "explore", "name": ["cli.main"]}, ""),
+    ("explore_bad_direction", {"operation": "explore", "direction": "up"}, "cli.main"),
+    ("explore_max_depth_string", {"operation": "explore", "max_depth": "2"}, "cli.main"),
+    ("explore_bad_node_type", {"operation": "explore", "node_types": ["flow"]}, "cli.main"),
+    ("explore_seed_error_first", {"operation": "explore", "direction": "up"}, "nowhere.at_all"),
+    ("explore_diagram", {"operation": "explore", "diagram": True}, "orders/service.place_order"),
+    ("explore_diagram_dot", {"operation": "explore", "diagram": "Dot"}, "orders/service.place_order"),
+    ("explore_diagram_off", {"operation": "explore", "diagram": False}, "cli.main"),
+    ("explore_widget", {"operation": "explore", "name": "pkg.Widget.run", "max_depth": 99, "diagram": True}, "", "widget"),
+    ("explore_widget_ambiguous", {"operation": "explore"}, "shared.Helper", "widget"),
+    ("explore_widget_repo", {"operation": "explore", "repo": "repo-b", "diagram": "dot"}, "shared.Helper", "widget"),
+    # traverse
+    ("traverse_query", {"operation": "traverse"}, "orders/api.create_order"),
+    ("traverse_start_alias", {"operation": "traverse", "start": "place_order", "max_depth": 1}, ""),
+    ("traverse_starts_and_ids", {"operation": "traverse", "starts": ["cli.main"], "start_ids": ["save"], "node_ids": E_ROUTE}, ""),
+    ("traverse_names_and_id", {"operation": "traverse", "names": ["validate_token"], "id": "parse"}, "ignored"),
+    ("traverse_reverse", {"operation": "traverse", "direction": "reverse", "relation_types": ["calls"]}, "orders/repository.save"),
+    ("traverse_both", {"operation": "traverse", "direction": "both", "max_depth": 2}, "orders/repository.save"),
+    ("traverse_max_depth_capped", {"operation": "traverse", "max_depth": 1000}, "cli.main"),
+    ("traverse_max_nodes", {"operation": "traverse", "max_nodes": 3}, "orders/api.create_order"),
+    ("traverse_seeds_over_max_nodes", {"operation": "traverse", "names": ["cli.main", "save", "validate_token"], "max_nodes": 2}, ""),
+    ("traverse_node_types", {"operation": "traverse", "node_types": ["storage"]}, "orders/api.create_order"),
+    ("traverse_no_seeds", {"operation": "traverse"}, " "),
+    ("traverse_missing", {"operation": "traverse", "names": ["cli.main", "nowhere"]}, ""),
+    ("traverse_missing_id_first", {"operation": "traverse", "names": ["tokens"], "node_ids": ["nope"]}, ""),
+    ("traverse_ambiguous", {"operation": "traverse"}, "tokens"),
+    ("traverse_names_not_list", {"operation": "traverse", "names": 3}, ""),
+    ("traverse_diagram_dot", {"operation": "traverse", "diagram": "dot"}, "orders/api.create_order"),
+    (
+        "traverse_widget_reverse_rollup",
+        {"operation": "traverse", "direction": "reverse", "relation_types": ["calls"], "max_depth": 2},
+        "pkg.Widget",
+        "widget",
+    ),
+    (
+        "traverse_widget_no_rollup",
+        {"operation": "traverse", "direction": "reverse", "type_rollup": False},
+        "pkg.Widget",
+        "widget",
+    ),
+    (
+        "traverse_widget_rollup_null",
+        {"operation": "traverse", "direction": "reverse", "type_rollup": None},
+        "pkg.Widget",
+        "widget",
+    ),
+    ("traverse_widget_start", {"operation": "traverse", "start": "api.handler", "max_depth": 1}, "", "widget"),
+    (
+        "traverse_widget_diagram",
+        {"operation": "traverse", "direction": "both", "diagram": "mermaid"},
+        "pkg.Widget.run",
+        "widget",
+    ),
+    # find_path
+    ("find_path_found", {"operation": "find_path", "target": "orders/repository.save"}, "orders/api.create_order"),
+    ("find_path_aliases", {"operation": "find_path", "from": "POST /orders", "to": "orders_table"}, "ignored"),
+    ("find_path_ids", {"operation": "find_path", "source_id": E_ROUTE, "target_id": "table"}, ""),
+    ("find_path_from_id_to_id", {"operation": "find_path", "from_id": "cli", "to_id": "report"}, ""),
+    ("find_path_same_node", {"operation": "find_path", "source": "cli.main", "target": "cli.main"}, ""),
+    ("find_path_not_found", {"operation": "find_path", "source": "orders/repository.save", "target": "create_order"}, ""),
+    ("find_path_depth_too_short", {"operation": "find_path", "max_depth": 1, "target": "save"}, "create_order"),
+    ("find_path_relation_filter", {"operation": "find_path", "relation_types": "handled_by", "target": "save"}, "POST /orders"),
+    ("find_path_no_target", {"operation": "find_path"}, "cli.main"),
+    ("find_path_target_missing", {"operation": "find_path", "target": "nowhere.at_all"}, "cli.main"),
+    ("find_path_source_missing", {"operation": "find_path", "target": "cli.main"}, "nowhere.at_all"),
+    (
+        "find_path_target_repo",
+        {"operation": "find_path", "source_repo": OTHER_REPO, "target": "billing.charge_card", "target_repo": REPO},
+        "billing.charge_card",
+    ),
+    ("find_path_target_ambiguous", {"operation": "find_path", "target": "billing.charge_card"}, "place_order"),
+    ("find_path_bad_depth", {"operation": "find_path", "max_depth": True, "target": "save"}, "create_order"),
+    ("find_path_diagram", {"operation": "find_path", "target": "orders_table", "diagram": True}, "POST /orders"),
+    ("find_path_diagram_dot", {"operation": "find_path", "target": "orders_table", "diagram": "dot"}, "POST /orders"),
+    ("find_path_widget", {"operation": "find_path", "target": "pkg.Widget.run", "relation_types": ["calls"]}, "api.handler", "widget"),
+    ("find_path_widget_rollup", {"operation": "find_path", "target": "pkg.Widget", "relation_types": ["calls"]}, "api.handler", "widget"),
+    (
+        "find_path_widget_no_rollup",
+        {"operation": "find_path", "target": "pkg.Widget", "target_rollup": False},
+        "api.handler",
+        "widget",
+    ),
+    (
+        "find_path_widget_seed_is_member",
+        {"operation": "find_path", "source": "pkg.Widget.run", "target": "pkg.Widget"},
+        "",
+        "widget",
+    ),
+    (
+        "find_path_widget_diagram",
+        {"operation": "find_path", "source": "api.handler", "target": "widget_db", "diagram": "mermaid"},
+        "",
+        "widget",
+    ),
+    # impact_analysis
+    ("impact_query", {"operation": "impact_analysis"}, "auth/tokens.validate_token"),
+    ("impact_no_dependents", {"operation": "impact_analysis"}, "cli.main"),
+    ("impact_cross_repo", {"operation": "impact_analysis", "target": "billing.charge_card", "repo": REPO}, ""),
+    ("impact_targets_and_ids", {"operation": "impact_analysis", "targets": ["save"], "target_ids": ["parse"]}, ""),
+    ("impact_include_forward", {"operation": "impact_analysis", "include_forward": True, "max_depth": 1}, "place_order"),
+    ("impact_include_dependencies", {"operation": "impact_analysis", "include_dependencies": "yes"}, "place_order"),
+    ("impact_max_nodes", {"operation": "impact_analysis", "max_nodes": 2}, "orders/repository.save"),
+    ("impact_relation_and_types", {"operation": "impact_analysis", "relation": "calls", "node_types": ["route"]}, "save"),
+    ("impact_no_seeds", {"operation": "impact_analysis"}, ""),
+    ("impact_missing", {"operation": "impact_analysis", "target": "nowhere"}, ""),
+    ("impact_bad_max_depth", {"operation": "impact_analysis", "max_depth": "3"}, "save"),
+    ("impact_seed_error_first", {"operation": "impact_analysis", "max_depth": "3"}, "nowhere"),
+    ("impact_bad_relation_after_depth", {"operation": "impact_analysis", "max_nodes": 1.5, "relation": 3}, "save"),
+    ("impact_diagram_dot", {"operation": "impact_analysis", "diagram": "dot"}, "orders/repository.save"),
+    ("impact_widget", {"operation": "impact_analysis", "max_depth": 2, "max_nodes": 4}, "pkg.Widget", "widget"),
+    ("impact_widget_forward", {"operation": "impact_analysis", "max_depth": 3, "include_forward": True}, "pkg.Widget", "widget"),
+    ("impact_widget_target_alias", {"operation": "impact_analysis", "target": "pkg.Widget"}, "", "widget"),
+    (
+        "impact_widget_diagram_dot",
+        {"operation": "impact_analysis", "name": "pkg.Widget.run", "max_depth": 5, "diagram": "dot"},
+        "",
+        "widget",
+    ),
+    ("impact_widget_diagram_mermaid", {"operation": "impact_analysis", "diagram": True}, "pkg.Widget", "widget"),
+    ("impact_bare_constructor", {"operation": "impact_analysis"}, "Widget", "bare_constructor"),
+    # insights
+    ("insights_all", {"operation": "insights"}, "", "insights"),
+    ("insights_confident", {"operation": "insights", "min_confidence": 0.9, "informational": False}, "", "insights"),
+    ("insights_informational_text", {"operation": "insights", "informational": " TRUE "}, "", "insights"),
+    ("insights_source", {"operation": "insights", "source": "hotspots"}, "", "insights"),
+    ("insights_sources", {"operation": "insights", "sources": ["cycles", "domain"], "min_confidence": 1}, "", "insights"),
+    ("insights_query_title", {"operation": "insights"}, "CYCLE", "insights"),
+    ("insights_query_ignored", {"operation": "insights", "limit": 10}, "What did the explainers find?", "insights"),
+    ("insights_name", {"operation": "insights", "name": "finding"}, "", "insights"),
+    ("insights_repo", {"operation": "insights", "repo": "repo-b"}, "", "insights"),
+    ("insights_page", {"operation": "insights", "offset": 1, "limit": 1}, "", "insights"),
+    ("insights_min_confidence_zero", {"operation": "insights", "min_confidence": 0}, "", "insights"),
+    ("insights_bad_confidence", {"operation": "insights", "min_confidence": 2}, "", "insights"),
+    ("insights_confidence_string", {"operation": "insights", "min_confidence": "high"}, "", "insights"),
+    ("insights_bad_informational", {"operation": "insights", "informational": "maybe"}, "", "insights"),
+    ("insights_bad_sources", {"operation": "insights", "sources": 3}, "", "insights"),
+    ("insights_bad_offset", {"operation": "insights", "offset": -1}, "", "insights"),
+    ("insights_diagram", {"operation": "insights", "diagram": True}, "", "insights"),
+    ("insights_diagram_dot", {"operation": "insights", "diagram": "dot", "source": "cycles"}, "", "insights"),
+    ("insights_shop_none", {"operation": "insights", "diagram": True}, ""),
+    ("query_facts_new_kind", {"operation": "query_facts", "kind": "extraction"}, "", "insights"),
+    # architecture
+    ("architecture_default", {"operation": "architecture"}, "", "architecture"),
+    ("architecture_shop", {"operation": "architecture"}, "ignored"),
+    ("architecture_shop_dot", {"operation": "architecture", "diagram": "dot"}, ""),
+    (
+        "architecture_modules_only",
+        {"operation": "architecture", "node_types": ["module"], "relation_types": ["calls"], "max_nodes": 2, "diagram": False},
+        "",
+        "architecture",
+    ),
+    ("architecture_repo", {"operation": "architecture", "repo": "shop", "diagram": True}, "", "architecture"),
+    ("architecture_other_repo", {"operation": "architecture", "repo": "elsewhere", "diagram": "dot"}, "", "architecture"),
+    ("architecture_symbols", {"operation": "architecture", "node_types": ["symbol"]}, "", "architecture"),
+    ("architecture_declares_only", {"operation": "architecture", "relation_types": ["declares"]}, "", "architecture"),
+    ("architecture_max_nodes_one", {"operation": "architecture", "max_nodes": 1}, "", "architecture"),
+    ("architecture_max_nodes_capped", {"operation": "architecture", "max_nodes": 1000}, "", "architecture"),
+    ("architecture_bad_max_nodes", {"operation": "architecture", "max_nodes": "5"}, "", "architecture"),
+    ("architecture_bad_node_types", {"operation": "architecture", "node_types": ["flow"]}, "", "architecture"),
+    # Diagrams of the P1a operations, and of delta (which has no graph).
+    ("query_facts_diagram", {"operation": "query_facts", "file_prefix": "orders/", "diagram": True}, ""),
+    ("query_facts_diagram_dot", {"operation": "query_facts", "kind": "symbol", "diagram": "dot"}, ""),
+    ("neighbors_diagram", {"operation": "neighbors", "diagram": "mermaid"}, "orders/service.place_order"),
+    ("neighbors_diagram_dot", {"operation": "neighbors", "name": "validate_token", "diagram": "dot"}, ""),
+    ("subgraph_diagram", {"operation": "subgraph", "seeds": ["orders/service.place_order"], "diagram": True}, ""),
+    ("subgraph_diagram_dot", {"operation": "subgraph", "seeds": ["create_order", "cli.main"], "depth": 2, "diagram": "dot"}, ""),
+    ("subgraph_diagram_two_repos", {"operation": "subgraph", "seed_ids": ["charge"], "diagram": True}, ""),
+    ("delta_diagram", {"operation": "delta", "diagram": True}, ""),
+    ("delta_diagram_dot", {"operation": "delta", "diagram": "dot"}, "", "widget"),
+    # Review additions: Python truthiness of flags and fallbacks, lower and
+    # upper bounds, and a configured key that turns the insights query off.
+    ("explore_direction_upper", {"operation": "explore", "direction": "BOTH", "max_nodes": 0}, "place_order"),
+    ("explore_max_depth_zero", {"operation": "explore", "max_depth": 0}, "place_order"),
+    ("traverse_max_nodes_capped", {"operation": "traverse", "max_nodes": 10_000, "max_depth": -1}, "cli.main"),
+    (
+        "traverse_widget_rollup_text_false",
+        {"operation": "traverse", "direction": "reverse", "type_rollup": "false"},
+        "pkg.Widget",
+        "widget",
+    ),
+    ("find_path_max_depth_capped", {"operation": "find_path", "max_depth": 99, "target": "orders_table"}, "POST /orders"),
+    (
+        "find_path_blank_source_repo",
+        {"operation": "find_path", "source_repo": "", "repo": OTHER_REPO, "target": "billing.charge_card", "target_repo": REPO},
+        "billing.charge_card",
+    ),
+    (
+        "find_path_widget_rollup_zero",
+        {"operation": "find_path", "target": "pkg.Widget", "target_rollup": 0},
+        "api.handler",
+        "widget",
+    ),
+    ("impact_max_depth_capped", {"operation": "impact_analysis", "max_depth": 50}, "auth/tokens.validate_token"),
+    ("impact_include_forward_zero", {"operation": "impact_analysis", "include_forward": 0}, "place_order"),
+    ("insights_limit_capped", {"operation": "insights", "limit": 1000}, "", "insights"),
+    ("insights_limit_zero", {"operation": "insights", "limit": 0}, "", "insights"),
+    ("insights_diagram_ignores_query", {"operation": "insights", "diagram": True}, "CYCLE", "insights"),
+    ("insights_repo_null", {"operation": "insights", "repo": None}, "", "insights"),
+    ("architecture_repo_null", {"operation": "architecture", "repo": None, "diagram": None}, "", "architecture"),
+]
+
+# Direct renderer calls: (name, nodes, edges, highlight_ids, title).
+DIAGRAM_CASES = [
+    (
+        "escapes",
+        [
+            {"id": "a", "kind": "route", "name": 'GET /items?q="x"<y>#1&2', "repo": "r"},
+            {"id": "b", "kind": "module", "name": ".", "repo": "r"},
+        ],
+        [{"source_id": "a", "target_id": "b", "type": "declares", "count": 3}],
+        ["b"],
+        'a "quoted" # title: Vec<T>',
+    ),
+    (
+        "every_shape_two_repos",
+        [
+            {"id": "m", "kind": "module", "name": "pkg", "repo": "z"},
+            {"id": "s", "kind": "symbol", "name": "pkg.f\nsecond line", "repo": "z"},
+            {"id": "r", "kind": "route", "name": "GET /", "repo": ""},
+            {"id": "st", "kind": "storage", "name": "t", "repo": "a"},
+            {"id": "d", "kind": "dependency", "name": "dep", "repo": "a"},
+            {"id": "sv", "kind": "service", "name": "svc", "repo": "a"},
+            {"id": "i", "kind": "insight", "name": "finding", "repo": "a"},
+            {"id": "in", "kind": "intent", "name": "intent", "repo": "a"},
+            {"id": "rp", "kind": "repository", "name": "repo", "repo": "a"},
+            {"id": "x", "kind": "lint", "name": None, "repo": "a"},
+            {"id": "y", "name": "", "repo": None},
+        ],
+        [
+            {"source_id": "m", "target_id": "s", "type": "declares", "count": 1},
+            {"source_id": "s", "target_id": "r", "type": "", "count": True},
+            {"source_id": "r", "target_id": "missing", "type": "calls"},
+            {"source_id": "d", "target_id": "sv", "type": "back\\slash \"q\"", "count": 2},
+            {"source_id": "i", "target_id": "in"},
+        ],
+        ["s", "nope", "s", "x"],
+        "back\\slash\nline",
+    ),
+    ("empty_untitled", [], [], [], None),
+    ("empty_title", [], [], [], ""),
+]
+
+
 def _jsonable(value):
     """Python's results hold only JSON types; tuples become lists."""
     return json.loads(json.dumps(value))
 
 
 async def run_case(code_retriever, snapshot, config, query):
+    """CodeRetriever.get_retrieved_objects over a given snapshot."""
     retriever = code_retriever.CodeRetriever(config=config)
     handler = getattr(retriever, f"_{retriever.operation}")
     result = handler(snapshot, query or "")
+    if retriever.diagram_format is not None:
+        result["diagram"] = code_retriever.render_result_diagram(result, retriever.diagram_format)
     context = await retriever.get_context_from_objects(query, retrieved_objects=result)
     return result, context
+
+
+def _write_graph(path, nodes, edges):
+    graph = {
+        "nodes": [[node_id, properties] for node_id, properties in nodes],
+        "edges": [[source, target, relation, properties] for source, target, relation, properties in edges],
+    }
+    path.write_text(json.dumps(graph, indent=2, ensure_ascii=False) + "\n")
 
 
 def main():
     if len(sys.argv) != 2:
         sys.exit(f"usage: {sys.argv[0]} <python-cognee-checkout-at-the-pin>")
     code_retriever = load_retriever(Path(sys.argv[1]))
+    diagram = sys.modules["cognee.modules.retrieval.code_graph_diagram"]
     nodes, edges = fixture_graph()
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    graph = {
-        "nodes": [[node_id, properties] for node_id, properties in nodes],
-        "edges": [[source, target, relation, properties] for source, target, relation, properties in edges],
-    }
-    (OUT_DIR / "graph.json").write_text(json.dumps(graph, indent=2, ensure_ascii=False) + "\n")
+    _write_graph(OUT_DIR / "graph.json", nodes, edges)
+    snapshots = {"shop": code_retriever._CodeGraphSnapshot(nodes, edges)}
+    for graph_name, build in EXTRA_GRAPHS.items():
+        extra_nodes, extra_edges = build()
+        _write_graph(OUT_DIR / f"graph_{graph_name}.json", extra_nodes, extra_edges)
+        snapshots[graph_name] = code_retriever._CodeGraphSnapshot(extra_nodes, extra_edges)
 
-    snapshot = code_retriever._CodeGraphSnapshot(nodes, edges)
     empty = code_retriever._CodeGraphSnapshot([], [])
-    cases = [(name, config, query, snapshot) for name, config, query in CASES]
-    cases.append(("capabilities_empty_graph", {"operation": "capabilities"}, "", empty))
-    cases.append(("query_facts_empty_graph", {"operation": "query_facts"}, "x", empty))
-    cases.append(("delta_empty_graph", {"operation": "delta"}, "", empty))
+    cases = [(name, config, query, "shop", snapshots["shop"]) for name, config, query in CASES]
+    cases.append(("capabilities_empty_graph", {"operation": "capabilities"}, "", "shop", empty))
+    cases.append(("query_facts_empty_graph", {"operation": "query_facts"}, "x", "shop", empty))
+    cases.append(("delta_empty_graph", {"operation": "delta"}, "", "shop", empty))
+    for name, config, query, *graph_name in P1B_CASES:
+        graph_name = graph_name[0] if graph_name else "shop"
+        cases.append((name, config, query, graph_name, snapshots[graph_name]))
+    cases.append(("explore_empty_graph", {"operation": "explore"}, "x", "shop", empty))
+    cases.append(("architecture_empty_graph", {"operation": "architecture"}, "", "shop", empty))
+    cases.append(("insights_empty_graph", {"operation": "insights"}, "", "shop", empty))
 
     goldens = []
-    for name, config, query, graph_snapshot in cases:
+    names = set()
+    for name, config, query, graph_name, graph_snapshot in cases:
+        assert name not in names, f"duplicate case {name}"
+        names.add(name)
         entry = {"name": name, "config": config, "query": query}
+        if graph_name != "shop":
+            entry["graph"] = graph_name
         try:
             result, context = asyncio.run(run_case(code_retriever, graph_snapshot, config, query))
         except code_retriever.CodeSearchValidationError as error:
@@ -660,7 +1247,26 @@ def main():
             entry["context"] = context
         goldens.append(entry)
     (OUT_DIR / "goldens.json").write_text(json.dumps(goldens, indent=2, ensure_ascii=False) + "\n")
-    print(f"wrote {len(goldens)} goldens to {OUT_DIR}")
+
+    diagrams = []
+    for name, diagram_nodes, diagram_edges, highlight, title in DIAGRAM_CASES:
+        diagrams.append(
+            {
+                "name": name,
+                "nodes": diagram_nodes,
+                "edges": diagram_edges,
+                "highlight_ids": highlight,
+                "title": title,
+                "mermaid": diagram.render_mermaid(
+                    diagram_nodes, diagram_edges, highlight_ids=highlight, title=title
+                ),
+                "dot": diagram.render_dot(
+                    diagram_nodes, diagram_edges, highlight_ids=highlight, title=title
+                ),
+            }
+        )
+    (OUT_DIR / "diagrams.json").write_text(json.dumps(diagrams, indent=2, ensure_ascii=False) + "\n")
+    print(f"wrote {len(goldens)} goldens and {len(diagrams)} diagrams to {OUT_DIR}")
 
 
 if __name__ == "__main__":

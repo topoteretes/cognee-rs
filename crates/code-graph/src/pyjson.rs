@@ -437,6 +437,15 @@ pub fn py_str(value: &Value) -> String {
     }
 }
 
+/// `str(value or default)`: [`py_str`] of an optional value when it is
+/// truthy, else `default`.
+pub fn py_str_truthy_or(value: Option<&Value>, default: &str) -> String {
+    match value {
+        Some(value) if is_truthy(value) => py_str(value),
+        _ => default.to_string(),
+    }
+}
+
 /// `repr(value)` of a JSON value as Python holds it: `None`, `True`,
 /// `False`, numbers as `repr`, strings as [`py_repr_str`], lists as
 /// `[a, b]` and dicts as `{'k': v}` in key order.
@@ -796,6 +805,20 @@ mod tests {
         assert!(!is_truthy(&json!(0)));
         assert!(!is_truthy(&json!("")));
         assert!(is_truthy(&json!(5)));
+    }
+
+    #[test]
+    fn str_of_a_value_or_a_default() {
+        // str(value or default)
+        assert_eq!(py_str_truthy_or(None, "unknown"), "unknown");
+        assert_eq!(py_str_truthy_or(Some(&Value::Null), "x"), "x");
+        assert_eq!(py_str_truthy_or(Some(&json!("")), "x"), "x");
+        assert_eq!(py_str_truthy_or(Some(&json!(0)), "x"), "x");
+        assert_eq!(py_str_truthy_or(Some(&json!([])), ""), "");
+        assert_eq!(py_str_truthy_or(Some(&json!("repo")), ""), "repo");
+        assert_eq!(py_str_truthy_or(Some(&json!(7)), ""), "7");
+        assert_eq!(py_str_truthy_or(Some(&json!(true)), ""), "True");
+        assert_eq!(py_str_truthy_or(Some(&json!(["a"])), ""), "['a']");
     }
 
     #[test]
