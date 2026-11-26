@@ -18,6 +18,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **Ladybug graph store moves from lbug 0.14.1 to 0.23.0.** 0.14.1 corrupted
+  REL string properties at `CHECKPOINT`: once a store held about a thousand
+  nodes, edges read back another edge's `relationship_name` and
+  `properties`, so name lookups and edge dedup went silently wrong.
+  - **Stores written by 0.14 are not repaired.** Corrupted edge names stay
+    wrong after the upgrade; rebuild (re-cognify) any Ladybug store that was
+    written by an earlier release.
+  - **One-way storage upgrade.** 0.23.0 opens older stores in place and
+    rewrites their header to storage code 53 at the first checkpoint, after
+    which earlier releases (and any Ladybug before 0.23) cannot open them.
+    Python cognee moves to the same Ladybug, 0.23.0; until it does, a store
+    written by this release cannot be opened by Python.
+  - **Build requirements:** a C++ standard library with `<format>` (GCC 13+
+    on Linux), and network access at build time: the engine is the official
+    prebuilt 0.23.0 archive, pinned by `LBUG_VERSION` in `.cargo/config.toml`
+    and chosen by the build host's platform. Binaries with the `ladybug`
+    feature now link `libssl` / `libcrypto` (OpenSSL 3) dynamically. See
+    [docs/build/lbug-rebuilds.md](docs/build/lbug-rebuilds.md#which-engine-gets-linked).
+  - **Android builds Ladybug from source** (no upstream prebuilt):
+    `scripts/android-build-and-deploy.sh` sets `LBUG_BUILD_FROM_SOURCE=1` and
+    now requires `OPENSSL_ROOT_DIR` pointing at an OpenSSL 3 built for
+    `aarch64-linux-android`, whose `libssl.so` / `libcrypto.so` it bundles.
+  - **One process, one live handle per embedded store (`STORE_IN_USE`).** A
+    second live open of a Ladybug store the process already holds now fails
+    with error code `STORE_IN_USE` (a typed `StoreInUse` variant in
+    `GraphDBError` / `VectorDBError` / `ComponentError`, `StoreInUseError` in
+    TS) instead of silently opening a second instance whose checkpoint could
+    delete the first one's WAL. lbug 0.23 refuses it too ("already open in
+    this process"). Close the first handle before opening the directory
+    again. Store slots now survive config changes that do not touch the
+    store, and a store released while an operation still held it is taken
+    back on the next warm rather than reopened.
 - **The hard delete's degree-one sweep keeps every node a ledger row still
   names (SDK-1694, stage O9).** `DeleteMode::Hard` sweeps the graph for
   `Entity` and `EntityType` nodes with exactly one edge. Since O6 it kept a

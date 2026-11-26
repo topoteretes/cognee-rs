@@ -616,9 +616,12 @@ impl LadybugAdapter {
             .query(query)
             .map_err(|e| GraphDBError::QueryError(format!("Query failed: {e}")))?;
 
+        // lbug 0.23 converts each row fallibly; a value it cannot represent
+        // fails the read rather than coming back as a silently wrong row.
         let rows: Vec<Vec<serde_json::Value>> = result
-            .map(|row| row.into_iter().map(Self::lbug_value_to_json).collect())
-            .collect();
+            .map(|row| row.map(|values| values.into_iter().map(Self::lbug_value_to_json).collect()))
+            .collect::<Result<_, _>>()
+            .map_err(|e| GraphDBError::QueryError(format!("Failed to read query result: {e}")))?;
 
         Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
         Ok(rows)
@@ -907,10 +910,15 @@ impl LadybugAdapter {
         let updated_at_str = props.updated_at.format("%Y-%m-%d %H:%M:%S%.6f").to_string();
 
         let exists_query = format!("MATCH (n:Node) WHERE n.id = '{id}' RETURN COUNT(n) AS count");
-        let exists = conn
+        // An unreadable count row is an error, not "absent": treating it as
+        // absent would write a duplicate.
+        let first_row = conn
             .query(&exists_query)
             .map_err(|e| GraphDBError::NodeError(format!("Failed to check node existence: {e}")))?
             .next()
+            .transpose()
+            .map_err(|e| GraphDBError::NodeError(format!("Failed to read node existence: {e}")))?;
+        let exists = first_row
             .and_then(|row| row.into_iter().next())
             .and_then(|value| match value {
                 LbugValue::Int64(count) => Some(count > 0),
@@ -980,10 +988,15 @@ SET n.name = '{name}',
         let exists_query = format!(
             "MATCH (a:Node)-[r:EDGE]->(b:Node) WHERE a.id = '{source_id}' AND b.id = '{target_id}' AND r.relationship_name = '{relationship_name}' RETURN COUNT(r) AS count"
         );
-        let exists = conn
+        // An unreadable count row is an error, not "absent": treating it as
+        // absent would write a duplicate.
+        let first_row = conn
             .query(&exists_query)
             .map_err(|e| GraphDBError::EdgeError(format!("Failed to check edge existence: {e}")))?
             .next()
+            .transpose()
+            .map_err(|e| GraphDBError::EdgeError(format!("Failed to read edge existence: {e}")))?;
+        let exists = first_row
             .and_then(|row| row.into_iter().next())
             .and_then(|value| match value {
                 LbugValue::Int64(count) => Some(count > 0),
@@ -1222,9 +1235,9 @@ impl GraphDBTrait for LadybugAdapter {
         // mishandled an id repeated inside a single `UNWIND … MERGE` that sets
         // two or more columns: the repeated row was written onto the node at
         // the first row offset, so writing `[person, timestamp, person]`
-        // EntityTypes turned an Entity into an EntityType. lbug 0.22 no longer
-        // does that (the canary that asserted the bug went with the bump), and
-        // the dedup stays for the edge abort and as plain hygiene.
+        // EntityTypes turned an Entity into an EntityType. lbug 0.23 no longer
+        // does that (the canary that asserted the bug went with the bump); the
+        // dedup stays because it, not the engine, defines which occurrence wins.
         //
         // Each surviving id takes everything from its last occurrence and the
         // `created_at` column from its first — the column is set only `ON
@@ -1608,10 +1621,12 @@ impl GraphDBTrait for LadybugAdapter {
         const BATCH_SIZE: usize = 500;
         let now = Utc::now().format("%Y-%m-%d %H:%M:%S%.6f").to_string();
         // One row per `(source, target, relationship)` before batching — see
-        // `crate::dedup`. A key repeated inside one `UNWIND … MERGE` aborts the
-        // engine (`KU_UNREACHABLE` in csr_node_group.cpp, lbug 0.14.1) and
-        // fails the whole write. The last occurrence wins: `ON MATCH` replaces
-        // the properties, and `created_at` is the call's `now` for every row.
+        // `crate::dedup`. On lbug 0.14.1 a key repeated inside one
+        // `UNWIND … MERGE` aborted the engine (`KU_UNREACHABLE` in
+        // csr_node_group.cpp) and failed the whole write; 0.23 accepts it and
+        // keeps the last row, but that is engine behavior we do not rely on.
+        // The last occurrence wins: `ON MATCH` replaces the properties, and
+        // `created_at` is the call's `now` for every row.
         //
         // Keyed on the raw strings, unlike Postgres, which keys on the
         // NUL-sanitized triple because Postgres text drops NULs: Ladybug stores
@@ -3060,7 +3075,7 @@ mod tests {
             .query("MATCH (n:Node) RETURN COUNT(n) AS c")
             .unwrap()
             .next()
-            .and_then(|row| row.into_iter().next())
+            .and_then(|row| row.unwrap().into_iter().next())
             .and_then(|v| match v {
                 LbugValue::Int64(c) => Some(c),
                 LbugValue::Int32(c) => Some(c as i64),
@@ -3069,6 +3084,135 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count, 2, "MERGE must upsert, not duplicate");
+    }
+
+    /// Regression for the engine bug behind the lbug 0.14 → 0.23 bump: lbug
+    /// 0.14.1 corrupted REL string properties at `CHECKPOINT`. Once a store
+    /// held roughly a thousand nodes, existing `EDGE` rows read back another
+    /// row's `relationship_name` (endpoints stayed correct), so every
+    /// `WHERE r.relationship_name = …` lookup and the `has_edges`/`add_edges`
+    /// dedup keyed on it went silently wrong.
+    ///
+    /// Raw Cypher on this adapter's two-table shape and `UNWIND … MERGE`
+    /// statements, no adapter code. Per round: `DETACH DELETE` one live node,
+    /// upsert 40 nodes and their rels, `CHECKPOINT`, read every rel back and
+    /// compare with what was written. On 0.14.1 seeds 3 and 7 diverge after
+    /// checkpoint 26–30 (~1.1k nodes); 50 rounds per seed leave a margin.
+    #[tokio::test]
+    #[serial]
+    async fn rel_properties_survive_repeated_checkpoints() {
+        use std::collections::BTreeSet;
+
+        const ROUNDS: u64 = 50;
+        const PER_ROUND: u64 = 40;
+
+        for seed in [3u64, 7] {
+            let temp_dir = TempDir::new().unwrap();
+            let config = SystemConfig::default().max_db_size(DEFAULT_MAX_DB_SIZE);
+            let db = Database::new(
+                temp_dir.path().join("checkpoint.db").to_str().unwrap(),
+                config,
+            )
+            .unwrap();
+            let conn = Connection::new(&db).unwrap();
+            conn.query(
+                "CREATE NODE TABLE Node(id STRING PRIMARY KEY, name STRING, type STRING, \
+                 properties STRING)",
+            )
+            .unwrap();
+            conn.query(
+                "CREATE REL TABLE EDGE(FROM Node TO Node, relationship_name STRING, \
+                 properties STRING)",
+            )
+            .unwrap();
+
+            // xorshift64: deterministic, so a failure names a reproducible round.
+            let mut state = seed | 1;
+            let mut rnd = move |n: u64| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state % n
+            };
+
+            let mut expected: BTreeSet<(u64, u64, String)> = BTreeSet::new();
+            let mut live: Vec<u64> = Vec::new();
+            let mut next = 0u64;
+            for round in 0..ROUNDS {
+                if !live.is_empty() {
+                    let gone = live.swap_remove(rnd(live.len() as u64) as usize);
+                    conn.query(&format!(
+                        "MATCH (n:Node) WHERE n.id = 'n{gone}' DETACH DELETE n"
+                    ))
+                    .unwrap();
+                    expected.retain(|(from, to, _)| *from != gone && *to != gone);
+                }
+
+                let nodes: Vec<String> = (next..next + PER_ROUND)
+                    .map(|k| {
+                        format!("{{id:'n{k}', name:'n{k}', type:'Entity', properties:'{{}}'}}")
+                    })
+                    .collect();
+                conn.query(&format!(
+                    "UNWIND [{}] AS node MERGE (n:Node {{id: node.id}}) \
+                     ON CREATE SET n.name = node.name, n.type = node.type, \
+                     n.properties = node.properties",
+                    nodes.join(",")
+                ))
+                .unwrap();
+
+                let mut edges = Vec::new();
+                for k in 0..PER_ROUND {
+                    let (from, to) = (next + k, next + rnd(PER_ROUND));
+                    let name = format!("r{}", rnd(500));
+                    if expected.insert((from, to, name.clone())) {
+                        edges.push(format!("{{f:'n{from}', t:'n{to}', r:'{name}', p:'{{}}'}}"));
+                    }
+                }
+                conn.query(&format!(
+                    "UNWIND [{}] AS e MATCH (a:Node), (b:Node) WHERE a.id = e.f AND b.id = e.t \
+                     MERGE (a)-[r:EDGE {{relationship_name: e.r}}]->(b) \
+                     ON CREATE SET r.properties = e.p",
+                    edges.join(",")
+                ))
+                .unwrap();
+                live.extend(next..next + PER_ROUND);
+                next += PER_ROUND;
+
+                conn.query("CHECKPOINT").unwrap();
+
+                let id = |v: &LbugValue| match v {
+                    LbugValue::String(s) => s[1..].parse::<u64>().unwrap(),
+                    other => panic!("node id is not a string: {other:?}"),
+                };
+                let mut actual: BTreeSet<(u64, u64, String)> = BTreeSet::new();
+                let mut rows = 0usize;
+                for row in conn
+                    .query(
+                        "MATCH (a:Node)-[r:EDGE]->(b:Node) \
+                         RETURN a.id, b.id, r.relationship_name",
+                    )
+                    .unwrap()
+                {
+                    let row = row.unwrap();
+                    let name = match &row[2] {
+                        LbugValue::String(s) => s.clone(),
+                        other => format!("{other}"),
+                    };
+                    actual.insert((id(&row[0]), id(&row[1]), name));
+                    rows += 1;
+                }
+                let wrong = actual.difference(&expected).count();
+                let missing = expected.difference(&actual).count();
+                assert!(
+                    wrong == 0 && missing == 0 && rows == expected.len(),
+                    "seed {seed}: rels diverged after CHECKPOINT {round} ({next} nodes \
+                     written): {wrong} read back under a name never written, {missing} \
+                     written rels missing, {rows} rows read for {} written",
+                    expected.len()
+                );
+            }
+        }
     }
 
     #[tokio::test]

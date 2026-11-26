@@ -1,7 +1,9 @@
 # Why lbug's C++ thirdparty keeps rebuilding (and the ccache setup that fixes it)
 
-Investigated 2026-06-12. The `lbug` crate (Ladybug graph DB, crates.io 0.14.1)
-bundles the entire Ladybug C++ source tree and compiles it with CMake from its
+Investigated 2026-06-12 against `lbug` 0.14.1, which always compiled from
+source. Since the move to 0.23.0 the default build links a pinned prebuilt
+instead (see *Which engine gets linked* below), so this applies only to source
+builds (Android, or `LBUG_BUILD_FROM_SOURCE`). The `lbug` crate (Ladybug graph DB) bundles the entire Ladybug C++ source tree and compiles it with CMake from its
 `build.rs` into cargo's `OUT_DIR`. One full build is ~2 minutes of C++
 compilation (1,008 compiler invocations) and a ~2.6 GB `out/` directory
 (17 static libraries: lbug itself plus utf8proc, antlr4, re2, parquet, thrift,
@@ -264,3 +266,62 @@ be collected into that single lib dir (harvest from one successful
 `out/build` tree: `src/liblbug.a` + `third_party/*/lib*.a`). Removes the C++
 build from every context permanently, but must be redone on each lbug version
 bump; with ccache in place it should not be needed.
+
+## Which engine gets linked
+
+From 0.17 on, the `lbug` crate's `build.rs` does not compile its bundled C++
+by default: it runs `scripts/download_lbug.sh`, which fetches a prebuilt static
+`liblbug` from the LadybugDB GitHub releases. With `LBUG_VERSION` unset it asks
+for the **latest** release, so the crate version in `Cargo.toml` does not
+decide which engine you link, and the result changes whenever upstream tags a
+release. While triaging SDK-1128, tests that claimed 0.19.0 fixed a bug had in
+fact linked the latest prebuilt, v0.21.2.
+
+`.cargo/config.toml` therefore sets `LBUG_VERSION = "0.23.0"` (`force =
+false`), matching `lbug = "=0.23.0"`. Keep the two in step.
+
+**Why the prebuilt and not a source build (`LBUG_BUILD_FROM_SOURCE`).** Both
+archives bundle zstd and lz4. Upstream's release archive is one combined
+object with those symbols made local; a source build exports them
+(`ZSTD_compressBound`, `LZ4_compress_default`, …), and any binary that also
+links LanceDB's `zstd-sys` / `lz4-sys` fails to link on Linux with `rust-lld:
+duplicate symbol`. The versions differ (Ladybug's zstd 1.5.7 vs `zstd-sys`'s
+1.6.0), so `--allow-multiple-definition` would silently mix two zstd builds and
+is not an option. lbug's `LBUG_LOCALIZE_BUNDLED_SYMBOLS` only post-processes a
+*downloaded* archive. 0.14.1 had none of this because it compiled zstd inside a
+C++ namespace (`lbug_zstd::`).
+
+What the prebuilt costs:
+
+- **Network at build time**, from `github.com/LadybugDB/ladybug/releases`, with
+  no checksum. Point `LBUG_PREBUILT_CACHE_DIR` at a persistent directory to
+  reuse it across builds.
+- **The archive is chosen by the build host's `uname`, not the Rust target.**
+  Cross builds (`cross` for Linux arm64) need the target's archive fetched
+  explicitly and passed in through `LBUG_LIBRARY_DIR` + `LBUG_INCLUDE_DIR`.
+- **No Android or iOS archives exist.** Those targets build from source
+  (`LBUG_BUILD_FROM_SOURCE=1`, which `scripts/android-build-and-deploy.sh`
+  sets). That is supported, but only safe in a binary that does not also link
+  `zstd-sys`/`lz4-sys` (`android-default` drops LanceDB). The source build
+  needs an OpenSSL 3 built for the target: point `OPENSSL_ROOT_DIR` at its
+  prefix (the NDK ships none), and ship its `libssl.so`/`libcrypto.so` next to
+  the binary.
+- The macOS arm64 archive is built with `minos 13.3`.
+
+The ccache setup above only matters for source builds now.
+
+**Storage version.** The pin is exact because the engine version is also the
+on-disk storage version. 0.23.0 writes storage code 53; it is the Ladybug the
+Python SDK moves to in its next release, and the two SDKs can open each
+other's stores only while they agree on it. Ladybug upgrades an older store's
+header in place on its first checkpoint, after which older engines cannot open
+it. Bump `lbug` together with Python cognee's `ladybug` pin (and its
+`ladybug_version_mapping`), never alone.
+
+**Toolchain and runtime.** 0.23.0 needs a C++ standard library with
+`<format>`: libstdc++ 13 (GCC 13+) on Linux. That holds for the prebuilt too,
+because the crate's own C++ bridge includes `lbug.hpp`, which includes
+`<format>`; GCC 11/12 hosts (Ubuntu 22.04, Amazon Linux 2023) cannot build the
+`ladybug` feature. Unlike 0.14.1 the engine also links OpenSSL 3 (`libssl`,
+`libcrypto`) dynamically, and `libatomic` on Linux. A source build additionally
+needs OpenSSL 3 headers and a Python 3 interpreter.

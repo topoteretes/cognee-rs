@@ -43,12 +43,12 @@ done
 if [ ${#missing_tools[@]} -gt 0 ]; then
     echo "ERROR: missing native build tools: ${missing_tools[*]}" >&2
     echo "" >&2
-    echo "  Debian/Ubuntu: sudo apt-get install -y build-essential cmake protobuf-compiler" >&2
+    echo "  Debian/Ubuntu: sudo apt-get install -y build-essential cmake protobuf-compiler libssl-dev" >&2
     echo "  Fedora/RHEL:   sudo dnf install -y gcc-c++ cmake protobuf-compiler" >&2
     echo "  macOS:         brew install cmake protobuf" >&2
     echo "  Windows:       choco install cmake protoc --no-progress" >&2
     echo "" >&2
-    echo "  See docs/build/prerequisites.md (incl. the GCC 11 workaround)." >&2
+    echo "  See docs/build/prerequisites.md (incl. compiler floors)." >&2
     exit 1
 fi
 

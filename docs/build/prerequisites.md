@@ -16,27 +16,32 @@ prints the install line for your platform.
 | **C/C++ compiler** | every build, including slim | `ring`, plus the bundled C++ trees below |
 | **`cmake`** | Ladybug (graph DB) and AWS-LC (Bedrock TLS) | `lbug`, `aws-lc-sys` |
 | **`protoc`** | LanceDB's Protobuf schemas | `lancedb` → `lance` → `prost-build` |
+| **OpenSSL 3** (`libssl`/`libcrypto`; headers too for a source build) | Ladybug links it dynamically into every binary with `ladybug` | `lbug` ≥ 0.22 |
+| **Network at build time** | `lbug` downloads its pinned prebuilt engine from GitHub releases | the `ladybug` feature |
+| **Python 3** (interpreter only) | Ladybug *source* builds only (Android, `LBUG_BUILD_FROM_SOURCE`) | `lbug` 0.23 |
 | **Network at build time** | `ort-sys` downloads an ONNX Runtime build | the `onnx` feature |
 
 Point `ORT_CACHE_DIR` at a writable, persistent path to reuse that download
 across builds — the release workflows and both `Cross.toml` files do exactly
 this. `--no-default-features` (no `onnx`) skips the fetch.
 
-On x86-64 Linux the C++ compiler must be **GCC ≥ 12** (or Clang ≥ 16) unless
-you disable one SIMD kernel — see [GCC 11 hosts](#gcc-11-hosts-amazon-linux-2023)
-below. Other platforms need GCC ≥ 11 only, for C++20.
+Ladybug (`lbug` 0.23) needs a C++ standard library that ships `<format>`: on
+Linux that is **GCC ≥ 13** (libstdc++ 13; Ubuntu 24.04, Debian 13). This holds
+for a prebuilt engine too, because the crate's own C++ bridge includes it.
+GCC 11/12 hosts such as Ubuntu 22.04 and Amazon Linux 2023 cannot build the
+`ladybug` feature; see [GCC 11/12 hosts](#gcc-1112-hosts-ubuntu-2204-amazon-linux-2023).
 
 ### Install
 
 ```bash
 # Debian / Ubuntu
-sudo apt-get update && sudo apt-get install -y build-essential cmake protobuf-compiler
+sudo apt-get update && sudo apt-get install -y build-essential cmake protobuf-compiler libssl-dev
 
-# Fedora / RHEL / Amazon Linux 2023
-sudo dnf install -y gcc-c++ cmake protobuf-compiler
+# Fedora / RHEL
+sudo dnf install -y gcc-c++ cmake protobuf-compiler openssl-devel
 
 # macOS (Xcode command-line tools supply the compiler)
-brew install cmake protobuf
+brew install cmake protobuf openssl@3
 
 # Windows
 choco install cmake protoc --no-progress
@@ -88,34 +93,16 @@ is the answer — not a broken command.
   default-on `bedrock` feature. Dropping `ladybug` alone leaves `cmake`
   required. Drop both features to shed it.
 
-## GCC 11 hosts (Amazon Linux 2023)
+## GCC 11/12 hosts (Ubuntu 22.04, Amazon Linux 2023)
 
-Ladybug bundles [SimSIMD](https://github.com/ashvardanian/SimSIMD), whose
-dispatch shim force-enables every x86 kernel on Linux regardless of what the
-compiler supports:
+Since the move to `lbug` 0.23 these hosts cannot build the `ladybug` feature:
+its sources and its Rust bridge include `<format>`, which libstdc++ only ships
+from GCC 13. Install GCC 13+ (or build in an `ubuntu:24.04` container, as the
+x86-64 release images do), or build without `ladybug`.
 
-```c
-/*  - Linux: everything is available in GCC 12+ and Clang 16+. */
-#if !defined(SIMSIMD_TARGET_SAPPHIRE) && (defined(__linux__))
-#define SIMSIMD_TARGET_SAPPHIRE 1
-#endif
-```
-
-The Sapphire Rapids kernels use `__m512h`, which GCC only gained in 12. On a
-GCC 11 host — Amazon Linux 2023 ships 11.4 — the build fails inside SimSIMD.
-
-Either install GCC 12+, or pre-define the macro so the block above leaves it
-off:
-
-```bash
-export CFLAGS="-DSIMSIMD_TARGET_SAPPHIRE=0"
-export CXXFLAGS="-DSIMSIMD_TARGET_SAPPHIRE=0"
-cargo build --release
-```
-
-This costs the AVX512-FP16 distance kernels, which only Sapphire Rapids and
-newer hardware would have dispatched to anyway; every other kernel is
-unaffected.
+The SimSIMD workaround this section used to describe
+(`CFLAGS`/`CXXFLAGS="-DSIMSIMD_TARGET_SAPPHIRE=0"`, for GCC 11's missing
+`__m512h`) is no longer enough on its own, and GCC 13 does not need it.
 
 Four release workflows already pull the same lever for the ARM kernels the
 cross toolchain cannot assemble — `ts-prebuild.yml`, `java-prebuild.yml`,
