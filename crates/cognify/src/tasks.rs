@@ -8924,6 +8924,150 @@ mod tests {
         assert!(result.failures.unreached_items().is_empty());
     }
 
+    /// Counts `retrieve` and `retrieve_prefix` calls over a [`MockStorage`].
+    struct CountingStorage {
+        inner: MockStorage,
+        full_reads: std::sync::atomic::AtomicUsize,
+        prefix_reads: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl StorageTrait for CountingStorage {
+        async fn store(
+            &self,
+            data: &[u8],
+            file_name: &str,
+        ) -> Result<String, cognee_storage::StorageError> {
+            self.inner.store(data, file_name).await
+        }
+        async fn store_stream_dyn(
+            &self,
+            reader: &mut (dyn tokio::io::AsyncRead + Unpin + Send),
+            file_name: &str,
+        ) -> Result<String, cognee_storage::StorageError> {
+            self.inner.store_stream_dyn(reader, file_name).await
+        }
+        async fn create_writer(
+            &self,
+            file_name: &str,
+        ) -> Result<cognee_storage::StorageWriter, cognee_storage::StorageError> {
+            self.inner.create_writer(file_name).await
+        }
+        async fn retrieve(&self, location: &str) -> Result<Vec<u8>, cognee_storage::StorageError> {
+            self.full_reads
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.inner.retrieve(location).await
+        }
+        async fn retrieve_prefix(
+            &self,
+            location: &str,
+            max_len: usize,
+        ) -> Result<Vec<u8>, cognee_storage::StorageError> {
+            self.prefix_reads
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut bytes = self.inner.retrieve(location).await?;
+            bytes.truncate(max_len);
+            Ok(bytes)
+        }
+        async fn exists(&self, location: &str) -> Result<bool, cognee_storage::StorageError> {
+            self.inner.exists(location).await
+        }
+        async fn delete(&self, location: &str) -> Result<(), cognee_storage::StorageError> {
+            self.inner.delete(location).await
+        }
+        fn get_full_path(&self, location: &str) -> std::path::PathBuf {
+            self.inner.get_full_path(location)
+        }
+        fn base_path(&self) -> &str {
+            self.inner.base_path()
+        }
+        async fn initialize(&self) -> Result<(), cognee_storage::StorageError> {
+            self.inner.initialize().await
+        }
+        async fn remove_all(&self) -> Result<(), cognee_storage::StorageError> {
+            self.inner.remove_all().await
+        }
+    }
+
+    /// A text document of unknown type is probed before it is read: a bad
+    /// prefix fails it without the full `retrieve`, and a good one goes on to
+    /// the full read, which the loader decodes strictly.
+    #[tokio::test]
+    async fn an_unknown_type_document_is_probed_before_the_full_read() {
+        let storage = CountingStorage {
+            inner: MockStorage::new(),
+            full_reads: Default::default(),
+            prefix_reads: Default::default(),
+        };
+        let bad = storage.store(&[0xFF, 0x00, 0x13], "bad.zip").await.unwrap();
+        let good = storage
+            .store(b"Alice works at Acme.", "good.xyz")
+            .await
+            .unwrap();
+        let document = |location: String, extension: &str| {
+            let data = Data::builder(
+                Uuid::new_v4(),
+                format!("doc.{extension}"),
+                location,
+                format!("file://doc.{extension}"),
+                extension,
+                "application/octet-stream",
+                format!("hash-{extension}"),
+                Uuid::new_v4(),
+            )
+            .build();
+            cognee_models::classify_documents(std::slice::from_ref(&data))
+                .pop()
+                .unwrap()
+        };
+        let run = |document: Document| {
+            let input = ClassifiedDocuments {
+                failures: FailureReport::default(),
+                documents: vec![document],
+                dataset_id: Uuid::new_v4(),
+                user_id: None,
+                tenant_id: None,
+            };
+            let storage = &storage;
+            async move {
+                extract_chunks_from_documents(
+                    &input,
+                    storage,
+                    100,
+                    TokenCounterKind::Word,
+                    TokenCountMode::Span,
+                    None,
+                    &LoaderRegistry::default(),
+                    CognifyConfig::default()
+                        .with_rollback_scope(crate::RollbackScope::FailedItems)
+                        .failure_policy(),
+                    None,
+                )
+                .await
+            }
+        };
+        let full = || storage.full_reads.load(std::sync::atomic::Ordering::SeqCst);
+        let prefix = || {
+            storage
+                .prefix_reads
+                .load(std::sync::atomic::Ordering::SeqCst)
+        };
+
+        let outcome = run(document(bad, "zip")).await;
+        assert!(
+            match &outcome {
+                Ok(extracted) => !extracted.failures.failed_items().is_empty(),
+                Err(_) => true,
+            },
+            "the bad file fails: {outcome:?}"
+        );
+        assert_eq!((prefix(), full()), (1, 0), "failed on the probe alone");
+
+        let extracted = run(document(good, "xyz")).await.unwrap();
+        assert!(!extracted.chunks.is_empty());
+        assert_eq!((prefix(), full()), (2, 1), "probed, then read whole");
+    }
+
     /// The UTF-8 probe accepts a prefix that a cut ended inside a valid
     /// multi-byte sequence, and rejects bytes that are invalid outright.
     #[test]
