@@ -18,6 +18,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **cognify reads an item with an unknown file extension as text, as Python
+  does (SDK-1694, stage O10).** Python's `document_class_for` ends with
+  `EXTENSION_TO_DOCUMENT_CLASS.get(extension, TextDocument)`
+  (`classify_documents.py:131`); Rust's `classify_documents` dropped such an
+  item, so it stayed `ItemStatus::Unreached` on every run and never completed.
+  An extension the table does not list, or none at all, now classifies as a
+  `text` document (`TextDocument`, `cognee_models::FALLBACK_DOC_TYPE`) and is
+  read by the strict UTF-8 text loader. Two consequences: such an item is now
+  extracted (LLM calls) and marked complete, and one whose bytes are not
+  UTF-8 now **fails** in chunking, as Python's `TextDocument.read` raises
+  `UnicodeDecodeError`, so it errors the run under every rollback scope
+  instead of being skipped. An empty one completes with no chunks. The
+  standard route only: a code file stamped `system_metadata.source == "code"`
+  still takes the CODE route ahead of classification, and a DLT row is still a
+  `dlt_row`. `doc_type_for_extension` still answers `None` for an unlisted
+  extension (it is the table lookup), `cognee_cognify::classify_documents` no
+  longer marks anything unreached, and `ItemStatus::Unreached` now comes only
+  from a fail-fast stop. Reach is low: `add` stores the sniffed extension
+  (`txt` for text it does not recognise) and refuses a file no loader claims,
+  so mainly Python-written rows and hand-built `Data` carry an unlisted one.
+
 - **The hard delete's degree-one sweep keeps every node a ledger row still
   names (SDK-1694, stage O9).** `DeleteMode::Hard` sweeps the graph for
   `Entity` and `EntityType` nodes with exactly one edge. Since O6 it kept a

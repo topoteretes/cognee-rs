@@ -664,7 +664,7 @@ The markers live under Python's one `cognify_pipeline` key.
 `CognifyResult::items` says, per data item handed to `cognify()` and in that
 order, what the run did with it (SDK-1694 O8): `Completed` (processed and kept
 by this run), `AlreadyCompleted` (skipped by its marker), `Failed`,
-`Unreached` (a fail-fast stop came first, or no loader matches it) or
+`Unreached` (a fail-fast stop came first) or
 `Discarded` (processed by a run that errored and did not keep it). A run that
 errors with `CognifyError::RunFailed` carries the same list on its report
 (`CognifyError::item_outcomes()`), read after the rollback. It is Python's
@@ -672,6 +672,11 @@ per-item `data_ingestion_info` (`PipelineRunCompleted`,
 `PipelineRunAlreadyCompleted`, `PipelineRunErrored`) without the source fields,
 which a host reads from the item's `Data` row. Python reports no entry for an
 item its fail-fast run cancelled; Rust reports it `Unreached`.
+
+An item whose extension the document-type table does not list (or that has
+none) is read as text, as Python's `document_class_for` falls back to
+`TextDocument` (SDK-1694 O10): it completes, or fails if its bytes are not
+UTF-8. Before O10 such an item was left `Unreached` on every run.
 
 ### search (retrieval)
 
