@@ -58,27 +58,35 @@ pub const FALLBACK_DOC_TYPE: &str = "text";
 ///
 /// Two shapes, both of which no current `add` writes:
 ///
-/// * **v0.1.0 to v0.2.0 raw blobs.** A file whose extension had no loader
-///   (or that had none) and whose bytes were not UTF-8 was stored verbatim as
+/// * **v0.1.0 to v0.2.0 raw blobs.** A file whose document type was text
+///   (an extension the table then mapped to text, `txt`, or none it listed,
+///   or none at all) and whose bytes were not UTF-8 was stored verbatim as
 ///   `text_<content_hash>.bin`, keeping its own extension (`zip`, `exe`,
-///   `mp4`, `bin`, none, ...). Removed by SDK-1039 P20, which routes by
-///   sniffed content and refuses bytes no loader claims.
+///   `mp4`, `bin`, none, and also `txt`, `md`, `json`, `xml`, `yaml`, which
+///   the table lists as text today). Removed by SDK-1039 P20, which routes by
+///   sniffed content and refuses bytes no loader claims. No other document
+///   type (pdf, csv, office, image, audio, html) was ever stored this way.
 /// * **URL fetches typed `bin`.** A fetched `image/*` or `audio/*` body whose
 ///   subtype the URL resolver did not map (TIFF, BMP, FLAC, ...) was stored
 ///   verbatim with extension `bin`: as `text_placeholder.bin` up to v0.2.0,
 ///   as `fetched_<content_hash>.bin` after it. Since SDK-1694 O10 the
 ///   resolver maps such a body to its real type or refuses it.
 ///
-/// The rule needs both an extension the document-type table does not list
-/// and one of those stored names (the last segment of `raw_data_location`,
-/// with a hex hash). A row any current `add` or Python writes has neither
+/// The rule needs one of those stored names (the last segment of
+/// `raw_data_location`, with a hex hash) together with an extension of a
+/// text document type: one the table does not list, or, for the
+/// `text_<hash>.bin` raw blobs only, one it lists as text. A row any current `add` or Python writes has neither
 /// name: text is stored as `text_<hash>.txt`, a fetched page as
 /// `text_<hash>.html` then `.txt`, another fetch as
 /// `fetched_<hash>.<listed extension>`, and Python stores loader text as
 /// `text_<hash>.txt`. Python has no such rows, so it has no counterpart for
 /// the skip: its `TextDocument` would read one and fail on the bytes.
 pub fn is_legacy_binary_row(data: &Data) -> bool {
-    if extension_to_doc_type(&data.extension).is_some() || is_dlt_sourced(&data.external_metadata) {
+    if is_dlt_sourced(&data.external_metadata) {
+        return false;
+    }
+    let doc_type = extension_to_doc_type(&data.extension);
+    if !matches!(doc_type, None | Some("text")) {
         return false;
     }
     let location = data.raw_data_location.trim_end_matches('/');
@@ -87,9 +95,13 @@ pub fn is_legacy_binary_row(data: &Data) -> bool {
         return false;
     };
     let is_hash = |hash: &str| hash.len() >= 32 && hash.bytes().all(|b| b.is_ascii_hexdigit());
-    stem == "text_placeholder"
-        || stem.strip_prefix("text_").is_some_and(is_hash)
-        || stem.strip_prefix("fetched_").is_some_and(is_hash)
+    if stem.strip_prefix("text_").is_some_and(is_hash) {
+        // A raw blob: any text-typed extension, listed or not.
+        return true;
+    }
+    // A URL fetch typed `bin`: never a listed extension.
+    doc_type.is_none()
+        && (stem == "text_placeholder" || stem.strip_prefix("fetched_").is_some_and(is_hash))
 }
 
 /// Map a file extension to a document type string, or `None` when the
@@ -655,8 +667,12 @@ mod tests {
     fn legacy_binary_rows_are_recognised_by_stored_name_and_extension() {
         let hash = "0123456789abcdef0123456789abcdef";
         for (extension, location) in [
-            // v0.1.0..v0.2.0 raw blobs, whatever their own extension.
+            // v0.1.0..v0.2.0 raw blobs, whatever their own extension,
+            // including the ones the table lists as text.
             ("zip", format!("text_{hash}.bin")),
+            ("txt", format!("text_{hash}.bin")),
+            ("MD", format!("text_{hash}.bin")),
+            ("json", format!("text_{hash}.bin")),
             ("", format!("/data/.cognee_data/text_{hash}.bin")),
             ("bin", format!("file:///srv/data/text_{hash}.bin")),
             // URL fetches typed `bin`, both names.
@@ -674,9 +690,14 @@ mod tests {
     fn other_rows_are_not_legacy_binary_rows() {
         let hash = "0123456789abcdef0123456789abcdef";
         for (extension, location) in [
-            // A listed extension is never skipped.
-            ("txt", format!("text_{hash}.bin")),
+            // A listed extension of another type is never skipped, and a
+            // URL name never with a listed extension.
+            ("pdf", format!("text_{hash}.bin")),
+            ("docx", format!("text_{hash}.bin")),
+            ("html", format!("text_{hash}.bin")),
             ("png", format!("fetched_{hash}.bin")),
+            ("txt", format!("fetched_{hash}.bin")),
+            ("txt", "text_placeholder.bin".to_string()),
             // Current names.
             ("xyz", format!("text_{hash}.txt")),
             ("bin", format!("fetched_{hash}.tif")),
