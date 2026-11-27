@@ -10,6 +10,9 @@
 #   - Rust target: rustup target add aarch64-linux-android
 #   - adb available and device connected
 #   - NDK toolchain bin on PATH (for the linker)
+#   - OpenSSL 3 built for aarch64-linux-android, OPENSSL_ROOT_DIR pointing at
+#     its install prefix (include/ + lib/libssl.so, lib/libcrypto.so). lbug
+#     0.23 requires OpenSSL 3 and the NDK ships none.
 #
 # Usage:
 #   ./scripts/android-build-and-deploy.sh [--debug] [--deploy]
@@ -129,12 +132,30 @@ export ANDROID_API_LEVEL
 # ARM objects that the aarch64 linker rejects with "incompatible" errors.
 export ANDROID_NDK="${ANDROID_NDK_HOME}"
 
+# lbug publishes no Android prebuilt, and its build.rs picks a prebuilt by the
+# *host* OS, so without this a cross build would download and try to link the
+# host's archive. Build the engine from source instead. (The source build
+# exports its bundled zstd/lz4 symbols, which only clashes when LanceDB is
+# linked too; android-default does not include LanceDB.)
+export LBUG_BUILD_FROM_SOURCE=1
+
+# lbug 0.23's CMake requires OpenSSL 3 (find_package honours OPENSSL_ROOT_DIR
+# from the environment) and its build.rs links libssl/libcrypto dynamically,
+# taking the library dir from the same variable.
+if [[ -z "${OPENSSL_ROOT_DIR:-}" || ! -f "${OPENSSL_ROOT_DIR}/lib/libssl.so" \
+      || ! -f "${OPENSSL_ROOT_DIR}/lib/libcrypto.so" ]]; then
+    echo "ERROR: OPENSSL_ROOT_DIR must point at an OpenSSL 3 build for ${TARGET}" >&2
+    echo "       (with lib/libssl.so and lib/libcrypto.so); lbug needs it and the NDK has none." >&2
+    exit 1
+fi
+export OPENSSL_ROOT_DIR
+
 # lbug's build.rs does not declare ANDROID_NDK in cargo:rerun-if-env-changed,
 # so cargo caches cmake-built static libraries and will reuse wrong-arch objects
 # when the NDK or target changes.  We track the last build config in a marker
 # file and only purge the lbug build cache when it actually changes.
 LBUG_MARKER="${TARGET_DIR}/${TARGET}/${PROFILE}/.lbug-build-config"
-LBUG_CONFIG_KEY="${TARGET}|${ANDROID_NDK_HOME}|${ANDROID_API_LEVEL}"
+LBUG_CONFIG_KEY="${TARGET}|${ANDROID_NDK_HOME}|${ANDROID_API_LEVEL}|${OPENSSL_ROOT_DIR}"
 if [[ -f "${LBUG_MARKER}" ]] && [[ "$(cat "${LBUG_MARKER}")" == "${LBUG_CONFIG_KEY}" ]]; then
     echo ">>> lbug build cache is up-to-date for ${TARGET}/${PROFILE}, skipping purge."
 else
@@ -226,6 +247,12 @@ else
     echo "WARNING: libcognee_cli_ffi.so not found in ${BINARY_DIR}." >&2
     echo "         Android wrapper app JNI integration requires this library." >&2
 fi
+
+# lbug links OpenSSL dynamically, so the device needs the same libraries.
+for lib in libssl.so libcrypto.so; do
+    cp "${OPENSSL_ROOT_DIR}/lib/${lib}" "${STAGING_DIR}/lib/"
+    echo "  Found ${lib}"
+done
 
 # Copy NDK libc++_shared.so (required for C++ dependencies)
 LIBCXX="${NDK_TOOLCHAIN}/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"

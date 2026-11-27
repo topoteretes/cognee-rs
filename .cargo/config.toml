@@ -35,6 +35,15 @@ CCACHE_BASEDIR = { value = ".", relative = true }
 # object may carry another OUT_DIR's comp_dir in its debug info; source paths
 # themselves stay correct (absolute cargo-registry paths).
 CCACHE_NOHASHDIR = "true"
+# Link the official prebuilt Ladybug engine of exactly the pinned `lbug`
+# version. Unset, lbug's build.rs downloads the *latest* GitHub release (not
+# the crate's version), so the linked engine, and with it the on-disk storage
+# version shared with the Python SDK, would drift with upstream releases.
+# The prebuilt, not a source build, because upstream's release archive keeps
+# its bundled zstd/lz4 symbols local; a source build exports them and fails
+# to link next to LanceDB's zstd-sys/lz4-sys (different versions, so this
+# cannot be papered over). See docs/build/lbug-rebuilds.md.
+LBUG_VERSION = { value = "0.23.0", force = false }
 CC_aarch64_linux_android = "aarch64-linux-android21-clang"
 CXX_aarch64_linux_android = "aarch64-linux-android21-clang++"
 AR_aarch64_linux_android = "llvm-ar"

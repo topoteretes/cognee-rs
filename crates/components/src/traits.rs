@@ -43,6 +43,17 @@ pub trait VectorDbFactory: Send + Sync {
     }
     /// Construct the backend from the resolved context.
     async fn build(&self, ctx: &BackendBuildContext) -> Result<Arc<dyn VectorDB>, ComponentError>;
+    /// What [`build`](Self::build) depends on in `ctx`: two contexts with
+    /// equal fingerprints must build the same store. A configuration change
+    /// that leaves it equal keeps the open engine instead of building a new
+    /// one next to it (`ComponentManager`).
+    ///
+    /// The default is the whole context, so a factory that does not narrow it
+    /// is rebuilt on any configuration change — never left on a stale engine.
+    /// The built-ins narrow it with [`crate::vector_store_inputs`].
+    fn store_fingerprint(&self, ctx: &BackendBuildContext) -> String {
+        ctx.fingerprint()
+    }
 }
 
 /// Builds a knowledge-graph database backend for one provider id.
@@ -61,6 +72,11 @@ pub trait GraphDbFactory: Send + Sync {
         &self,
         ctx: &BackendBuildContext,
     ) -> Result<Arc<dyn GraphDBTrait>, ComponentError>;
+    /// The graph twin of [`VectorDbFactory::store_fingerprint`]; the
+    /// built-ins narrow it with [`crate::graph_store_inputs`].
+    fn store_fingerprint(&self, ctx: &BackendBuildContext) -> String {
+        ctx.fingerprint()
+    }
 }
 
 /// Builds an LLM adapter (and, optionally, a matching transcriber) for one
