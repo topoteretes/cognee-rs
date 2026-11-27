@@ -157,6 +157,15 @@ endif()
 # stdc++ is required because cognee-graph depends on lbug (C++ graph engine)
 set(COGNEE_SYSTEM_LIBS pthread dl m stdc++)
 
+# lbug 0.23's engine links OpenSSL 3 (its bundled httplib client) and, on
+# Linux, libatomic for its 16-byte atomics. A staticlib carries no link
+# directives, so name them here (lbug's build.rs only tells rustc).
+find_package(OpenSSL 3 REQUIRED)
+list(APPEND COGNEE_SYSTEM_LIBS OpenSSL::SSL OpenSSL::Crypto)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND COGNEE_SYSTEM_LIBS atomic)
+endif()
+
 # macOS: a Rust *staticlib* does not carry the `#[link]` / `cargo:rustc-link-lib`
 # directives its dependencies declare — rustc only acts on those when it drives
 # the final link itself (cdylib, bin). Because CMake links libcognee_capi.a with

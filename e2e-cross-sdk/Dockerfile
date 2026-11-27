@@ -56,12 +56,16 @@ FROM ${HARNESS_BASE} AS rust-build-env
 # binaries link against. cmake: lbug's bundled C++ tree. protobuf-compiler +
 # libprotobuf-dev: prost (lance-encoding imports google/protobuf/*.proto,
 # which only libprotobuf-dev ships). pkg-config + libssl-dev: ort-sys's
-# build script (see the OpenSSL note above). git: cargo git dependencies.
+# build script (see the OpenSSL note above), and lbug 0.23's engine links
+# libssl/libcrypto. git: cargo git dependencies. curl: lbug's build.rs fetches
+# its pinned prebuilt engine (LBUG_VERSION in .cargo/config.toml) with curl;
+# without it lbug silently falls back to a source build, whose exported zstd
+# symbols then clash with LanceDB's zstd-sys at link time.
 # No mold: since Rust 1.90, x86_64-unknown-linux-gnu links with the
 # toolchain's own rust-lld, so the system linker is not on the Rust link path.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake protobuf-compiler libprotobuf-dev pkg-config git \
-    libssl-dev ca-certificates \
+    libssl-dev ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 

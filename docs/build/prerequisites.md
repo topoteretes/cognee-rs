@@ -17,7 +17,7 @@ prints the install line for your platform.
 | **`cmake`** | Ladybug (graph DB) and AWS-LC (Bedrock TLS) | `lbug`, `aws-lc-sys` |
 | **`protoc`** | LanceDB's Protobuf schemas | `lancedb` → `lance` → `prost-build` |
 | **OpenSSL 3** (`libssl`/`libcrypto`; headers too for a source build) | Ladybug links it dynamically into every binary with `ladybug` | `lbug` ≥ 0.22 |
-| **Network at build time** | `lbug` downloads its pinned prebuilt engine from GitHub releases | the `ladybug` feature |
+| **Network + `curl` at build time** | `lbug` downloads its pinned prebuilt engine from GitHub releases (a failed download silently falls back to a source build that fails to link next to LanceDB) | the `ladybug` feature |
 | **Python 3** (interpreter only) | Ladybug *source* builds only (Android, `LBUG_BUILD_FROM_SOURCE`) | `lbug` 0.23 |
 | **Network at build time** | `ort-sys` downloads an ONNX Runtime build | the `onnx` feature |
 

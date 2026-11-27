@@ -293,8 +293,12 @@ C++ namespace (`lbug_zstd::`).
 
 What the prebuilt costs:
 
-- **Network at build time**, from `github.com/LadybugDB/ladybug/releases`, with
-  no checksum. Point `LBUG_PREBUILT_CACHE_DIR` at a persistent directory to
+- **Network and `curl` at build time**, from
+  `github.com/LadybugDB/ladybug/releases`, with no checksum. If the download
+  fails for any reason (no network, no `curl` in a build container), lbug
+  *silently* falls back to a source build, and the failure only surfaces at
+  link time as `duplicate symbol: ZSTD_*`. That error means "the prebuilt was
+  not fetched", not a code problem. Point `LBUG_PREBUILT_CACHE_DIR` at a persistent directory to
   reuse it across builds.
 - **The archive is chosen by the build host's `uname`, not the Rust target.**
   Cross builds (`cross` for Linux arm64) need the target's archive fetched

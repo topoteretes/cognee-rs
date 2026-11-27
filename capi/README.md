@@ -21,7 +21,8 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-Link with `-lcognee_capi` (and `-ldl -lm -lpthread` on Linux).
+Link with `-lcognee_capi` (and `-ldl -lm -lpthread` on Linux). With the static library and
+the Ladybug graph engine, also add `-lstdc++ -lssl -lcrypto` (OpenSSL 3), plus `-latomic` on Linux.
 
 When you link the **static** library (`libcognee_capi.a`) yourself, your build has to name
 the native libraries the Rust side depends on — a staticlib carries no link directives of
