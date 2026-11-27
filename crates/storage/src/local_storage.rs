@@ -164,6 +164,30 @@ impl StorageTrait for LocalStorage {
         Ok(bytes)
     }
 
+    async fn retrieve_prefix(
+        &self,
+        location: &str,
+        max_len: usize,
+    ) -> Result<Vec<u8>, StorageError> {
+        use tokio::io::AsyncReadExt;
+
+        self.check_stored_location(location).await?;
+        let full_path = self.resolve_location(location);
+        let file = fs::File::open(&full_path).await.map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                StorageError::NotFound(format!("File not found: {location}"))
+            } else {
+                StorageError::IoError(format!("Failed to read file: {e}"))
+            }
+        })?;
+        let mut bytes = Vec::new();
+        file.take(max_len as u64)
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|e| StorageError::IoError(format!("Failed to read file: {e}")))?;
+        Ok(bytes)
+    }
+
     async fn exists(&self, location: &str) -> Result<bool, StorageError> {
         let full_path = self.resolve_location(location);
 
@@ -619,5 +643,22 @@ mod tests {
 
         assert_eq!(second, first);
         assert_eq!(storage.retrieve(&first).await.unwrap(), b"first take");
+    }
+
+    #[tokio::test]
+    async fn retrieve_prefix_reads_at_most_max_len_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path().to_path_buf());
+        let location = storage.store(b"0123456789", "prefix.txt").await.unwrap();
+
+        assert_eq!(
+            storage.retrieve_prefix(&location, 4).await.unwrap(),
+            b"0123"
+        );
+        assert_eq!(
+            storage.retrieve_prefix(&location, 100).await.unwrap(),
+            b"0123456789"
+        );
+        assert!(storage.retrieve_prefix("missing.bin", 4).await.is_err());
     }
 }

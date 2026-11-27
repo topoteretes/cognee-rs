@@ -359,22 +359,46 @@ impl LedgerIdentity {
 ///
 /// One `Document` per item, by extension; an extension the table does not
 /// list is read as text, as Python's `document_class_for` does
-/// (`classify_documents.py:131`, SDK-1694 O10). Classification therefore
-/// drops nothing and records no failure: an item whose bytes the text loader
-/// cannot decode fails later, in [`extract_chunks_from_documents`], as
+/// (`classify_documents.py:131`, SDK-1694 O10). An item whose bytes the text
+/// loader cannot decode fails later, in [`extract_chunks_from_documents`], as
 /// Python's `TextDocument.read` raises there.
+///
+/// The one exception is a legacy binary row
+/// ([`cognee_models::is_legacy_binary_row`]: raw bytes an earlier Rust `add`
+/// stored without a loader). It is not classified, not read and not failed:
+/// it is recorded as unreached, so it is never marked complete, never blocks
+/// the other items under fail-fast, and does not fail the run. Deleting or
+/// re-adding it is the remedy.
 pub fn classify_documents(
     input: &CognifyInput,
     failure_policy: FailurePolicy,
 ) -> Result<ClassifiedDocuments, CognifyError> {
-    let documents: Vec<Document> = model_classify_documents(&input.data_items);
-    info!(doc_count = documents.len(), "documents classified");
-    debug_assert_eq!(
-        documents.len(),
-        input.data_items.len(),
-        "classification maps every item"
+    let mut failures = FailureReport::with_policy(&failure_policy);
+    let (legacy, readable): (Vec<&Data>, Vec<&Data>) = input
+        .data_items
+        .iter()
+        .partition(|item| cognee_models::is_legacy_binary_row(item));
+    for item in &legacy {
+        warn!(
+            data_id = %item.id,
+            extension = %item.extension,
+            location = %item.raw_data_location,
+            "a legacy binary row (raw bytes stored without a loader by an earlier \
+             cognee-rs add) is skipped; delete it or re-add the file"
+        );
+        failures.mark_unreached(item.id);
+    }
+    let documents: Vec<Document> = if legacy.is_empty() {
+        model_classify_documents(&input.data_items)
+    } else {
+        let readable: Vec<Data> = readable.into_iter().cloned().collect();
+        model_classify_documents(&readable)
+    };
+    info!(
+        doc_count = documents.len(),
+        skipped_legacy = legacy.len(),
+        "documents classified"
     );
-    let failures = FailureReport::with_policy(&failure_policy);
 
     Ok(ClassifiedDocuments {
         documents,
@@ -388,6 +412,26 @@ pub fn classify_documents(
 // ---------------------------------------------------------------------------
 // Task 2: extract_chunks_from_documents
 // ---------------------------------------------------------------------------
+
+/// How much of a text document of unknown type [`chunk_one_document`] checks
+/// for UTF-8 before reading the rest: Python's block size
+/// (`TextDocument.read`, `file.read(1000000)`), in bytes.
+const UTF8_PROBE_BYTES: usize = 1_000_000;
+
+/// Fail unless `prefix` is valid UTF-8, allowing a sequence the cut split at
+/// its end. The message is the text loader's, so the item fails the same way
+/// whether the bad bytes are in the prefix or after it.
+fn utf8_prefix_check(prefix: &[u8]) -> Result<(), CognifyError> {
+    match std::str::from_utf8(prefix) {
+        Ok(_) => Ok(()),
+        // `error_len() == None`: the input ended inside a sequence, which a
+        // prefix cut can do to valid text.
+        Err(e) if e.error_len().is_none() => Ok(()),
+        Err(e) => Err(CognifyError::ChunkingError(
+            cognee_ingestion::loaders::LoaderError::InvalidUtf8(e.to_string()).to_string(),
+        )),
+    }
+}
 
 /// Chunk one classified document.
 ///
@@ -413,6 +457,22 @@ async fn chunk_one_document(
     loader_registry: &LoaderRegistry,
     chunker: Option<&dyn Chunker>,
 ) -> Result<Vec<DocumentChunk>, CognifyError> {
+    // A text document of unknown type (an extension the table does not list,
+    // read as text since SDK-1694 O10) may be a large binary. Check its start
+    // before reading all of it, so such a file fails at once, as Python's
+    // `TextDocument.read` fails at the first block it cannot decode
+    // (`TextDocument.py:15-17`, 1,000,000 characters per block). The text
+    // loader still decodes the whole file strictly afterwards.
+    if document.document_type == cognee_models::FALLBACK_DOC_TYPE
+        && cognee_models::doc_type_for_extension(&document.extension).is_none()
+    {
+        let prefix = storage
+            .retrieve_prefix(&document.raw_data_location, UTF8_PROBE_BYTES)
+            .await
+            .map_err(|e| CognifyError::ChunkingError(e.to_string()))?;
+        utf8_prefix_check(&prefix)?;
+    }
+
     let content_bytes = storage
         .retrieve(&document.raw_data_location)
         .await
@@ -8862,6 +8922,17 @@ mod tests {
         assert_eq!(result.documents[0].document_type, "text");
         assert!(result.failures.entries().is_empty());
         assert!(result.failures.unreached_items().is_empty());
+    }
+
+    /// The UTF-8 probe accepts a prefix that a cut ended inside a valid
+    /// multi-byte sequence, and rejects bytes that are invalid outright.
+    #[test]
+    fn the_utf8_probe_allows_a_cut_sequence_and_rejects_bad_bytes() {
+        assert!(utf8_prefix_check("héllo".as_bytes()).is_ok());
+        // "é" is 0xC3 0xA9; a cut after 0xC3 is not an error.
+        assert!(utf8_prefix_check(&[b'h', 0xC3]).is_ok());
+        let err = utf8_prefix_check(&[b'h', 0xFF, b'i']).unwrap_err();
+        assert!(err.to_string().contains("Invalid UTF-8"), "{err}");
     }
 
     /// An extension the table does not list is read as text, as Python's

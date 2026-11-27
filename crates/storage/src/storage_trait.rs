@@ -142,6 +142,22 @@ pub trait StorageTrait: Send + Sync {
     /// Retrieve data from storage location
     async fn retrieve(&self, location: &str) -> Result<Vec<u8>, StorageError>;
 
+    /// Retrieve at most the first `max_len` bytes stored at `location`.
+    ///
+    /// For a caller that can reject a file from its start (cognify's UTF-8
+    /// check on a text document of unknown type) without reading all of it.
+    /// The default reads the whole file and truncates it; a backend that can
+    /// read a prefix should override it.
+    async fn retrieve_prefix(
+        &self,
+        location: &str,
+        max_len: usize,
+    ) -> Result<Vec<u8>, StorageError> {
+        let mut bytes = self.retrieve(location).await?;
+        bytes.truncate(max_len);
+        Ok(bytes)
+    }
+
     /// Check if data exists at location
     async fn exists(&self, location: &str) -> Result<bool, StorageError>;
 

@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use cognee_models::{Data, Document, DocumentChunk, classify_documents};
+use cognee_models::{Data, Document, DocumentChunk, classify_documents, is_legacy_binary_row};
 use cognee_storage::StorageTrait;
 use tracing::{debug, info, info_span, instrument};
 
@@ -16,8 +16,11 @@ use crate::token_counter::{TokenCountMode, TokenCounter, WordCounter};
 /// The extract text chunks pipeline.
 ///
 /// This pipeline handles the first two stages of cognify:
-/// 1. Document classification (text/* only)
-/// 2. Text chunking
+/// 1. Document classification ([`classify_documents`]: every item, an
+///    unlisted extension as text, as Python does; a legacy binary row,
+///    [`is_legacy_binary_row`], is skipped)
+/// 2. Text chunking of each document's stored bytes, decoded as UTF-8 (bytes
+///    that are not UTF-8 fail the call)
 pub struct ExtractTextChunksPipeline {
     storage: Arc<dyn StorageTrait>,
 }
@@ -30,7 +33,7 @@ impl ExtractTextChunksPipeline {
     /// Extract text chunks from a set of Data items.
     ///
     /// Implements:
-    /// 1. Document classification (text/* only)
+    /// 1. Document classification (see [`ExtractTextChunksPipeline`])
     /// 2. Text chunking
     ///
     /// Returns the generated chunks.
@@ -61,6 +64,10 @@ impl ExtractTextChunksPipeline {
             return Err(ChunkingError::InvalidChunkSize(0));
         }
 
+        let data_items: Vec<Data> = data_items
+            .into_iter()
+            .filter(|item| !is_legacy_binary_row(item))
+            .collect();
         let documents: Vec<Document> = classify_documents(&data_items);
         info!(doc_count = documents.len(), "documents classified");
 
@@ -208,5 +215,27 @@ mod tests {
         let chunks = pipeline.extract_chunks(vec![data], 100).await.unwrap();
         assert!(!chunks.is_empty());
         assert!(chunks[0].text.contains("Hello world"));
+    }
+
+    /// A legacy binary row is skipped without being read (its stored file
+    /// does not exist here), so it does not fail the call.
+    #[tokio::test]
+    async fn extract_chunks_skips_a_legacy_binary_row() {
+        let storage = Arc::new(MockStorage::new());
+        let data = Data::builder(
+            Uuid::new_v4(),
+            "archive",
+            "text_0123456789abcdef0123456789abcdef.bin",
+            "file://archive.zip",
+            "zip",
+            "application/zip",
+            "hash789",
+            Uuid::new_v4(),
+        )
+        .build();
+
+        let pipeline = ExtractTextChunksPipeline::new(storage);
+        let chunks = pipeline.extract_chunks(vec![data], 100).await.unwrap();
+        assert!(chunks.is_empty());
     }
 }

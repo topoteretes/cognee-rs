@@ -295,6 +295,79 @@ async fn an_unknown_extension_item_that_is_not_utf8_fails() {
     assert!(!harness.is_marked(binary).await);
 }
 
+/// Binary first, under the default fail-fast stop: the binary item fails in
+/// chunking and stops the run, so the text item after it is never reached and
+/// no extraction call is made. Pins the ordering an upgrade can hit.
+#[tokio::test]
+async fn a_non_utf8_unknown_extension_item_first_stops_the_run_under_fail_fast() {
+    let mut harness = Harness::new().await;
+    let binary = harness.add_file("placeholder").await;
+    let text = harness.add_file("Alice works at Acme.").await;
+    let location = harness
+        .storage
+        .store(&[0x89, 0x00, 0xFF, 0xFE, 0x01, 0x80], "opaque-first.bin")
+        .await
+        .expect("store the binary bytes");
+    let mut opaque = harness.data(binary);
+    opaque.extension = "zip".into();
+    opaque.mime_type = "application/zip".into();
+    opaque.raw_data_location = location;
+
+    let llm = Arc::new(CountingLlm::lenient(4));
+    let outcome = errored_outcomes(
+        harness
+            .run_with_llm(
+                &extraction_config(),
+                llm.clone(),
+                vec![opaque, harness.data(text)],
+            )
+            .await,
+    );
+    assert_eq!(
+        outcome,
+        outcomes(&[(binary, ItemStatus::Failed), (text, ItemStatus::Unreached)])
+    );
+    assert_eq!(llm.call_count(), 0, "the stop comes before any extraction");
+    assert!(!harness.is_marked(text).await);
+}
+
+/// A legacy binary row (raw bytes an earlier Rust `add` stored as
+/// `text_<hash>.bin`, keeping an unlisted extension) is skipped, not read as
+/// text: it is reported unreached on a run that completes, never marked, and
+/// it neither fails nor blocks the item after it under the default fail-fast
+/// stop. Its content is not read: the stored file does not even exist here.
+#[tokio::test]
+async fn a_legacy_binary_row_is_skipped_and_the_others_complete() {
+    let mut harness = Harness::new().await;
+    let legacy = harness.add_file("placeholder").await;
+    let text = harness.add_file("Alice works at Acme.").await;
+    let mut row = harness.data(legacy);
+    row.extension = "zip".into();
+    row.mime_type = "application/zip".into();
+    row.raw_data_location = "text_0123456789abcdef0123456789abcdef.bin".into();
+
+    let llm = Arc::new(CountingLlm::lenient(4));
+    let result = harness
+        .run_with_llm(
+            &extraction_config(),
+            llm.clone(),
+            vec![row, harness.data(text)],
+        )
+        .await
+        .expect("a legacy row fails nothing");
+
+    assert_eq!(
+        result.items,
+        outcomes(&[
+            (legacy, ItemStatus::Unreached),
+            (text, ItemStatus::Completed),
+        ])
+    );
+    assert_eq!(llm.call_count(), 1, "only the text item is extracted");
+    assert!(!harness.is_marked(legacy).await);
+    assert!(harness.is_marked(text).await);
+}
+
 /// An empty unknown-extension file has nothing to read and completes, as
 /// Python's `TextDocument.read` yields no chunk for it.
 #[tokio::test]
