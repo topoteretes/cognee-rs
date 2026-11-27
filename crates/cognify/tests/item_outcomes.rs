@@ -366,6 +366,24 @@ async fn a_legacy_binary_row_is_skipped_and_the_others_complete() {
     assert_eq!(llm.call_count(), 1, "only the text item is extracted");
     assert!(!harness.is_marked(legacy).await);
     assert!(harness.is_marked(text).await);
+
+    // The legacy row stays unmarked forever, yet it needs no LLM: once the
+    // text item is complete nothing pending would reach an extractor, so a
+    // keyless server can still cognify the dataset.
+    let mut row = harness.data(legacy);
+    row.extension = "zip".into();
+    row.raw_data_location = "text_0123456789abcdef0123456789abcdef.bin".into();
+    let items = vec![row, harness.data(text)];
+    let needs_llm = |incremental| {
+        cognee_cognify::rollback::pending_routes_need_llm(
+            &*harness.db,
+            harness.dataset_id,
+            &items,
+            incremental,
+        )
+    };
+    assert!(!needs_llm(true).await.unwrap());
+    assert!(needs_llm(false).await.unwrap(), "the text item runs again");
 }
 
 /// An empty unknown-extension file has nothing to read and completes, as

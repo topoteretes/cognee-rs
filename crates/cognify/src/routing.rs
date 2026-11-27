@@ -154,13 +154,18 @@ pub fn cognify_route_for(data: &Data) -> Result<CognifyRoute, CognifyRouteError>
 /// run fails on it anyway.
 ///
 /// A DLT-source row is refused too ([`CognifyRouteError::UnsupportedRoute`]).
+/// A legacy binary row ([`cognee_models::is_legacy_binary_row`]) takes the
+/// standard route but is skipped before any extractor sees it, so it needs
+/// nothing either: a keyless server with such a row (which is never marked
+/// complete) must not fail every cognify for want of an LLM.
 ///
 /// Callers use it to skip resolving the graph extractor (which needs an LLM
 /// or a registered LLM-free backend) when no item will reach it.
 pub fn routes_need_llm(items: &[Data]) -> bool {
-    items
-        .iter()
-        .any(|item| matches!(cognify_route_for(item), Ok(CognifyRoute::Standard)))
+    items.iter().any(|item| {
+        matches!(cognify_route_for(item), Ok(CognifyRoute::Standard))
+            && !cognee_models::is_legacy_binary_row(item)
+    })
 }
 
 /// The call-level node set a code repo row carries, or `None`. Python's
@@ -302,7 +307,13 @@ mod tests {
         assert!(!routes_need_llm(&[repo.clone(), file.clone(), legacy]));
         assert!(routes_need_llm(&[repo.clone(), standard]));
         // A DLT-source row is refused, so it needs no LLM either.
-        assert!(!routes_need_llm(&[repo, dlt]));
+        assert!(!routes_need_llm(&[repo.clone(), dlt]));
+        // A legacy binary row is skipped before extraction (SDK-1694 O10).
+        let mut blob = data(None, None);
+        blob.extension = "zip".into();
+        blob.raw_data_location = "text_0123456789abcdef0123456789abcdef.bin".into();
+        assert!(!routes_need_llm(&[repo, blob.clone()]));
+        assert!(routes_need_llm(&[blob, data(None, None)]));
     }
 
     #[test]
