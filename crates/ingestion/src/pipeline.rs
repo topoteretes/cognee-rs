@@ -3462,7 +3462,7 @@ mod tests {
         let _mock = server
             .mock("GET", "/scan.tiff")
             .with_header("content-type", "image/tiff")
-            .with_body(b"II*\x00fake".to_vec())
+            .with_body(b"II*\x00fake")
             .create_async()
             .await;
         let temp_dir = tempfile::tempdir().unwrap();
