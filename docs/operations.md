@@ -231,8 +231,36 @@ Python's registry order: `feedback_weights`, `persist_session_qa`,
 `global_context_index`. The first seven read the given sessions and are
 skipped with `no_session_ids` without them; the last two work on the graph
 alone and are opt-in. Each stage reports a `StageResult` (`status`, `reason`,
-`error`, `counts`, `duration_ms`) on the returned `ImproveResult`, whose
+`error`, `counts`, `duration_ms`, `run`) on the returned `ImproveResult`, whose
 `status` summarises them (`completed`, `errored`, `skipped`, `running`).
+`run` is the memify run info Python's pipeline-backed stages keep
+(`StageRunInfo`): `feedback_weights`, `persist_session_qa`,
+`persist_agent_traces` and `global_context_index` set it when they complete
+on an existing dataset. It serialises as Python's `PipelineRunCompleted`
+(`pipeline_run_id`, `dataset_id`, `dataset_name`, `payload: null`, one
+`data_ingestion_info` entry `{"run_info": ..., "data_id": null}`, `data_ids:
+[]`); every other stage, and a skipped, `already_completed` or errored one,
+has `run: null`. `persist_session_qa` that finds no Q&A in any session is
+`already_completed` with reason `no_new_entries` and no run, as Python's
+pre-check reports it.
+
+Known gaps against Python's stage `run` and status:
+
+- Rust has no session Q&A or trace persist watermark (SDK-1047): a rerun of
+  `persist_session_qa` or `persist_agent_traces` over the same entries
+  persists them again and reports `completed` with a run, where Python
+  reports `already_completed` (`no_new_entries` / `no_new_trace_steps`) and
+  `run: null`.
+- Rust writes no `memify_pipeline` row to `pipeline_runs`, so
+  `run.pipeline_run_id` names no row. Python's `global_context_index` change
+  check counts the row a memify-backed stage writes, so after an improve
+  with session ids Python always rebuilds the index, while Rust reports
+  `already_completed` (`no_writes_since_last_improve`). The row is also
+  missing from what reads `pipeline_runs`: the activity listing and the
+  visualization's observed operations.
+- Reading a result back (`Deserialize`), `run` keeps only a completed
+  memify-shaped run; any other run (a Python server's `review_conflicts`
+  run, an errored run) reads as `null`.
 Stages named in `improve.stages_disabled` (`IMPROVE_STAGES_DISABLED`, a
 comma-separated list) are skipped first, with `disabled_by_config`; an unknown
 name, or the fatal `persist_session_qa`, makes the configuration invalid and

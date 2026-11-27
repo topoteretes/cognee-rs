@@ -18,6 +18,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **An improve stage's `run` carries its memify run info, as Python's does
+  (SDK-1694, stage O11).** Python's `feedback_weights`,
+  `persist_session_qa`, `persist_agent_traces` and `global_context_index`
+  each run as one `memify_pipeline` run, and `StageResult.from_pipeline_run`
+  keeps its `PipelineRunCompleted` in the stage's `run`
+  (`cognee/modules/improve/result.py:131-156`); Rust always answered
+  `"run": null`. `StageResult::run` is now an `Option<StageRunInfo>` (was
+  `Option<serde_json::Value>`), set when one of those four stages completes
+  on an existing dataset. It holds ids only (`pipeline_run_id`, fresh per
+  stage run; `dataset_id`; `dataset_name`; SDK-507) and serialises to
+  Python's shape: `status: "PipelineRunCompleted"`, `payload: null`, one
+  `data_ingestion_info` entry `{"run_info": <the same run>, "data_id": null}`
+  and `data_ids: []`. Memify runs over one placeholder item, not a `Data`
+  row, so the entry has no `data_name` / `data_location` / `data_label`. A
+  skipped or `already_completed` stage, an errored one (Python's failed
+  memify run raises out of the stage) and the stages that run no memify
+  pipeline (`extract_agent_context`, `distill_sessions`,
+  `update_user_preferences`, `build_truth_subspace`, the unported
+  `review_conflicts`) keep `"run": null`. `StageResult::with_run` attaches
+  one. Rust records no `memify_pipeline` row under the run id. The binding
+  `improve` result (`improve_result_json`) still omits `run`. Reading a
+  result back keeps only a completed memify-shaped run; any other run reads
+  as `None`. `persist_session_qa` that finds no Q&A to persist is now
+  `already_completed` with reason `no_new_entries` (new
+  `REASON_NO_NEW_SESSION_ENTRIES`), no counts and no run, as Python's
+  pre-check (`stages.py:177-178`); it was `completed`. Remaining gaps are
+  listed in `docs/operations.md` (improve).
 - **cognify reads an item with an unknown file extension as text, as Python
   does (SDK-1694, stage O10).** Python's `document_class_for` ends with
   `EXTENSION_TO_DOCUMENT_CLASS.get(extension, TextDocument)`

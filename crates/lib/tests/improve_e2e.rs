@@ -19,10 +19,10 @@ use cognee::api::improve::{
     DEFAULT_STAGES, ImproveConfig, ImproveParams, ImproveResult, ImproveStatus,
     REASON_ABORTED_BY_FATAL_STAGE, REASON_AUTO_FEEDBACK_DISABLED, REASON_BACKEND_UNSUPPORTED,
     REASON_BUDGET_EXHAUSTED, REASON_DISABLED_BY_CONFIG, REASON_EDGE_EVIDENCE_DISABLED,
-    REASON_NO_CHANGES, REASON_NO_LLM_CONFIGURED, REASON_NO_NEW_TRACE_STEPS, REASON_NO_SESSION_IDS,
-    REASON_NO_WRITES_SINCE_LAST_IMPROVE, REASON_NOT_PORTED, REASON_OPT_IN_DISABLED,
-    REASON_PERSONALIZATION_DISABLED, REASON_TURNED_OFF, StageKind, StageResult, StageStatus,
-    TRUTH_SUBSPACE_STAGE, improve, stage_watermark_key,
+    REASON_NO_CHANGES, REASON_NO_LLM_CONFIGURED, REASON_NO_NEW_SESSION_ENTRIES,
+    REASON_NO_NEW_TRACE_STEPS, REASON_NO_SESSION_IDS, REASON_NO_WRITES_SINCE_LAST_IMPROVE,
+    REASON_NOT_PORTED, REASON_OPT_IN_DISABLED, REASON_PERSONALIZATION_DISABLED, REASON_TURNED_OFF,
+    StageKind, StageResult, StageStatus, TRUTH_SUBSPACE_STAGE, improve, stage_watermark_key,
 };
 use cognee::api::improve::{IMPROVE_PIPELINE_NAME, IMPROVE_WRITE_PIPELINE_NAME};
 use cognee::models::Dataset;
@@ -327,7 +327,12 @@ async fn improve_with_an_empty_session_reports_every_stage() {
         statuses(&r),
         vec![
             ("feedback_weights", Completed, None),
-            ("persist_session_qa", Completed, None),
+            // Python's pre-check: no Q&A to persist, so no memify run.
+            (
+                "persist_session_qa",
+                AlreadyCompleted,
+                Some(REASON_NO_NEW_SESSION_ENTRIES)
+            ),
             (
                 "persist_agent_traces",
                 AlreadyCompleted,
@@ -362,11 +367,8 @@ async fn improve_with_an_empty_session_reports_every_stage() {
         counts("feedback_weights").get("entries_processed"),
         Some(&0)
     );
-    assert_eq!(counts("persist_session_qa").get("sessions"), Some(&1));
-    assert_eq!(
-        counts("persist_session_qa").get("sessions_persisted"),
-        Some(&0)
-    );
+    assert!(counts("persist_session_qa").is_empty());
+    assert!(stage(&r, "persist_session_qa").run.is_none());
     assert_eq!(counts("distill_sessions").get("documents"), Some(&0));
     assert_eq!(counts("distill_sessions").get("sessions_failed"), Some(&0));
 }
@@ -439,9 +441,10 @@ async fn improve_without_an_llm_skips_the_llm_stages() {
             "{name}"
         );
     }
+    // The session has no Q&A: the stage ran and found nothing new.
     assert_eq!(
         stage(&r, "persist_session_qa").status,
-        StageStatus::Completed
+        StageStatus::AlreadyCompleted
     );
 }
 
@@ -617,6 +620,21 @@ async fn improve_builds_the_global_context_index() {
     assert_eq!(gci.status, StageStatus::Completed);
     assert_eq!(gci.counts.get("nodes_written"), Some(&2));
     assert_eq!(r.status(), ImproveStatus::Completed);
+    // Python's completed memify run (`StageResult.from_pipeline_run`).
+    let run = gci.run.as_ref().expect("a completed build reports its run");
+    assert_eq!(run.dataset_id, dataset_id);
+    assert_eq!(run.dataset_name, "ds_gcidx");
+    let wire = serde_json::to_value(&r).unwrap();
+    let wire_run = &wire["stages"][8]["run"];
+    assert_eq!(wire_run["status"], "PipelineRunCompleted");
+    assert_eq!(wire_run["dataset_id"], dataset_id.to_string());
+    assert_eq!(wire_run["data_ids"], serde_json::json!([]));
+    assert_eq!(
+        wire_run["data_ingestion_info"][0]["run_info"]["pipeline_run_id"],
+        run.pipeline_run_id.to_string()
+    );
+    // The stages that did not run carry none.
+    assert!(r.stages[..8].iter().all(|s| s.run.is_none()));
     assert_eq!(
         index_node_texts(&h).await,
         [
@@ -676,6 +694,56 @@ async fn improve_reports_distilled_lessons() {
         r.dataset_id.is_some(),
         "persist_session_qa created the dataset"
     );
+    // `feedback_weights` completed before the dataset existed: no dataset
+    // id to report, so no run. `persist_session_qa` created it and reports
+    // its run over it.
+    let feedback = stage(&r, "feedback_weights");
+    assert_eq!(feedback.status, StageStatus::Completed, "{feedback:?}");
+    assert!(feedback.run.is_none(), "{feedback:?}");
+    assert_eq!(persist.run.as_ref().map(|run| run.dataset_id), r.dataset_id);
+}
+
+/// A stage that errors on an existing dataset reports no run, as Python's
+/// failed memify run raises out of the stage (`stage.py:79-84`); the stage
+/// before it, which completed on the same dataset, does.
+#[tokio::test]
+async fn an_errored_stage_on_an_existing_dataset_reports_no_run() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let session_id = "errored_run_session";
+    // Every summary fails, so the session Q&A's cognify fails.
+    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(FailingSummaryLlm {
+        inner: SchemaDispatchLlm {
+            accepted_statement: "TerraScout indexes data nightly.".to_string(),
+            curator_out_of_budget: false,
+            agent_lessons_fail: false,
+        },
+        ok_summaries: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let mut p = params(
+        &h,
+        &config,
+        "ds_errored_run",
+        Some(vec![session_id.to_string()]),
+        llm,
+    );
+    let dataset_id = create_dataset(&h, "ds_errored_run", p.owner_id).await;
+    p.dataset_id = Some(dataset_id);
+    seed_qa(&h, p.owner_id, session_id).await;
+
+    let error = improve(p).await.unwrap_err();
+    let ApiError::ImproveAborted { result, .. } = &error else {
+        panic!("expected ImproveAborted, got {error:?}");
+    };
+    let feedback = stage(result, "feedback_weights");
+    assert_eq!(feedback.status, StageStatus::Completed, "{feedback:?}");
+    assert_eq!(
+        feedback.run.as_ref().map(|run| run.dataset_id),
+        Some(dataset_id)
+    );
+    let persist = stage(result, "persist_session_qa");
+    assert_eq!(persist.status, StageStatus::Errored, "{persist:?}");
+    assert!(persist.run.is_none(), "{persist:?}");
 }
 
 /// A caller that already resolved (and authorized) the dataset passes its id,
@@ -718,6 +786,30 @@ async fn improve_with_dataset_id_targets_a_dataset_the_caller_does_not_own() {
     let r = improve(p).await.unwrap();
 
     assert_eq!(r.dataset_id, Some(shared));
+    // The memify-backed session stages report their run over the dataset;
+    // distillation runs no memify pipeline in Python, so it carries none.
+    let mut run_ids = Vec::new();
+    for name in [
+        "feedback_weights",
+        "persist_session_qa",
+        "persist_agent_traces",
+    ] {
+        let s = stage(&r, name);
+        assert_eq!(s.status, StageStatus::Completed, "{s:?}");
+        let run = s
+            .run
+            .as_ref()
+            .unwrap_or_else(|| panic!("{name} has no run"));
+        assert_eq!(
+            (run.dataset_id, run.dataset_name.as_str()),
+            (shared, "shared_ds")
+        );
+        run_ids.push(run.pipeline_run_id);
+    }
+    run_ids.sort();
+    run_ids.dedup();
+    assert_eq!(run_ids.len(), 3, "each stage run has its own run id");
+    assert!(stage(&r, "distill_sessions").run.is_none());
     let persist = stage(&r, "persist_session_qa");
     assert_eq!(persist.status, StageStatus::Completed, "{persist:?}");
     assert_eq!(persist.counts.get("sessions_persisted"), Some(&1));
@@ -942,9 +1034,10 @@ async fn stages_disabled_by_config_are_skipped_first() {
         );
         assert_eq!(s.duration_ms, 0, "{name}");
     }
+    // The session has no Q&A: the stage ran and found nothing new.
     assert_eq!(
         stage(&r, "persist_session_qa").status,
-        StageStatus::Completed
+        StageStatus::AlreadyCompleted
     );
     assert_eq!(r.stages.len(), DEFAULT_STAGES.len());
 }
@@ -1388,8 +1481,11 @@ async fn global_context_index_is_already_completed_without_writes_since_last_imp
     assert!(stamped.stamp["started_at"].is_string());
 
     let second = run().await.unwrap();
+    assert!(stage(&first, "global_context_index").run.is_some());
     let gci = stage(&second, "global_context_index");
     assert_eq!(gci.status, StageStatus::AlreadyCompleted);
+    // Python's `_already_completed`: no pipeline ran, so no run.
+    assert!(gci.run.is_none());
     assert_eq!(
         gci.reason.as_deref(),
         Some(REASON_NO_WRITES_SINCE_LAST_IMPROVE)

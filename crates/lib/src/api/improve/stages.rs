@@ -31,7 +31,7 @@ use cognee_vector::VectorDB;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use super::result::{REASON_BACKEND_UNSUPPORTED, StageResult, StageStatus};
+use super::result::{REASON_BACKEND_UNSUPPORTED, StageResult, StageRunInfo, StageStatus};
 use super::watermark::{
     REASON_NO_WRITES_SINCE_LAST_IMPROVE, StageStamp, has_dataset_changed_since_last_improve,
 };
@@ -58,6 +58,9 @@ pub const REASON_EDGE_EVIDENCE_DISABLED: &str = "edge_evidence_disabled";
 pub const REASON_NO_LLM_CONFIGURED: &str = "no_llm_configured";
 /// `already_completed` reason of `persist_agent_traces` with nothing to persist.
 pub const REASON_NO_NEW_TRACE_STEPS: &str = "no_new_trace_steps";
+/// `already_completed` reason of `persist_session_qa` with no Q&A to
+/// persist (Python's `REASON_NO_NEW_SESSION_ENTRIES`).
+pub const REASON_NO_NEW_SESSION_ENTRIES: &str = "no_new_entries";
 /// Skip reason of a stage that exists in Python but is not ported to Rust yet.
 /// Rust-only; goes away once the stage is ported.
 pub const REASON_NOT_PORTED: &str = "not_ported";
@@ -371,6 +374,20 @@ impl ImproveStages<'_> {
         Ok(self.dataset_id)
     }
 
+    /// The completed memify run a pipeline-backed stage reports (Python's
+    /// `StageResult.from_pipeline_run`), over the run's dataset. `None` while
+    /// the dataset does not exist: there is no dataset id to report.
+    async fn memify_run(&mut self) -> Option<StageRunInfo> {
+        match self.dataset_id().await {
+            Ok(Some(id)) => Some(StageRunInfo::completed(id, self.dataset_name.clone())),
+            Ok(None) => None,
+            Err(e) => {
+                warn!("improve: no stage run info, {e}");
+                None
+            }
+        }
+    }
+
     /// Stage 1: move `feedback_weight` on the graph elements scored answers used.
     async fn feedback_weights(&mut self) -> StageResult {
         const STAGE: &str = StageKind::FeedbackWeights.name();
@@ -402,7 +419,8 @@ impl ImproveStages<'_> {
                     failed = r.elements_failed,
                     "improve: feedback weights applied"
                 );
-                StageResult::completed(STAGE).with_counts([
+                let run = self.memify_run().await;
+                StageResult::completed(STAGE).with_run(run).with_counts([
                     ("sessions", self.sessions()),
                     ("entries_processed", count(r.processed)),
                     ("entries_applied", count(r.applied)),
@@ -471,7 +489,20 @@ impl ImproveStages<'_> {
                         StageResult::errored(STAGE, error).with_counts(counts),
                         r.budget_exhausted,
                     ),
-                    _ => StageResult::completed(STAGE).with_counts(counts).into(),
+                    // Python's pre-check (`stages.py:177-178`): no session
+                    // holds Q&A to persist, so no memify run and no `run`.
+                    // Rust has no Q&A persist watermark, so "new" here is any
+                    // Q&A at all; a rerun over the same Q&A persists it again.
+                    _ if r.sessions_persisted == 0 => {
+                        StageResult::already_completed(STAGE, REASON_NO_NEW_SESSION_ENTRIES).into()
+                    }
+                    _ => {
+                        let run = self.memify_run().await;
+                        StageResult::completed(STAGE)
+                            .with_run(run)
+                            .with_counts(counts)
+                            .into()
+                    }
                 }
             }
             Err(e) => StageRun::with_budget(
@@ -537,7 +568,11 @@ impl ImproveStages<'_> {
                     trace_items = trace_texts.len(),
                     windows, "improve: agent trace feedback persisted"
                 );
-                StageResult::completed(STAGE).with_counts(counts).into()
+                let run = self.memify_run().await;
+                StageResult::completed(STAGE)
+                    .with_run(run)
+                    .with_counts(counts)
+                    .into()
             }
             Err(e) => StageRun {
                 result: StageResult::errored(STAGE, e.message).with_counts(counts),
@@ -898,8 +933,10 @@ impl ImproveStages<'_> {
                     nodes = written.len(),
                     "improve: global context index updated"
                 );
+                let run = StageRunInfo::completed(dataset_id, self.dataset_name.clone());
                 (
                     StageResult::completed(STAGE)
+                        .with_run(Some(run))
                         .with_counts([("nodes_written", count(written.len()))]),
                     false,
                 )
