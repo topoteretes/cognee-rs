@@ -41,7 +41,7 @@ pub async fn resolve_url_input(url: &str) -> Result<ResolvedUrlInput, UrlFetcher
     let (mut source_extension, mut source_mime_type, mut loader_engine) =
         metadata_from_mime(&essence);
     let raw_bytes = fetch_result.bytes;
-    let is_binary_type = (essence.starts_with("image/") && essence != "image/svg+xml")
+    let is_binary_type = (essence.starts_with("image/") && !is_svg(&essence))
         || essence.starts_with("audio/")
         || essence == "application/pdf";
     if is_binary_type && cognee_models::doc_type_for_extension(&source_extension).is_none() {
@@ -188,6 +188,13 @@ fn mime_from_url_path(url: &str) -> Option<String> {
     None
 }
 
+/// Whether `essence` is SVG: `image/svg+xml`, or the non-standard
+/// `image/svg` some servers send.
+#[cfg(feature = "html-loader")]
+fn is_svg(essence: &str) -> bool {
+    matches!(essence, "image/svg+xml" | "image/svg")
+}
+
 /// The extension of `url`'s path (`scan.TIFF` → `TIFF`), or empty.
 #[cfg(feature = "html-loader")]
 fn url_path_extension(url: &str) -> String {
@@ -214,7 +221,7 @@ fn metadata_from_mime(essence: &str) -> (String, String, String) {
         "application/pdf" => "pdf",
         // SVG is markup: stored as text, as Python stores every fetched body
         // (`save_data_item_to_storage.py:82-89`; its `text_loader` reads it).
-        "image/svg+xml" => "txt",
+        _ if is_svg(essence) => "txt",
         _ if essence.starts_with("image/") => {
             // The extension of each image type the image loader takes
             // (`file_type::IMAGE_MIMES`, plus common aliases).
@@ -252,10 +259,7 @@ fn metadata_from_mime(essence: &str) -> (String, String, String) {
         },
         _ => "bin",
     };
-    let mime = if matches!(
-        essence,
-        "text/html" | "application/xhtml+xml" | "image/svg+xml"
-    ) {
+    let mime = if matches!(essence, "text/html" | "application/xhtml+xml") || is_svg(essence) {
         "text/plain".to_string()
     } else {
         essence.to_string()
@@ -496,23 +500,29 @@ mod tests {
     /// text loader.
     #[tokio::test]
     async fn svg_is_stored_as_text() {
-        let mut server = server_with_robots().await;
-        let url = format!("{}/logo.svg", server.url());
-        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"><title>Logo</title></svg>"#;
-        let _mock = server
-            .mock("GET", "/logo.svg")
-            .with_header("content-type", "image/svg+xml")
-            .with_body(svg)
-            .create_async()
-            .await;
+        // `image/svg` is a non-standard alias some servers send.
+        for content_type in ["image/svg+xml", "image/svg"] {
+            let mut server = server_with_robots().await;
+            let url = format!("{}/logo.svg", server.url());
+            let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"><title>Logo</title></svg>"#;
+            let _mock = server
+                .mock("GET", "/logo.svg")
+                .with_header("content-type", content_type)
+                .with_body(svg)
+                .create_async()
+                .await;
 
-        let resolved = resolve_url_input(&url).await.unwrap();
+            let resolved = resolve_url_input(&url).await.unwrap();
 
-        assert!(matches!(resolved.input, DataInput::Text(ref text) if text == svg));
-        assert_eq!(resolved.metadata.stored_extension, "txt");
-        assert_eq!(resolved.metadata.stored_mime_type, "text/plain");
-        assert_eq!(resolved.metadata.source_extension, "txt");
-        assert_eq!(resolved.metadata.loader_engine, "text_loader");
+            assert!(
+                matches!(resolved.input, DataInput::Text(ref text) if text == svg),
+                "{content_type}"
+            );
+            assert_eq!(resolved.metadata.stored_extension, "txt", "{content_type}");
+            assert_eq!(resolved.metadata.stored_mime_type, "text/plain");
+            assert_eq!(resolved.metadata.source_extension, "txt");
+            assert_eq!(resolved.metadata.loader_engine, "text_loader");
+        }
     }
 
     #[tokio::test]
