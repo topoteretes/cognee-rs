@@ -681,8 +681,9 @@ none) is read as text, as Python's `document_class_for` falls back to
 `TextDocument` (SDK-1694 O10): it completes, or fails if its bytes are not
 UTF-8. Before O10 such an item was left `Unreached` on every run. The
 exception is a legacy binary row (`cognee_models::is_legacy_binary_row`: raw
-bytes v0.1.0 to v0.2.0 stored as `text_<hash>.bin`, or a URL fetch stored
-with extension `bin`), which cognify skips without reading and reports
+bytes v0.1.0 to v0.2.0 stored as `text_<hash>.bin`, whatever its text-typed
+extension, `txt` and `md` included, or a URL fetch stored with extension
+`bin`), which cognify skips without reading (and needs no LLM for) and reports
 `Unreached` on a run that otherwise completes; delete it or re-add the
 original file.
 

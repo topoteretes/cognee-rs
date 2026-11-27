@@ -30,8 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose bytes are not UTF-8 now **fails** in chunking, as Python's
   `TextDocument.read` raises `UnicodeDecodeError`, and errors the run. Its
   first 1,000,000 bytes are checked before the rest is read
-  (`StorageTrait::retrieve_prefix`, a new provided method), so a large binary
-  fails without being loaded whole. The standalone
+  (`StorageTrait::retrieve_prefix`, a new provided method), so on
+  `LocalStorage`, which overrides it, a large binary fails without being
+  loaded whole. The trait's default still reads the whole file and
+  truncates it, so another backend fails as early but loads it first until it
+  overrides the method. The standalone
   `cognee_chunking::ExtractTextChunksPipeline` classifies the same way. The
   standard route only: a code file stamped `system_metadata.source == "code"`
   still takes the CODE route, and a DLT row is still a `dlt_row`.
@@ -42,15 +45,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     bytes no loader claims. They come from **legacy binary rows** written by
     earlier releases, and from **URL fetches**.
   - **Legacy binary rows are skipped, not read.** v0.1.0 to v0.2.0 stored a
-    non-UTF-8 file with an unknown or missing extension verbatim as
-    `text_<content_hash>.bin`, keeping its own extension (`zip`, `exe`, `mp4`,
-    ...), and stored a fetched image or audio body of an unmapped subtype as
+    non-UTF-8 file of text document type verbatim as
+    `text_<content_hash>.bin`, keeping its own extension (an unknown or
+    missing one such as `zip`, `exe`, `mp4`, or one listed as text: `txt`,
+    `md`, `json`, `xml`, `yaml`), and stored a fetched image or audio body of an unmapped subtype as
     `text_placeholder.bin` (`fetched_<hash>.bin` after v0.2.0) with extension
     `bin`. `cognee_models::is_legacy_binary_row` recognises them by that
-    stored name together with an unlisted extension; cognify does not read
+    stored name together with a text-typed extension (for the URL names, an
+    unlisted one); cognify does not read
     them, reports them `ItemStatus::Unreached` on a run that otherwise
-    completes, never marks them, and never lets them fail or block the other
-    items. **Remedy:** delete such rows, or re-add the original file, which
+    completes, never marks them, never lets them fail or block the other
+    items, and does not count them as needing an LLM (`routes_need_llm`,
+    `pending_routes_need_llm`), so a keyless server is not refused for them. **Remedy:** delete such rows, or re-add the original file, which
     the current `add` either loads or refuses. `ItemStatus::Unreached` now
     means a fail-fast stop or a skipped legacy binary row.
   - **URL adds no longer create `bin` rows.** A fetched `image/*` or
@@ -58,9 +64,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `tif`, BMP, AVIF, ICO, FLAC, M4A, AIFF, ... — the subtypes the resolver
     mapped to `bin` before), a subtype it does not name is typed by its bytes,
     and a body that is none of the loader types is refused at add with
-    `IngestionError::NoLoaderForFile`, as a file no loader claims is. An
-    `image/svg+xml` body is stored as text (`txt`), as Python stores every
-    fetched body.
+    `IngestionError::NoLoaderForFile`, as a file no loader claims is. That
+    refusal is a Rust-only difference: Python fetches every URL as text and
+    stores it, and never refuses a fetched body (Rust stores image, audio and
+    PDF bodies as binaries for their loaders, which Python does not). An SVG
+    body (`image/svg+xml`, or the non-standard `image/svg`) is stored as text
+    (`txt`), as Python stores every fetched body.
 
 - **Ladybug graph store moves from lbug 0.14.1 to 0.23.0.** 0.14.1 corrupted
   REL string properties at `CHECKPOINT`: once a store held about a thousand
