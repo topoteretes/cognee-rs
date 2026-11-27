@@ -3,13 +3,15 @@
 //!
 //! [`StageResult`] is one entry per stage; [`ImproveResult`] holds one per
 //! registry stage, in order, and is what every surface hands back. Both
-//! serialise to Python's wire shape: snake_case keys, `"run": null` on each
-//! stage, the deprecated `"memify_run": {}` and the computed `"status"`.
+//! serialise to Python's wire shape: snake_case keys, each stage's `"run"`
+//! (the [`StageRunInfo`] of a pipeline-backed stage that completed, else
+//! `null`), the deprecated `"memify_run": {}` and the computed `"status"`.
 
 use std::collections::BTreeMap;
 
 use serde::ser::SerializeStruct;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::json;
 use uuid::Uuid;
 
 /// Skip reason of a session-fed stage run without session ids.
@@ -59,10 +61,12 @@ pub struct StageResult {
     /// Wall time of the stage's run; `0` for a stage a gate skipped.
     #[serde(default)]
     pub duration_ms: u64,
-    /// Python's `PipelineRunInfo` of a pipeline-backed stage. No Rust stage
-    /// reports one, so it is always `None` (`"run": null` on the wire).
+    /// The memify run of a pipeline-backed stage that completed (Python's
+    /// `StageResult.run`, set by `StageResult.from_pipeline_run`); `None`
+    /// (`"run": null`) for every other stage and outcome. See
+    /// [`StageRunInfo`] for which stages carry one.
     #[serde(default)]
-    pub run: Option<serde_json::Value>,
+    pub run: Option<StageRunInfo>,
 }
 
 impl StageResult {
@@ -85,6 +89,12 @@ impl StageResult {
 
     pub fn completed(stage: &str) -> Self {
         Self::new(stage, StageStatus::Completed, None, None)
+    }
+
+    /// Attach the stage's memify run (see [`StageRunInfo`]).
+    pub fn with_run(mut self, run: Option<StageRunInfo>) -> Self {
+        self.run = run;
+        self
     }
 
     /// Set the stage counts, Python's `**counts`.
@@ -111,6 +121,100 @@ impl StageResult {
             duration_ms: 0,
             run: None,
         }
+    }
+}
+
+/// The memify run a pipeline-backed improve stage reports in its `run` —
+/// Python's `PipelineRunCompleted`, as `StageResult.from_pipeline_run` keeps
+/// it (`cognee/modules/improve/result.py:131-156`).
+///
+/// In Python `feedback_weights`, `persist_session_qa`, `persist_agent_traces`
+/// and `global_context_index` each run their tasks as one `memify_pipeline`
+/// run (`cognee/modules/memify/run_memify_tasks.py`), so their `run` is that
+/// run's info; the other stages, and a stage that was skipped or
+/// `already_completed` before its pipeline ran, carry `null`. A memify run
+/// that fails raises out of the stage, which is then `errored` with
+/// `run: null`, so only a completed run is ever reported. Rust runs the same
+/// four stages without a pipeline and fills the same info once one of them
+/// completes on an existing dataset.
+///
+/// Only ids are kept (SDK-507). The wire shape is fixed by them: memify runs
+/// over one placeholder item (`data=[{}]`, not a `Data` row) without
+/// incremental loading, so `data_ingestion_info` is always one
+/// `{"run_info": <the same completed run>, "data_id": null}` entry and
+/// `data_ids` is `[]` (`run_tasks_data_item_regular`,
+/// `cognee/modules/pipelines/operations/run_tasks_data_item.py:391-459`).
+/// The per-document entry `/cognify` renders (`data_name`,
+/// `data_location`, `data_label`) belongs to incremental runs over `Data`
+/// rows and never appears here.
+///
+/// `pipeline_run_id` is fresh per stage run, as Python's `uuid4()` one;
+/// Rust records no `memify_pipeline` row under it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StageRunInfo {
+    pub pipeline_run_id: Uuid,
+    pub dataset_id: Uuid,
+    pub dataset_name: String,
+}
+
+/// The `status` of every [`StageRunInfo`] on the wire.
+const PIPELINE_RUN_COMPLETED: &str = "PipelineRunCompleted";
+
+impl StageRunInfo {
+    /// A completed run of one stage over `dataset_id`, under a fresh run id.
+    pub fn completed(dataset_id: Uuid, dataset_name: impl Into<String>) -> Self {
+        Self {
+            pipeline_run_id: Uuid::new_v4(),
+            dataset_id,
+            dataset_name: dataset_name.into(),
+        }
+    }
+
+    /// Python's serialized `PipelineRunInfo` without its per-item fields.
+    fn run_info_json(&self, data_ingestion_info: serde_json::Value) -> serde_json::Value {
+        json!({
+            "status": PIPELINE_RUN_COMPLETED,
+            "pipeline_run_id": self.pipeline_run_id,
+            "dataset_id": self.dataset_id,
+            "dataset_name": self.dataset_name,
+            "payload": null,
+            "data_ingestion_info": data_ingestion_info,
+        })
+    }
+}
+
+impl Serialize for StageRunInfo {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // The nested run info carries no per-item list, so Python leaves its
+        // computed `data_ids` out (`exclude_if=None`).
+        let entry = json!({
+            "run_info": self.run_info_json(serde_json::Value::Null),
+            "data_id": null,
+        });
+        let mut run = self.run_info_json(json!([entry]));
+        if let Some(fields) = run.as_object_mut() {
+            fields.insert("data_ids".to_string(), json!([]));
+        }
+        run.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for StageRunInfo {
+    /// Reads the ids back from the wire shape (ours or a Python server's);
+    /// the per-item list is fixed by them and ignored.
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Wire {
+            pipeline_run_id: Uuid,
+            dataset_id: Uuid,
+            dataset_name: String,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        Ok(Self {
+            pipeline_run_id: wire.pipeline_run_id,
+            dataset_id: wire.dataset_id,
+            dataset_name: wire.dataset_name,
+        })
     }
 }
 
@@ -366,6 +470,51 @@ mod tests {
         // Round-trips; the computed status is ignored on the way in.
         let back: ImproveResult = serde_json::from_value(wire).unwrap();
         assert_eq!(back, result);
+    }
+
+    // Python `StageResult.from_pipeline_run` over a completed memify run
+    // (`data=[{}]`, no incremental loading): one per-item entry with no
+    // data id, and no `data_ids` on the nested run info.
+    #[test]
+    fn a_stage_run_serialises_as_pythons_completed_memify_run() {
+        let run = StageRunInfo {
+            pipeline_run_id: Uuid::from_u128(1),
+            dataset_id: Uuid::from_u128(2),
+            dataset_name: "docs".to_string(),
+        };
+        let stage = StageResult::completed("global_context_index").with_run(Some(run.clone()));
+        let wire = serde_json::to_value(&stage).unwrap();
+        let run_info = json!({
+            "status": "PipelineRunCompleted",
+            "pipeline_run_id": "00000000-0000-0000-0000-000000000001",
+            "dataset_id": "00000000-0000-0000-0000-000000000002",
+            "dataset_name": "docs",
+            "payload": null,
+            "data_ingestion_info": null,
+        });
+        let mut expected = run_info.clone();
+        expected["data_ingestion_info"] = json!([{"run_info": run_info, "data_id": null}]);
+        expected["data_ids"] = json!([]);
+        assert_eq!(wire["run"], expected);
+
+        // Round-trips, and a Python server's run (with `after_run_error`
+        // or other extra keys) reads back to the same ids.
+        let back: StageResult = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(back, stage);
+        let mut python = wire;
+        python["run"]["after_run_error"] = json!(null);
+        let back: StageResult = serde_json::from_value(python).unwrap();
+        assert_eq!(back.run, Some(run));
+    }
+
+    #[test]
+    fn each_stage_run_gets_a_fresh_run_id() {
+        let dataset_id = Uuid::new_v4();
+        let first = StageRunInfo::completed(dataset_id, "docs");
+        let second = StageRunInfo::completed(dataset_id, "docs");
+        assert_ne!(first.pipeline_run_id, second.pipeline_run_id);
+        assert_eq!(first.dataset_id, dataset_id);
+        assert_eq!(first.dataset_name, "docs");
     }
 
     #[test]

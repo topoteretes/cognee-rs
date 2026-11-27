@@ -38,7 +38,8 @@ pub use improve::{
     ImproveResult, ImproveStatus, OwnedImproveParams, REASON_ABORTED_BY_FATAL_STAGE,
     REASON_BACKEND_UNSUPPORTED, REASON_BUDGET_EXHAUSTED, REASON_DISABLED_BY_CONFIG,
     REASON_NO_SESSION_IDS, REASON_OPT_IN_DISABLED, REASON_TURNED_OFF, StageKind, StageResult,
-    StageStatus, TRUTH_SUBSPACE_STAGE, improve, improve_in_background, improve_in_background_then,
+    StageRunInfo, StageStatus, TRUTH_SUBSPACE_STAGE, improve, improve_in_background,
+    improve_in_background_then,
 };
 pub use prune::{PruneResult, PruneTarget, prune_data, prune_system, prune_system_with_storage};
 pub use recall::{

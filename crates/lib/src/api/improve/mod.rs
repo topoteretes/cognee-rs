@@ -63,7 +63,7 @@ pub use config::{
 pub use result::{
     ImproveResult, ImproveStatus, REASON_ABORTED_BY_FATAL_STAGE, REASON_BACKEND_UNSUPPORTED,
     REASON_BUDGET_EXHAUSTED, REASON_DISABLED_BY_CONFIG, REASON_NO_SESSION_IDS, StageResult,
-    StageStatus,
+    StageRunInfo, StageStatus,
 };
 pub use stages::{
     DEFAULT_STAGES, REASON_AUTO_FEEDBACK_DISABLED, REASON_EDGE_EVIDENCE_DISABLED,

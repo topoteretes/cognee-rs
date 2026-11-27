@@ -489,6 +489,8 @@ async fn improve_aborts_when_the_fatal_stage_errors() {
     }
     assert_eq!(result.error, result.stages[1].error);
     assert_eq!(result.status(), ImproveStatus::Errored);
+    // Python's failed memify run raises out of the stage: `run` stays null.
+    assert!(result.stages.iter().all(|s| s.run.is_none()));
 }
 
 /// Stage 7 (`build_truth_subspace`) is opt-in. With sessions present, the flag
@@ -617,6 +619,21 @@ async fn improve_builds_the_global_context_index() {
     assert_eq!(gci.status, StageStatus::Completed);
     assert_eq!(gci.counts.get("nodes_written"), Some(&2));
     assert_eq!(r.status(), ImproveStatus::Completed);
+    // Python's completed memify run (`StageResult.from_pipeline_run`).
+    let run = gci.run.as_ref().expect("a completed build reports its run");
+    assert_eq!(run.dataset_id, dataset_id);
+    assert_eq!(run.dataset_name, "ds_gcidx");
+    let wire = serde_json::to_value(&r).unwrap();
+    let wire_run = &wire["stages"][8]["run"];
+    assert_eq!(wire_run["status"], "PipelineRunCompleted");
+    assert_eq!(wire_run["dataset_id"], dataset_id.to_string());
+    assert_eq!(wire_run["data_ids"], serde_json::json!([]));
+    assert_eq!(
+        wire_run["data_ingestion_info"][0]["run_info"]["pipeline_run_id"],
+        run.pipeline_run_id.to_string()
+    );
+    // The stages that did not run carry none.
+    assert!(r.stages[..8].iter().all(|s| s.run.is_none()));
     assert_eq!(
         index_node_texts(&h).await,
         [
@@ -718,6 +735,30 @@ async fn improve_with_dataset_id_targets_a_dataset_the_caller_does_not_own() {
     let r = improve(p).await.unwrap();
 
     assert_eq!(r.dataset_id, Some(shared));
+    // The memify-backed session stages report their run over the dataset;
+    // distillation runs no memify pipeline in Python, so it carries none.
+    let mut run_ids = Vec::new();
+    for name in [
+        "feedback_weights",
+        "persist_session_qa",
+        "persist_agent_traces",
+    ] {
+        let s = stage(&r, name);
+        assert_eq!(s.status, StageStatus::Completed, "{s:?}");
+        let run = s
+            .run
+            .as_ref()
+            .unwrap_or_else(|| panic!("{name} has no run"));
+        assert_eq!(
+            (run.dataset_id, run.dataset_name.as_str()),
+            (shared, "shared_ds")
+        );
+        run_ids.push(run.pipeline_run_id);
+    }
+    run_ids.sort();
+    run_ids.dedup();
+    assert_eq!(run_ids.len(), 3, "each stage run has its own run id");
+    assert!(stage(&r, "distill_sessions").run.is_none());
     let persist = stage(&r, "persist_session_qa");
     assert_eq!(persist.status, StageStatus::Completed, "{persist:?}");
     assert_eq!(persist.counts.get("sessions_persisted"), Some(&1));
@@ -1388,8 +1429,11 @@ async fn global_context_index_is_already_completed_without_writes_since_last_imp
     assert!(stamped.stamp["started_at"].is_string());
 
     let second = run().await.unwrap();
+    assert!(stage(&first, "global_context_index").run.is_some());
     let gci = stage(&second, "global_context_index");
     assert_eq!(gci.status, StageStatus::AlreadyCompleted);
+    // Python's `_already_completed`: no pipeline ran, so no run.
+    assert!(gci.run.is_none());
     assert_eq!(
         gci.reason.as_deref(),
         Some(REASON_NO_WRITES_SINCE_LAST_IMPROVE)
