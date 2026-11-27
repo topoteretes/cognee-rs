@@ -602,9 +602,10 @@ impl FailureReport {
     /// Whether this report makes the run fail, under `policy`: whenever any
     /// item failed, under every scope.
     ///
-    /// * No failed item — only tolerated summarization failures, items left
-    ///   unreached because no document type matches their extension, or
-    ///   nothing at all — is never fatal. (A `FailFast` stop leaves items
+    /// * No failed item — only tolerated summarization failures, legacy
+    ///   binary rows classification skipped as unreached
+    ///   ([`cognee_models::is_legacy_binary_row`]), or nothing at all — is
+    ///   never fatal. (A `FailFast` stop leaves items
     ///   unreached only together with the failed item that stopped it.)
     /// * `WholeRun` and `Nothing` sweep everything or knowingly leave an
     ///   incomplete dataset, so neither can honestly report success.
@@ -925,8 +926,8 @@ mod tests {
             ..FailurePolicy::default()
         }));
 
-        // Items left unreached because no document type matched them, with
-        // no failed item, never fail a run.
+        // Items left unreached with no failed item (legacy binary rows
+        // classification skipped) never fail a run.
         let mut unsupported = FailureReport::default();
         unsupported.note_totals(4, 10);
         unsupported.mark_unreached(Uuid::new_v4());

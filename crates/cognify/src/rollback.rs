@@ -298,8 +298,10 @@ pub(crate) enum SweepDecision {
 /// caller who would rather converge on the pre-run state selects `WholeRun`.
 ///
 /// A completed `FailedItems` run failed no item; what it can leave behind are
-/// items no document type matched, recorded as unreached. They wrote no rows,
-/// so their item sweep is a no-op, kept so that it cannot under-sweep.
+/// legacy binary rows classification skipped
+/// ([`cognee_models::is_legacy_binary_row`]), recorded as unreached. They
+/// wrote no rows, so their item sweep is a no-op, kept so that it cannot
+/// under-sweep.
 pub(crate) fn decide_sweep(scope: RollbackScope, ending: &RunEnding<'_>) -> SweepDecision {
     match (scope, ending) {
         (RollbackScope::Nothing, _) => SweepDecision::Nothing,

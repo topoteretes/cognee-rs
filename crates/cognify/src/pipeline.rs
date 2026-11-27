@@ -125,10 +125,15 @@ pub enum ItemStatus {
     /// Its processing failed ([`crate::FailureReport::failed_items`]).
     /// Python's `PipelineRunErrored` entry. Not kept; the next run redoes it.
     Failed,
-    /// Never processed: a fail-fast stop came first, or no loader matches
-    /// its extension ([`crate::FailureReport::unreached_items`]). Not
-    /// marked; the next run sends it again. Python has no such entry: its
-    /// fail-fast run cancels the items in flight and reports none for them.
+    /// Never processed ([`crate::FailureReport::unreached_items`]): a
+    /// fail-fast stop came first, or it is a legacy binary row classification
+    /// skips ([`cognee_models::is_legacy_binary_row`]: raw bytes an earlier
+    /// Rust `add` stored without a loader; delete or re-add it). Not marked;
+    /// the next run sends it again. An item whose extension the
+    /// document-type table does not list is otherwise read as text, as Python
+    /// does (SDK-1694 O10). Python has no such entry: its fail-fast run
+    /// cancels the items in flight and reports none for them, and it has no
+    /// legacy binary rows.
     Unreached,
     /// Processed by a run that then errored and did not keep it: swept with
     /// the run (`whole_run`, or a document `failed_items` had not completed

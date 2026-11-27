@@ -357,44 +357,48 @@ impl LedgerIdentity {
 
 /// Classify Data items into typed Documents (Task 1).
 ///
-/// Maps each Data item to a Document based on mime_type.
-/// Non-text items are filtered out.
+/// One `Document` per item, by extension; an extension the table does not
+/// list is read as text, as Python's `document_class_for` does
+/// (`classify_documents.py:131`, SDK-1694 O10). An item whose bytes the text
+/// loader cannot decode fails later, in [`extract_chunks_from_documents`], as
+/// Python's `TextDocument.read` raises there.
+///
+/// The one exception is a legacy binary row
+/// ([`cognee_models::is_legacy_binary_row`]: raw bytes an earlier Rust `add`
+/// stored without a loader). It is not classified, not read and not failed:
+/// it is recorded as unreached, so it is never marked complete, never blocks
+/// the other items under fail-fast, and does not fail the run. Deleting or
+/// re-adding it is the remedy.
 pub fn classify_documents(
     input: &CognifyInput,
     failure_policy: FailurePolicy,
 ) -> Result<ClassifiedDocuments, CognifyError> {
-    let documents: Vec<Document> = model_classify_documents(&input.data_items);
-    info!(doc_count = documents.len(), "documents classified");
-
-    // `model_classify_documents` filter_maps items whose extension maps to no
-    // document type (`md`, `json`, `xml` and `yaml` map to text; source code
-    // and any other unmapped extension does not). They are
-    // dropped silently, so without this they are neither failed nor unreached
-    // and a completing run would mark them done — and, since markers now skip,
-    // never revisit them. Record each as a file-unit failure instead.
     let mut failures = FailureReport::with_policy(&failure_policy);
-    if documents.len() != input.data_items.len() {
-        let classified: HashSet<Uuid> = documents.iter().map(|d| d.data_id).collect();
-        for item in input
-            .data_items
-            .iter()
-            .filter(|d| !classified.contains(&d.id))
-        {
-            warn!(
-                data_id = %item.id,
-                extension = %item.extension,
-                "no document type for this extension; the item cannot be cognified"
-            );
-            // Unreached, not failed. Failing it would make one `.py` in a
-            // dataset error and sweep every run under the default scope,
-            // forever. Leaving it out of the report entirely was worse still:
-            // it was then neither failed nor unreached, so a completing run
-            // marked it done and the marker skipped it for good. Unreached
-            // keeps it unmarked and retried, and the no-survivor backstop
-            // still catches a dataset where nothing is supported.
-            failures.mark_unreached(item.id);
-        }
+    let (legacy, readable): (Vec<&Data>, Vec<&Data>) = input
+        .data_items
+        .iter()
+        .partition(|item| cognee_models::is_legacy_binary_row(item));
+    for item in &legacy {
+        warn!(
+            data_id = %item.id,
+            extension = %item.extension,
+            location = %item.raw_data_location,
+            "a legacy binary row (raw bytes stored without a loader by an earlier \
+             cognee-rs add) is skipped; delete it or re-add the file"
+        );
+        failures.mark_unreached(item.id);
     }
+    let documents: Vec<Document> = if legacy.is_empty() {
+        model_classify_documents(&input.data_items)
+    } else {
+        let readable: Vec<Data> = readable.into_iter().cloned().collect();
+        model_classify_documents(&readable)
+    };
+    info!(
+        doc_count = documents.len(),
+        skipped_legacy = legacy.len(),
+        "documents classified"
+    );
 
     Ok(ClassifiedDocuments {
         documents,
@@ -408,6 +412,26 @@ pub fn classify_documents(
 // ---------------------------------------------------------------------------
 // Task 2: extract_chunks_from_documents
 // ---------------------------------------------------------------------------
+
+/// How much of a text document of unknown type [`chunk_one_document`] checks
+/// for UTF-8 before reading the rest: Python's block size
+/// (`TextDocument.read`, `file.read(1000000)`), in bytes.
+const UTF8_PROBE_BYTES: usize = 1_000_000;
+
+/// Fail unless `prefix` is valid UTF-8, allowing a sequence the cut split at
+/// its end. The message is the text loader's, so the item fails the same way
+/// whether the bad bytes are in the prefix or after it.
+fn utf8_prefix_check(prefix: &[u8]) -> Result<(), CognifyError> {
+    match std::str::from_utf8(prefix) {
+        Ok(_) => Ok(()),
+        // `error_len() == None`: the input ended inside a sequence, which a
+        // prefix cut can do to valid text.
+        Err(e) if e.error_len().is_none() => Ok(()),
+        Err(e) => Err(CognifyError::ChunkingError(
+            cognee_ingestion::loaders::LoaderError::InvalidUtf8(e.to_string()).to_string(),
+        )),
+    }
+}
 
 /// Chunk one classified document.
 ///
@@ -433,6 +457,22 @@ async fn chunk_one_document(
     loader_registry: &LoaderRegistry,
     chunker: Option<&dyn Chunker>,
 ) -> Result<Vec<DocumentChunk>, CognifyError> {
+    // A text document of unknown type (an extension the table does not list,
+    // read as text since SDK-1694 O10) may be a large binary. Check its start
+    // before reading all of it, so such a file fails at once, as Python's
+    // `TextDocument.read` fails at the first block it cannot decode
+    // (`TextDocument.py:15-17`, 1,000,000 characters per block). The text
+    // loader still decodes the whole file strictly afterwards.
+    if document.document_type == cognee_models::FALLBACK_DOC_TYPE
+        && cognee_models::doc_type_for_extension(&document.extension).is_none()
+    {
+        let prefix = storage
+            .retrieve_prefix(&document.raw_data_location, UTF8_PROBE_BYTES)
+            .await
+            .map_err(|e| CognifyError::ChunkingError(e.to_string()))?;
+        utf8_prefix_check(&prefix)?;
+    }
+
     let content_bytes = storage
         .retrieve(&document.raw_data_location)
         .await
@@ -579,10 +619,6 @@ async fn chunk_one_document(
 ///   files that completed can still travel down the rest of the pipeline and be
 ///   persisted.
 /// * `RunToEnd` — keep going and collect every failing document.
-///
-/// Items `model_classify_documents` silently skipped (an unrecognised
-/// extension) are *not* recorded: Python skips them silently too, and recording
-/// them would fail every dataset containing a `.png` under the default policy.
 #[allow(clippy::too_many_arguments)]
 pub async fn extract_chunks_from_documents(
     input: &ClassifiedDocuments,
@@ -600,10 +636,11 @@ pub async fn extract_chunks_from_documents(
         .map_err(|e| CognifyError::ChunkingError(e.to_string()))?;
     let mut all_chunks = Vec::new();
     let mut kept_documents: Vec<Document> = Vec::new();
-    // Seeded from classification so items dropped there stay in the report.
+    // Seeded from the classified input so what an earlier stage recorded (a
+    // code route's items) stays in the report.
     let mut failures = input.failures.clone();
-    // Denominator counts everything handed to the run, including anything
-    // classification dropped — those never become `documents`. Counted from
+    // Denominator counts everything handed to the run, including anything an
+    // earlier stage left unreached — those never become `documents`. Counted from
     // `unreached_items`, which is never capped; `entries` is truncated at
     // `failure_report_cap`, so counting it would undercount the denominator
     // and could trip the no-survivor backstop on a run full of survivors.
@@ -8887,64 +8924,210 @@ mod tests {
         assert!(result.failures.unreached_items().is_empty());
     }
 
-    /// A genuinely unsupported extension is skipped but never silently lost.
-    #[test]
-    fn unsupported_extension_is_recorded_as_unreached() {
-        let source = Data::builder(
-            Uuid::new_v4(),
-            "main.py",
-            "/storage/main.py",
-            "file://main.py",
-            "py",
-            "text/x-python",
-            "hash-py",
-            Uuid::new_v4(),
-        )
-        .build();
-        let source_id = source.id;
-
-        let input = CognifyInput {
-            data_items: vec![source],
-            dataset_id: Uuid::new_v4(),
-            user_id: None,
-            tenant_id: None,
-        };
-
-        let result = classify_documents(&input, FailurePolicy::default()).unwrap();
-
-        assert!(result.documents.is_empty(), "source files stay out");
-        assert!(
-            result.failures.entries().is_empty(),
-            "skipping is not a failure — it must not error the run"
-        );
-        assert!(
-            result.failures.unreached_items().contains(&source_id),
-            "but it must be recorded, or a completing run marks it done"
-        );
+    /// Counts `retrieve` and `retrieve_prefix` calls over a [`MockStorage`].
+    struct CountingStorage {
+        inner: MockStorage,
+        full_reads: std::sync::atomic::AtomicUsize,
+        prefix_reads: std::sync::atomic::AtomicUsize,
     }
 
+    #[async_trait::async_trait]
+    impl StorageTrait for CountingStorage {
+        async fn store(
+            &self,
+            data: &[u8],
+            file_name: &str,
+        ) -> Result<String, cognee_storage::StorageError> {
+            self.inner.store(data, file_name).await
+        }
+        async fn store_stream_dyn(
+            &self,
+            reader: &mut (dyn tokio::io::AsyncRead + Unpin + Send),
+            file_name: &str,
+        ) -> Result<String, cognee_storage::StorageError> {
+            self.inner.store_stream_dyn(reader, file_name).await
+        }
+        async fn create_writer(
+            &self,
+            file_name: &str,
+        ) -> Result<cognee_storage::StorageWriter, cognee_storage::StorageError> {
+            self.inner.create_writer(file_name).await
+        }
+        async fn retrieve(&self, location: &str) -> Result<Vec<u8>, cognee_storage::StorageError> {
+            self.full_reads
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.inner.retrieve(location).await
+        }
+        async fn retrieve_prefix(
+            &self,
+            location: &str,
+            max_len: usize,
+        ) -> Result<Vec<u8>, cognee_storage::StorageError> {
+            self.prefix_reads
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut bytes = self.inner.retrieve(location).await?;
+            bytes.truncate(max_len);
+            Ok(bytes)
+        }
+        async fn exists(&self, location: &str) -> Result<bool, cognee_storage::StorageError> {
+            self.inner.exists(location).await
+        }
+        async fn delete(&self, location: &str) -> Result<(), cognee_storage::StorageError> {
+            self.inner.delete(location).await
+        }
+        fn get_full_path(&self, location: &str) -> std::path::PathBuf {
+            self.inner.get_full_path(location)
+        }
+        fn base_path(&self) -> &str {
+            self.inner.base_path()
+        }
+        async fn initialize(&self) -> Result<(), cognee_storage::StorageError> {
+            self.inner.initialize().await
+        }
+        async fn remove_all(&self) -> Result<(), cognee_storage::StorageError> {
+            self.inner.remove_all().await
+        }
+    }
+
+    /// A text document of unknown type is probed before it is read: a bad
+    /// prefix fails it without the full `retrieve`, and a good one goes on to
+    /// the full read, which the loader decodes strictly.
+    #[tokio::test]
+    async fn an_unknown_type_document_is_probed_before_the_full_read() {
+        let storage = CountingStorage {
+            inner: MockStorage::new(),
+            full_reads: Default::default(),
+            prefix_reads: Default::default(),
+        };
+        let bad = storage.store(&[0xFF, 0x00, 0x13], "bad.zip").await.unwrap();
+        let good = storage
+            .store(b"Alice works at Acme.", "good.xyz")
+            .await
+            .unwrap();
+        let document = |location: String, extension: &str| {
+            let data = Data::builder(
+                Uuid::new_v4(),
+                format!("doc.{extension}"),
+                location,
+                format!("file://doc.{extension}"),
+                extension,
+                "application/octet-stream",
+                format!("hash-{extension}"),
+                Uuid::new_v4(),
+            )
+            .build();
+            cognee_models::classify_documents(std::slice::from_ref(&data))
+                .pop()
+                .unwrap()
+        };
+        let run = |document: Document| {
+            let input = ClassifiedDocuments {
+                failures: FailureReport::default(),
+                documents: vec![document],
+                dataset_id: Uuid::new_v4(),
+                user_id: None,
+                tenant_id: None,
+            };
+            let storage = &storage;
+            async move {
+                extract_chunks_from_documents(
+                    &input,
+                    storage,
+                    100,
+                    TokenCounterKind::Word,
+                    TokenCountMode::Span,
+                    None,
+                    &LoaderRegistry::default(),
+                    CognifyConfig::default()
+                        .with_rollback_scope(crate::RollbackScope::FailedItems)
+                        .failure_policy(),
+                    None,
+                )
+                .await
+            }
+        };
+        let full = || storage.full_reads.load(std::sync::atomic::Ordering::SeqCst);
+        let prefix = || {
+            storage
+                .prefix_reads
+                .load(std::sync::atomic::Ordering::SeqCst)
+        };
+
+        let outcome = run(document(bad, "zip")).await;
+        assert!(
+            match &outcome {
+                Ok(extracted) => !extracted.failures.failed_items().is_empty(),
+                Err(_) => true,
+            },
+            "the bad file fails: {outcome:?}"
+        );
+        assert_eq!((prefix(), full()), (1, 0), "failed on the probe alone");
+
+        let extracted = run(document(good, "xyz")).await.unwrap();
+        assert!(!extracted.chunks.is_empty());
+        assert_eq!((prefix(), full()), (2, 1), "probed, then read whole");
+    }
+
+    /// The UTF-8 probe accepts a prefix that a cut ended inside a valid
+    /// multi-byte sequence, and rejects bytes that are invalid outright.
     #[test]
-    fn test_classify_documents_skips_unknown_extension() {
-        let data = Data::builder(
-            Uuid::new_v4(),
-            "data.xyz",
-            "/storage/data.xyz",
-            "file://data.xyz",
-            "xyz",
-            "application/octet-stream",
-            "hash456",
-            Uuid::new_v4(),
-        )
-        .build();
+    fn the_utf8_probe_allows_a_cut_sequence_and_rejects_bad_bytes() {
+        assert!(utf8_prefix_check("héllo".as_bytes()).is_ok());
+        // "é" is 0xC3 0xA9; a cut after 0xC3 is not an error.
+        assert!(utf8_prefix_check(&[b'h', 0xC3]).is_ok());
+        let err = utf8_prefix_check(&[b'h', 0xFF, b'i']).unwrap_err();
+        assert!(err.to_string().contains("Invalid UTF-8"), "{err}");
+    }
+
+    /// An extension the table does not list is read as text, as Python's
+    /// `document_class_for` does (`classify_documents.py:131`, SDK-1694 O10):
+    /// a document, not a skipped or unreached item.
+    #[test]
+    fn an_unlisted_extension_is_classified_as_text() {
+        let items: Vec<Data> = [
+            ("main.py", "py", "text/x-python"),
+            ("data.xyz", "xyz", "application/octet-stream"),
+        ]
+        .into_iter()
+        .map(|(name, ext, mime)| {
+            Data::builder(
+                Uuid::new_v4(),
+                name,
+                format!("/storage/{name}"),
+                format!("file://{name}"),
+                ext,
+                mime,
+                format!("hash-{ext}"),
+                Uuid::new_v4(),
+            )
+            .build()
+        })
+        .collect();
+        let ids: Vec<Uuid> = items.iter().map(|d| d.id).collect();
 
         let input = CognifyInput {
-            data_items: vec![data],
+            data_items: items,
             dataset_id: Uuid::new_v4(),
             user_id: None,
             tenant_id: None,
         };
+
         let result = classify_documents(&input, FailurePolicy::default()).unwrap();
-        assert!(result.documents.is_empty());
+
+        assert_eq!(
+            result
+                .documents
+                .iter()
+                .map(|d| d.data_id)
+                .collect::<Vec<_>>(),
+            ids
+        );
+        for document in &result.documents {
+            assert_eq!(document.document_type, "text", "{}", document.extension);
+            assert_eq!(document.base.data_type, "TextDocument");
+        }
+        assert!(result.failures.entries().is_empty());
+        assert!(result.failures.unreached_items().is_empty());
     }
 
     #[tokio::test]
@@ -10041,9 +10224,9 @@ mod tests {
     //
     // The chunk stage is the only producer of file-unit failures: storage
     // `retrieve`, UTF-8 decode, an unregistered document type, and the loader's
-    // own `extract` all surface here. `classify_documents` itself is infallible,
-    // and `model_classify_documents` silently skips items with an unrecognised
-    // extension, exactly as Python does.
+    // own `extract` all surface here. `classify_documents` itself is infallible
+    // and drops nothing: an item with an unlisted extension is a text document,
+    // exactly as in Python, and fails here if its bytes are not UTF-8.
 
     /// A document type intentionally never registered in
     /// `LoaderRegistry::default()`. The fixture used to say "pdf", but the PDF

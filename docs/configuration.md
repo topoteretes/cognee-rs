@@ -1316,8 +1316,10 @@ over the run's chunks) is still reported but no longer decides anything: since
 the SDK-1694 O5b review every scope fails the run on any failed item, as
 Python does, so a re-run that stops at the same bad file never reports success.
 `COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO` is still read and validated so
-existing configuration loads. Items left unreached only because no document
-type matches their extension fail nothing.
+existing configuration loads. Items left unreached fail nothing: those a
+fail-fast stop never reached, and legacy binary rows classification skips
+(`cognee_models::is_legacy_binary_row`; since SDK-1694 O10 any other item
+with an unlisted extension is read as text).
 
 **The report cap** bounds the individual entries the report lists (and therefore
 the error message); the total count, the failed-file set and every counter are
