@@ -135,7 +135,12 @@ async fn flushed_data_does_not_depend_on_the_wal() {
     std::mem::forget(adapter);
     std::fs::remove_file(wal_path(&db_path)).ok();
 
-    let reopened = LadybugAdapter::new(db_path.to_str().unwrap())
+    // The forgotten adapter keeps this process's claim on its path for good (a
+    // real process death would release it), so the "next process" opens a copy
+    // of the main file — which is all a checkpointed store has to rely on.
+    let next_process = db_path.with_file_name("graph-after-restart");
+    std::fs::copy(&db_path, &next_process).expect("copy the main file");
+    let reopened = LadybugAdapter::new(next_process.to_str().unwrap())
         .await
         .expect("reopen");
     reopened.initialize().await.expect("initialize the reopen");

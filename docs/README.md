@@ -53,7 +53,7 @@ signatures.
 - **[performance/memory-retention.md](performance/memory-retention.md)** — measuring cognify's peak-RSS slope (SDK-507): the instrument, the sweep, and the first numbers.
 
 ### Build & release
-- **[build/prerequisites.md](build/prerequisites.md)** — native build tools (`cmake`, `protoc`, compiler floors), which feature sets need them, and the GCC 11 workaround.
+- **[build/prerequisites.md](build/prerequisites.md)** — native build tools (`cmake`, `protoc`, compiler floors), which feature sets need them, and the GCC 13 floor for Ladybug.
 - **[build/lbug-rebuilds.md](build/lbug-rebuilds.md)** — Ladybug rebuild troubleshooting.
 - **Reclaiming disk space** — `bash scripts/clean_all.sh` cleans all four Cargo workspaces (a root `cargo clean` misses the binding workspaces); see [CONTRIBUTING.md § Cleaning build artifacts](../CONTRIBUTING.md#cleaning-build-artifacts).
 - **[RELEASE.md](RELEASE.md)** — release runbook.

@@ -141,7 +141,9 @@ Codes: op failures use the `SdkError` set — `COMPONENT_ERROR`,
 `SERVICE_BUILD_ERROR`, `USER_BOOTSTRAP_ERROR`, `RUNTIME_ERROR`,
 `VALIDATION_ERROR`, `UNSUPPORTED`, `FEATURE_NOT_BUILT`, `IMPROVE_ABORTED` (the
 fatal improve stage failed; the message ends with the partial result as
-`improve_result: <json>`); synchronous config
+`improve_result: <json>`), `STORE_IN_USE` (a component error: the embedded
+graph or vector store is already open in this process — another live handle on
+the same directories; close it first, the message names the path); synchronous config
 setters use the `ConfigError` set — `UNKNOWN_CONFIG_KEY`,
 `CONFIG_TYPE_MISMATCH` — and throw `CogneeException` directly (not wrapped).
 

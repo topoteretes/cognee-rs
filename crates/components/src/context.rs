@@ -93,6 +93,135 @@ pub struct BackendBuildContext {
 }
 
 impl BackendBuildContext {
+    /// Every input of this context, as one string: the default
+    /// [`store_fingerprint`](crate::GraphDbFactory::store_fingerprint) of a
+    /// factory that does not say what it reads. In memory only: it carries
+    /// resolved URLs and API keys.
+    pub fn fingerprint(&self) -> String {
+        // Exhaustive on purpose (no `..`): a field added to any of these
+        // structs fails to compile here until it is added to the fingerprint
+        // below, so a non-narrowing factory is never left on a stale engine.
+        let Self {
+            data_root_directory: _,
+            system_root_directory: _,
+            cache_root_directory: _,
+            relational_db_url: _,
+            graph_provider: _,
+            graph_file_path: _,
+            graph_postgres_url: _,
+            vector_provider: _,
+            vector_db_url: _,
+            vector_postgres_url: _,
+            embedding_dimensions: _,
+            embedding: _,
+            llm: _,
+            sections: _,
+        } = self;
+        let EmbeddingInputs {
+            provider: _,
+            model: _,
+            dimensions: _,
+            endpoint: _,
+            api_key: _,
+            batch_size: _,
+            max_concurrent_data_points: _,
+            rate_limit_enabled: _,
+            rate_limit_requests: _,
+            rate_limit_interval: _,
+            mock: _,
+            mock_mode: _,
+            max_completion_tokens: _,
+            max_sequence_length: _,
+        } = &self.embedding;
+        let LlmInputs {
+            provider: _,
+            model: _,
+            api_key: _,
+            endpoint: _,
+            max_retries: _,
+            network_retries: _,
+            min_retry_seconds: _,
+            max_parallel_requests: _,
+            request_timeout_seconds: _,
+            connect_timeout_seconds: _,
+            request_deadline_seconds: _,
+            rate_limit_enabled: _,
+            rate_limit_requests: _,
+            rate_limit_interval: _,
+            auto_rate_limit: _,
+            max_completion_tokens: _,
+            temperature: _,
+            llm_args: _,
+            api_version: _,
+            reasoning_override: _,
+            structured_output_mode: _,
+            mock: _,
+            cassette: _,
+            record_path: _,
+            debug_requests: _,
+            streaming: _,
+            answer_streaming: _,
+        } = &self.llm;
+        let e = &self.embedding;
+        let l = &self.llm;
+        format!(
+            "{:?}",
+            (
+                (
+                    &self.data_root_directory,
+                    &self.system_root_directory,
+                    &self.cache_root_directory,
+                    &self.relational_db_url,
+                    &self.graph_provider,
+                    &self.graph_file_path,
+                    &self.graph_postgres_url,
+                    &self.vector_provider,
+                    &self.vector_db_url,
+                    &self.vector_postgres_url,
+                    self.embedding_dimensions,
+                    &self.sections,
+                ),
+                (
+                    &e.provider,
+                    &e.model,
+                    e.dimensions,
+                    &e.endpoint,
+                    &e.api_key,
+                    e.batch_size,
+                    e.max_concurrent_data_points,
+                    (
+                        e.rate_limit_enabled,
+                        e.rate_limit_requests,
+                        e.rate_limit_interval
+                    ),
+                    (e.mock, e.mock_mode),
+                    e.max_completion_tokens,
+                    e.max_sequence_length,
+                ),
+                (
+                    (&l.provider, &l.model, &l.api_key, &l.endpoint),
+                    (l.max_retries, l.network_retries, l.min_retry_seconds),
+                    (
+                        l.max_parallel_requests,
+                        l.request_timeout_seconds,
+                        l.connect_timeout_seconds,
+                        l.request_deadline_seconds,
+                    ),
+                    (
+                        l.rate_limit_enabled,
+                        l.rate_limit_requests,
+                        l.rate_limit_interval
+                    ),
+                    (l.auto_rate_limit, l.max_completion_tokens, l.temperature),
+                    (&l.llm_args, &l.api_version, l.reasoning_override),
+                    format!("{:?}", l.structured_output_mode),
+                    (l.mock, &l.cassette, &l.record_path),
+                    (l.debug_requests, l.streaming, l.answer_streaming),
+                ),
+            )
+        )
+    }
+
     /// The typed config section `T`, from [`BackendBuildContext::sections`]
     /// plus defaults.
     pub fn section<T: ConfigSection>(&self) -> T {

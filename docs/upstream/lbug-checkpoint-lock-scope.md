@@ -1,8 +1,12 @@
 # lbug: `checkpointNoLock` releases its exclusivity guard before it checkpoints
 
-**Status:** written up for sending on; **not filed upstream** — see *Where to send
-this* at the bottom.
-**Affects:** `lbug` 0.14.1 (crates.io), vendored C++ at `lbug-src/`. The same
+**Status:** **resolved upstream in `lbug` 0.23.0**, which this repository now
+uses. There `checkpointNoLock` takes the write gate as a
+`std::unique_lock<std::mutex> writeGate` parameter (acquiring it via
+`stopNewWriteTransactionsAndWaitUntilAllWriteTransactionsLeave()` when the
+caller did not), so the guard lives until the function returns and covers the
+whole checkpoint. Never filed by us; kept as the record of what 0.14.1 did.
+**Affected:** `lbug` 0.14.1 (crates.io), vendored C++ at `lbug-src/`. The same
 code shape exists in the Kùzu lineage this is forked from, so it is worth
 checking there too.
 **Found by:** cognee-rs, while root-causing an on-device graph that came back

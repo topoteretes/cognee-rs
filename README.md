@@ -57,11 +57,11 @@ feedback, **`forget`** what's stale.
   choco install cmake protoc --no-progress
   ```
 
-  On x86-64 Linux the compiler must be GCC ≥ 12 or Clang ≥ 16. Both tools are
+  On Linux the compiler must be GCC ≥ 13 (Ladybug needs `<format>`). Both tools are
   feature-gated — builds that drop LanceDB need no `protoc`, and dropping
   Ladybug and Bedrock too sheds `cmake`. See
   [docs/build/prerequisites.md](docs/build/prerequisites.md) for the full
-  breakdown, per-feature requirements, and the GCC 11 workaround.
+  breakdown, per-feature requirements, and compiler floors (GCC 13+ for Ladybug).
 - An **LLM API key** (OpenAI-compatible). 
 
 Build the CLI from source with Cargo. 

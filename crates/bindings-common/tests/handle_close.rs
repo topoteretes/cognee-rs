@@ -546,9 +546,19 @@ async fn release_does_not_break_an_operation_still_holding_the_services() {
         .await
         .expect("release() must leave an in-flight op's graph usable");
 
-    // The handle itself is still usable too, and re-warms cold.
+    // The handle itself is still usable too. A re-warm while the in-flight op
+    // still holds the embedded graph takes that engine back rather than opening
+    // the file a second time (which lbug would allow, and which destroys
+    // writes — `cognee-graph/tests/ladybug_stale_instance.rs`).
     assert!(!state.is_closed());
-    state.services().await.expect("re-warm after release");
+    let rewarmed = state
+        .services()
+        .await
+        .expect("re-warm after release while an op holds the graph");
+    assert!(
+        std::sync::Arc::ptr_eq(&rewarmed.graph_db, &in_flight.graph_db),
+        "the held graph is re-adopted"
+    );
 }
 
 /// The explicit `close()` is the opposite contract, and that difference is the

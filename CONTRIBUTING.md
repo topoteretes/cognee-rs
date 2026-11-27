@@ -14,10 +14,11 @@ cargo build
 ```
 
 The default features compile Ladybug's and AWS-LC's bundled C/C++ trees, so that
-build needs a C/C++ compiler, `cmake` and `protoc` on `PATH` (on x86-64 Linux,
-GCC ≥ 12 or Clang ≥ 16). `scripts/check_all.sh` checks for them up front. See
+build needs a C/C++ compiler, `cmake`, `protoc` and OpenSSL 3 on `PATH`, plus
+network access for Ladybug's pinned prebuilt engine (on Linux, GCC ≥ 13 for
+Ladybug's `<format>`). `scripts/check_all.sh` checks for them up front. See
 [docs/build/prerequisites.md](docs/build/prerequisites.md) for the install
-one-liners, which feature sets need what, and the GCC 11 workaround.
+one-liners, which feature sets need what, and the compiler floors.
 
 See [`.claude/CLAUDE.md`](.claude/CLAUDE.md) for an architecture overview and the crate map.
 
