@@ -423,7 +423,10 @@ Dataset ids stay deterministic (UUID5 of name, owner and tenant). Pipeline:
 
 Stored files are named by content hash under `data_root_directory`, as in
 Python: extracted text as `text_<hash>.txt`, a fetched page as
-`text_<hash>.html`, other fetched content as `fetched_<hash>.<ext>`, and an
+`text_<hash>.html`, other fetched content as `fetched_<hash>.<ext>` (a fetched
+image, audio or PDF body under the extension its loader takes; one that is
+none of those types is refused with `NoLoaderForFile`, and an SVG is stored
+as text, SDK-1694 O10), and an
 upload (`DataInput::Binary`) as it arrived, as `<hash>/<file name>`, which the
 row's `original_data_location` points at. The upload's file name is the part
 of its name after the last `/` or `\`; an add fails when that is empty, `.` or
@@ -664,8 +667,8 @@ The markers live under Python's one `cognify_pipeline` key.
 `CognifyResult::items` says, per data item handed to `cognify()` and in that
 order, what the run did with it (SDK-1694 O8): `Completed` (processed and kept
 by this run), `AlreadyCompleted` (skipped by its marker), `Failed`,
-`Unreached` (a fail-fast stop came first) or
-`Discarded` (processed by a run that errored and did not keep it). A run that
+`Unreached` (a fail-fast stop came first, or it is a skipped legacy binary
+row, see below) or `Discarded` (processed by a run that errored and did not keep it). A run that
 errors with `CognifyError::RunFailed` carries the same list on its report
 (`CognifyError::item_outcomes()`), read after the rollback. It is Python's
 per-item `data_ingestion_info` (`PipelineRunCompleted`,
@@ -676,7 +679,12 @@ item its fail-fast run cancelled; Rust reports it `Unreached`.
 An item whose extension the document-type table does not list (or that has
 none) is read as text, as Python's `document_class_for` falls back to
 `TextDocument` (SDK-1694 O10): it completes, or fails if its bytes are not
-UTF-8. Before O10 such an item was left `Unreached` on every run.
+UTF-8. Before O10 such an item was left `Unreached` on every run. The
+exception is a legacy binary row (`cognee_models::is_legacy_binary_row`: raw
+bytes v0.1.0 to v0.2.0 stored as `text_<hash>.bin`, or a URL fetch stored
+with extension `bin`), which cognify skips without reading and reports
+`Unreached` on a run that otherwise completes; delete it or re-add the
+original file.
 
 ### search (retrieval)
 
