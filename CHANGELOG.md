@@ -38,7 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `update_user_preferences`, `build_truth_subspace`, the unported
   `review_conflicts`) keep `"run": null`. `StageResult::with_run` attaches
   one. Rust records no `memify_pipeline` row under the run id. The binding
-  `improve` result (`improve_result_json`) still omits `run`.
+  `improve` result (`improve_result_json`) still omits `run`. Reading a
+  result back keeps only a completed memify-shaped run; any other run reads
+  as `None`. `persist_session_qa` that finds no Q&A to persist is now
+  `already_completed` with reason `no_new_entries` (new
+  `REASON_NO_NEW_SESSION_ENTRIES`), no counts and no run, as Python's
+  pre-check (`stages.py:177-178`); it was `completed`. Remaining gaps are
+  listed in `docs/operations.md` (improve).
 - **cognify reads an item with an unknown file extension as text, as Python
   does (SDK-1694, stage O10).** Python's `document_class_for` ends with
   `EXTENSION_TO_DOCUMENT_CLASS.get(extension, TextDocument)`
