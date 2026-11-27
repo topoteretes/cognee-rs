@@ -58,6 +58,9 @@ pub const REASON_EDGE_EVIDENCE_DISABLED: &str = "edge_evidence_disabled";
 pub const REASON_NO_LLM_CONFIGURED: &str = "no_llm_configured";
 /// `already_completed` reason of `persist_agent_traces` with nothing to persist.
 pub const REASON_NO_NEW_TRACE_STEPS: &str = "no_new_trace_steps";
+/// `already_completed` reason of `persist_session_qa` with no Q&A to
+/// persist (Python's `REASON_NO_NEW_SESSION_ENTRIES`).
+pub const REASON_NO_NEW_SESSION_ENTRIES: &str = "no_new_entries";
 /// Skip reason of a stage that exists in Python but is not ported to Rust yet.
 /// Rust-only; goes away once the stage is ported.
 pub const REASON_NOT_PORTED: &str = "not_ported";
@@ -486,6 +489,13 @@ impl ImproveStages<'_> {
                         StageResult::errored(STAGE, error).with_counts(counts),
                         r.budget_exhausted,
                     ),
+                    // Python's pre-check (`stages.py:177-178`): no session
+                    // holds Q&A to persist, so no memify run and no `run`.
+                    // Rust has no Q&A persist watermark, so "new" here is any
+                    // Q&A at all; a rerun over the same Q&A persists it again.
+                    _ if r.sessions_persisted == 0 => {
+                        StageResult::already_completed(STAGE, REASON_NO_NEW_SESSION_ENTRIES).into()
+                    }
                     _ => {
                         let run = self.memify_run().await;
                         StageResult::completed(STAGE)

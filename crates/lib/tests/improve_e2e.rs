@@ -19,10 +19,10 @@ use cognee::api::improve::{
     DEFAULT_STAGES, ImproveConfig, ImproveParams, ImproveResult, ImproveStatus,
     REASON_ABORTED_BY_FATAL_STAGE, REASON_AUTO_FEEDBACK_DISABLED, REASON_BACKEND_UNSUPPORTED,
     REASON_BUDGET_EXHAUSTED, REASON_DISABLED_BY_CONFIG, REASON_EDGE_EVIDENCE_DISABLED,
-    REASON_NO_CHANGES, REASON_NO_LLM_CONFIGURED, REASON_NO_NEW_TRACE_STEPS, REASON_NO_SESSION_IDS,
-    REASON_NO_WRITES_SINCE_LAST_IMPROVE, REASON_NOT_PORTED, REASON_OPT_IN_DISABLED,
-    REASON_PERSONALIZATION_DISABLED, REASON_TURNED_OFF, StageKind, StageResult, StageStatus,
-    TRUTH_SUBSPACE_STAGE, improve, stage_watermark_key,
+    REASON_NO_CHANGES, REASON_NO_LLM_CONFIGURED, REASON_NO_NEW_SESSION_ENTRIES,
+    REASON_NO_NEW_TRACE_STEPS, REASON_NO_SESSION_IDS, REASON_NO_WRITES_SINCE_LAST_IMPROVE,
+    REASON_NOT_PORTED, REASON_OPT_IN_DISABLED, REASON_PERSONALIZATION_DISABLED, REASON_TURNED_OFF,
+    StageKind, StageResult, StageStatus, TRUTH_SUBSPACE_STAGE, improve, stage_watermark_key,
 };
 use cognee::api::improve::{IMPROVE_PIPELINE_NAME, IMPROVE_WRITE_PIPELINE_NAME};
 use cognee::models::Dataset;
@@ -327,7 +327,12 @@ async fn improve_with_an_empty_session_reports_every_stage() {
         statuses(&r),
         vec![
             ("feedback_weights", Completed, None),
-            ("persist_session_qa", Completed, None),
+            // Python's pre-check: no Q&A to persist, so no memify run.
+            (
+                "persist_session_qa",
+                AlreadyCompleted,
+                Some(REASON_NO_NEW_SESSION_ENTRIES)
+            ),
             (
                 "persist_agent_traces",
                 AlreadyCompleted,
@@ -362,11 +367,8 @@ async fn improve_with_an_empty_session_reports_every_stage() {
         counts("feedback_weights").get("entries_processed"),
         Some(&0)
     );
-    assert_eq!(counts("persist_session_qa").get("sessions"), Some(&1));
-    assert_eq!(
-        counts("persist_session_qa").get("sessions_persisted"),
-        Some(&0)
-    );
+    assert!(counts("persist_session_qa").is_empty());
+    assert!(stage(&r, "persist_session_qa").run.is_none());
     assert_eq!(counts("distill_sessions").get("documents"), Some(&0));
     assert_eq!(counts("distill_sessions").get("sessions_failed"), Some(&0));
 }
@@ -439,9 +441,10 @@ async fn improve_without_an_llm_skips_the_llm_stages() {
             "{name}"
         );
     }
+    // The session has no Q&A: the stage ran and found nothing new.
     assert_eq!(
         stage(&r, "persist_session_qa").status,
-        StageStatus::Completed
+        StageStatus::AlreadyCompleted
     );
 }
 
@@ -489,8 +492,6 @@ async fn improve_aborts_when_the_fatal_stage_errors() {
     }
     assert_eq!(result.error, result.stages[1].error);
     assert_eq!(result.status(), ImproveStatus::Errored);
-    // Python's failed memify run raises out of the stage: `run` stays null.
-    assert!(result.stages.iter().all(|s| s.run.is_none()));
 }
 
 /// Stage 7 (`build_truth_subspace`) is opt-in. With sessions present, the flag
@@ -693,6 +694,56 @@ async fn improve_reports_distilled_lessons() {
         r.dataset_id.is_some(),
         "persist_session_qa created the dataset"
     );
+    // `feedback_weights` completed before the dataset existed: no dataset
+    // id to report, so no run. `persist_session_qa` created it and reports
+    // its run over it.
+    let feedback = stage(&r, "feedback_weights");
+    assert_eq!(feedback.status, StageStatus::Completed, "{feedback:?}");
+    assert!(feedback.run.is_none(), "{feedback:?}");
+    assert_eq!(persist.run.as_ref().map(|run| run.dataset_id), r.dataset_id);
+}
+
+/// A stage that errors on an existing dataset reports no run, as Python's
+/// failed memify run raises out of the stage (`stage.py:79-84`); the stage
+/// before it, which completed on the same dataset, does.
+#[tokio::test]
+async fn an_errored_stage_on_an_existing_dataset_reports_no_run() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let session_id = "errored_run_session";
+    // Every summary fails, so the session Q&A's cognify fails.
+    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(FailingSummaryLlm {
+        inner: SchemaDispatchLlm {
+            accepted_statement: "TerraScout indexes data nightly.".to_string(),
+            curator_out_of_budget: false,
+            agent_lessons_fail: false,
+        },
+        ok_summaries: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let mut p = params(
+        &h,
+        &config,
+        "ds_errored_run",
+        Some(vec![session_id.to_string()]),
+        llm,
+    );
+    let dataset_id = create_dataset(&h, "ds_errored_run", p.owner_id).await;
+    p.dataset_id = Some(dataset_id);
+    seed_qa(&h, p.owner_id, session_id).await;
+
+    let error = improve(p).await.unwrap_err();
+    let ApiError::ImproveAborted { result, .. } = &error else {
+        panic!("expected ImproveAborted, got {error:?}");
+    };
+    let feedback = stage(result, "feedback_weights");
+    assert_eq!(feedback.status, StageStatus::Completed, "{feedback:?}");
+    assert_eq!(
+        feedback.run.as_ref().map(|run| run.dataset_id),
+        Some(dataset_id)
+    );
+    let persist = stage(result, "persist_session_qa");
+    assert_eq!(persist.status, StageStatus::Errored, "{persist:?}");
+    assert!(persist.run.is_none(), "{persist:?}");
 }
 
 /// A caller that already resolved (and authorized) the dataset passes its id,
@@ -983,9 +1034,10 @@ async fn stages_disabled_by_config_are_skipped_first() {
         );
         assert_eq!(s.duration_ms, 0, "{name}");
     }
+    // The session has no Q&A: the stage ran and found nothing new.
     assert_eq!(
         stage(&r, "persist_session_qa").status,
-        StageStatus::Completed
+        StageStatus::AlreadyCompleted
     );
     assert_eq!(r.stages.len(), DEFAULT_STAGES.len());
 }

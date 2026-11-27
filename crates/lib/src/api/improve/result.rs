@@ -64,8 +64,10 @@ pub struct StageResult {
     /// The memify run of a pipeline-backed stage that completed (Python's
     /// `StageResult.run`, set by `StageResult.from_pipeline_run`); `None`
     /// (`"run": null`) for every other stage and outcome. See
-    /// [`StageRunInfo`] for which stages carry one.
-    #[serde(default)]
+    /// [`StageRunInfo`] for which stages carry one. Read back only when it
+    /// is a completed memify run; any other run a remote result carries
+    /// (see [`StageRunInfo`]'s `Deserialize`) reads as `None`.
+    #[serde(default, deserialize_with = "deserialize_stage_run")]
     pub run: Option<StageRunInfo>,
 }
 
@@ -150,6 +152,12 @@ impl StageResult {
 ///
 /// `pipeline_run_id` is fresh per stage run, as Python's `uuid4()` one;
 /// Rust records no `memify_pipeline` row under it.
+///
+/// Only a completed memify-shaped run round-trips: `Deserialize` refuses a
+/// run whose `status` is not `PipelineRunCompleted` or whose `data_ids` is
+/// not empty, since the ids alone could not rebuild it (a Python server's
+/// `review_conflicts` or `custom_tasks` run, an errored run). On a
+/// [`StageResult`] such a run reads as `None`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StageRunInfo {
     pub pipeline_run_id: Uuid,
@@ -200,22 +208,45 @@ impl Serialize for StageRunInfo {
 }
 
 impl<'de> Deserialize<'de> for StageRunInfo {
-    /// Reads the ids back from the wire shape (ours or a Python server's);
-    /// the per-item list is fixed by them and ignored.
+    /// Reads the ids back from a completed memify run (ours or a Python
+    /// server's); its per-item list is fixed by them. Any other run is an
+    /// error (see the type's docs).
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
         struct Wire {
+            status: String,
             pipeline_run_id: Uuid,
             dataset_id: Uuid,
             dataset_name: String,
+            #[serde(default)]
+            data_ids: Option<Vec<serde_json::Value>>,
         }
         let wire = Wire::deserialize(deserializer)?;
+        if wire.status != PIPELINE_RUN_COMPLETED {
+            return Err(serde::de::Error::custom(format!(
+                "not a completed memify run: status {}",
+                wire.status
+            )));
+        }
+        if wire.data_ids.is_some_and(|ids| !ids.is_empty()) {
+            return Err(serde::de::Error::custom(
+                "not a memify run: it lists data ids",
+            ));
+        }
         Ok(Self {
             pipeline_run_id: wire.pipeline_run_id,
             dataset_id: wire.dataset_id,
             dataset_name: wire.dataset_name,
         })
     }
+}
+
+/// `StageResult::run` from the wire: a completed memify run, else `None`.
+fn deserialize_stage_run<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<StageRunInfo>, D::Error> {
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|run| serde_json::from_value(run).ok()))
 }
 
 /// Summary status of one run — Python's `ImproveStatus`.
@@ -496,6 +527,23 @@ mod tests {
         expected["data_ingestion_info"] = json!([{"run_info": run_info, "data_id": null}]);
         expected["data_ids"] = json!([]);
         assert_eq!(wire["run"], expected);
+        // Python's key order (field order, then the computed `data_ids`).
+        // `serde_json`'s `preserve_order` is on workspace-wide (root
+        // `Cargo.toml`), so the order the run is built in is the wire order.
+        assert_eq!(
+            serde_json::to_string(&wire["run"]).unwrap(),
+            concat!(
+                r#"{"status":"PipelineRunCompleted","#,
+                r#""pipeline_run_id":"00000000-0000-0000-0000-000000000001","#,
+                r#""dataset_id":"00000000-0000-0000-0000-000000000002","#,
+                r#""dataset_name":"docs","payload":null,"#,
+                r#""data_ingestion_info":[{"run_info":{"status":"PipelineRunCompleted","#,
+                r#""pipeline_run_id":"00000000-0000-0000-0000-000000000001","#,
+                r#""dataset_id":"00000000-0000-0000-0000-000000000002","#,
+                r#""dataset_name":"docs","payload":null,"data_ingestion_info":null},"#,
+                r#""data_id":null}],"data_ids":[]}"#,
+            )
+        );
 
         // Round-trips, and a Python server's run (with `after_run_error`
         // or other extra keys) reads back to the same ids.
@@ -505,6 +553,34 @@ mod tests {
         python["run"]["after_run_error"] = json!(null);
         let back: StageResult = serde_json::from_value(python).unwrap();
         assert_eq!(back.run, Some(run));
+    }
+
+    // A run the ids cannot rebuild reads as no run, never as a completed
+    // memify run (a Python server's `review_conflicts` run, an errored run).
+    #[test]
+    fn a_run_that_is_not_a_completed_memify_run_reads_as_none() {
+        let stage = StageResult::completed("review_conflicts").with_run(Some(StageRunInfo {
+            pipeline_run_id: Uuid::from_u128(1),
+            dataset_id: Uuid::from_u128(2),
+            dataset_name: "docs".to_string(),
+        }));
+        let wire = serde_json::to_value(&stage).unwrap();
+
+        let mut errored = wire.clone();
+        errored["run"]["status"] = json!("PipelineRunErrored");
+        let back: StageResult = serde_json::from_value(errored.clone()).unwrap();
+        assert_eq!(back.run, None);
+        assert!(serde_json::from_value::<StageRunInfo>(errored["run"].clone()).is_err());
+
+        let mut with_items = wire.clone();
+        with_items["run"]["data_ids"] = json!(["00000000-0000-0000-0000-000000000003"]);
+        let back: StageResult = serde_json::from_value(with_items).unwrap();
+        assert_eq!(back.run, None);
+
+        let mut malformed = wire;
+        malformed["run"] = json!({"status": "PipelineRunCompleted"});
+        let back: StageResult = serde_json::from_value(malformed).unwrap();
+        assert_eq!(back.run, None);
     }
 
     #[test]
