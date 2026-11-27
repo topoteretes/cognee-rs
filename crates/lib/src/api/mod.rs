@@ -49,7 +49,7 @@ pub use remember::{
     AutoImproveAdmission, AutoImproveContext, CODE_REPOSITORY_ITEM_KIND, RememberItemInfo,
     RememberResult, RememberStatus, SessionAutoImprove, SessionAutoImproveLaunch,
     auto_improve_skip_reason, clear_auto_improve_admission, launch_session_auto_improve,
-    register_auto_improve_admission, remember, remember_entry,
+    register_auto_improve_admission, remember, remember_entry, remember_with_params,
 };
 pub use remember_code::{
     RememberCodeParams, RememberContentType, RememberOptionCheck, remember_code,

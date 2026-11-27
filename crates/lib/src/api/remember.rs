@@ -14,7 +14,7 @@ use cognee_cognify::{CognifyConfig, CognifyResult};
 use cognee_database::{PipelineRunRepository, RelationalDb, SessionLifecycleDb};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
-use cognee_ingestion::AddPipeline;
+use cognee_ingestion::{AddParams, AddPipeline};
 use cognee_llm::Llm;
 use cognee_models::{DataInput, FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
 use cognee_ontology::OntologyResolver;
@@ -413,6 +413,8 @@ fn auto_improve_config(
 /// The permanent mode is synchronous and returns a fully-populated
 /// [`RememberResult`]; background dispatch of it is a host-side concern
 /// (e.g. the HTTP server via `PipelineRunRegistry::register_background`).
+///
+/// [`remember_with_params`] takes the add options (`branch`, …) as well.
 #[allow(clippy::too_many_arguments)]
 pub async fn remember(
     data: Vec<DataInput>,
@@ -436,7 +438,72 @@ pub async fn remember(
     personalization: cognee_search::PreferenceConfig,
     auto_feedback: bool,
 ) -> Result<RememberResult, ApiError> {
+    remember_with_params(
+        data,
+        dataset_name,
+        session_id,
+        self_improvement,
+        owner_id,
+        tenant_id,
+        add_pipeline,
+        llm,
+        storage,
+        graph_db,
+        vector_db,
+        embedding_engine,
+        db,
+        session_store,
+        session_manager,
+        ontology_resolver,
+        cognify_config,
+        improve_config,
+        personalization,
+        auto_feedback,
+        &AddParams::default(),
+    )
+    .await
+}
+
+/// [`remember`] with the options of its `add()` step (Python's `remember()`
+/// forwards its `**kwargs`, e.g. `branch`, to `add()`). They apply to the
+/// permanent mode only: a session-scoped remember never adds, so a `branch`
+/// with `session_id` is refused (Python: "branch is not supported when
+/// session_id is provided.").
+///
+/// # Errors
+///
+/// [`ApiError::InvalidArgument`] for a `branch` with `session_id`; otherwise
+/// as [`remember`].
+#[allow(clippy::too_many_arguments)]
+pub async fn remember_with_params(
+    data: Vec<DataInput>,
+    dataset_name: &str,
+    session_id: Option<&str>,
+    self_improvement: bool,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+    add_pipeline: Arc<AddPipeline>,
+    llm: Arc<dyn Llm>,
+    storage: Arc<dyn StorageTrait>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
+    db: Option<Arc<dyn RelationalDb>>,
+    session_store: Option<Arc<dyn SessionStore>>,
+    session_manager: Option<Arc<SessionManager>>,
+    ontology_resolver: Arc<dyn OntologyResolver>,
+    cognify_config: Arc<CognifyConfig>,
+    improve_config: Option<ImproveConfig>,
+    personalization: cognee_search::PreferenceConfig,
+    auto_feedback: bool,
+    add_params: &AddParams,
+) -> Result<RememberResult, ApiError> {
     let start = Instant::now();
+    if session_id.is_some() && add_params.branch.is_some() {
+        return Err(ApiError::InvalidArgument(
+            "branch is not supported when session_id is provided.".to_string(),
+        ));
+    }
 
     // Mirrors Python `send_telemetry("cognee.remember", ...)` from
     // cognee/api/v1/remember/remember.py:624.
@@ -519,6 +586,7 @@ pub async fn remember(
         session_manager,
         ontology_resolver,
         &cognify_config,
+        add_params,
         start,
     )
     .await
@@ -561,6 +629,7 @@ async fn run_permanent_inner(
     session_manager: Option<Arc<SessionManager>>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: &CognifyConfig,
+    add_params: &AddParams,
 ) -> Result<PermanentOutcome, ApiError> {
     // Host admission, asked before any work starts and only when an improve
     // would otherwise run (Python `remember.py:2033-2047`). The data is stored
@@ -587,7 +656,7 @@ async fn run_permanent_inner(
     }
 
     let data_items = add_pipeline
-        .add(data, dataset_name, owner_id, tenant_id)
+        .add_with_params(data, dataset_name, owner_id, tenant_id, add_params)
         .await
         .map_err(|e| ApiError::Ingestion(e.to_string()))?;
 
@@ -739,6 +808,7 @@ async fn remember_permanent_blocking(
     session_manager: Option<Arc<SessionManager>>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: &CognifyConfig,
+    add_params: &AddParams,
     start: Instant,
 ) -> Result<RememberResult, ApiError> {
     let outcome = run_permanent_inner(
@@ -760,6 +830,7 @@ async fn remember_permanent_blocking(
         session_manager,
         ontology_resolver,
         cognify_config,
+        add_params,
     )
     .await?;
 

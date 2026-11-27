@@ -82,7 +82,9 @@ impl RememberContentType {
                     .to_string(),
             )),
             Some(_) => Err(ApiError::InvalidArgument(
-                "Unsupported remember content_type. Supported values: 'code'.".to_string(),
+                // Python's text (`remember.py`), which names `skills` too.
+                "Unsupported remember content_type. Supported values: 'skills', 'code'."
+                    .to_string(),
             )),
         }
     }
@@ -108,6 +110,7 @@ pub struct RememberOptionCheck<'a> {
 /// (`remember.py:1772-1792`), then this SDK's refusals of what is not ported
 /// yet:
 ///
+/// - `branch` with `session_id` (Python checks it first);
 /// - an unsupported `content_type`;
 /// - `index_vectors` without `content_type="code"`;
 /// - `repo_credentials` without `content_type="code"`;
@@ -120,9 +123,14 @@ pub struct RememberOptionCheck<'a> {
 pub fn validate_remember_options(
     check: RememberOptionCheck<'_>,
 ) -> Result<Option<RememberContentType>, ApiError> {
+    let invalid = |message: &str| Err(ApiError::InvalidArgument(message.to_string()));
+    // Before the content type, as Python (`remember.py`): the session path
+    // never calls `add()`, so the branch would be dropped silently.
+    if check.session_id.is_some() && check.branch.is_some() {
+        return invalid("branch is not supported when session_id is provided.");
+    }
     let content_type = RememberContentType::parse(check.content_type)?;
     let code = content_type == Some(RememberContentType::Code);
-    let invalid = |message: &str| Err(ApiError::InvalidArgument(message.to_string()));
     if check.index_vectors.is_some() && !code {
         return invalid("index_vectors is supported only for content_type='code'.");
     }
@@ -661,7 +669,7 @@ mod tests {
         assert!(message(RememberContentType::parse(Some("skills"))).contains("'skills'"));
         assert_eq!(
             message(RememberContentType::parse(Some("graph"))),
-            "Unsupported remember content_type. Supported values: 'code'."
+            "Unsupported remember content_type. Supported values: 'skills', 'code'."
         );
     }
 

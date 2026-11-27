@@ -1569,8 +1569,13 @@ caller's own. A value with no usable entry (`:`) still restricts, as in
 Python. A path outside them is a `CodeRepositoryError` with HTTP 403
 (deliberately stricter than Python, whose class default is 500), also when
 the path does not exist, so a refusal never tells whether a path outside the
-roots exists. Python also applies it to the file paths `add` reads; Rust
-applies it to repository paths only.
+roots exists. It also applies to the directories `add` walks (SDK-1704): the
+directory and every file it yields are checked by their real paths, so a
+symlink inside an allowed directory cannot pull in a file outside the roots; a
+file or directory outside them is added as its path text, as Python's
+non-strict read stores it, and a code project's document outside them fails
+the add. Python also applies it to a single file path `add` reads; Rust's
+HTTP server checks those itself.
 
 ## Search — history
 

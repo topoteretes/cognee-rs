@@ -560,21 +560,7 @@ pub async fn add(
     // newly-created items from duplicates (the pipeline returns both).
     let pre_existing = existing_data_ids(&svc, dataset_name, owner_id, tenant_id).await?;
 
-    // `branch`: the branch to clone for each GitHub/GitLab repository URL
-    // (Python `add(branch=...)`), checked before anything is stored.
-    let branch = match opts.get("branch") {
-        None | Some(serde_json::Value::Null) => None,
-        Some(serde_json::Value::String(branch)) => {
-            cognee::add::resolve_repo::check_branch_name(branch)
-                .map_err(|e| SdkError::Validation(e.to_string()))?;
-            Some(branch.clone())
-        }
-        Some(_) => {
-            return Err(SdkError::Validation(
-                "`branch` must be a string".to_string(),
-            ));
-        }
-    };
+    let branch = branch_option(opts)?;
     let params = cognee::add::AddParams {
         branch,
         ..cognee::add::AddParams::default()
@@ -717,4 +703,21 @@ pub async fn refresh_rows(svc: &CogneeServices, rows: Vec<Data>) -> Vec<Data> {
         }
     }
     refreshed
+}
+
+/// The `branch` option: the branch to clone for each GitHub/GitLab repository
+/// URL (Python `add(branch=...)`, which `remember()` forwards), checked before
+/// anything is stored.
+pub(crate) fn branch_option(opts: &serde_json::Value) -> Result<Option<String>, SdkError> {
+    match opts.get("branch") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(branch)) => {
+            cognee::add::resolve_repo::check_branch_name(branch)
+                .map_err(|e| SdkError::Validation(e.to_string()))?;
+            Ok(Some(branch.clone()))
+        }
+        Some(_) => Err(SdkError::Validation(
+            "`branch` must be a string".to_string(),
+        )),
+    }
 }

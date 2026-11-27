@@ -123,7 +123,7 @@ async fn content_type_options_are_validated_before_anything_runs() {
     for (opts, expected) in [
         (
             json!({ "contentType": "nope" }),
-            "Unsupported remember content_type. Supported values: 'code'.",
+            "Unsupported remember content_type. Supported values: 'skills', 'code'.",
         ),
         (
             json!({ "contentType": "skills" }),
@@ -149,10 +149,15 @@ async fn content_type_options_are_validated_before_anything_runs() {
             json!({ "contentType": "code", "repoCredentials": 7 }),
             "`repoCredentials` must be a string",
         ),
+        // `branch` is forwarded to the add (SDK-1704): refused with
+        // `sessionId` (before the content type, as in Python), checked as a
+        // branch name, and refused when it is not a string.
         (
-            json!({ "branch": "dev" }),
-            "`branch` is not supported by remember() in this SDK yet",
+            json!({ "branch": "dev", "sessionId": "s1", "contentType": "nope" }),
+            "branch is not supported when session_id is provided.",
         ),
+        (json!({ "branch": "-dev" }), "Invalid branch name '-dev'"),
+        (json!({ "branch": 7 }), "`branch` must be a string"),
         (
             json!({ "contentType": "code" }),
             "content_type='code' expects a repository path or git URL",
