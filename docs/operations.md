@@ -454,7 +454,10 @@ files (`README.md`, PDFs, images, ...), each added on its own. Hidden files,
 build directories (`node_modules`, `target`, ...), binaries, media, symlinks and
 Git LFS pointers are skipped. Without a usable LLM the documents are left out
 too: their routes need one, the code graph does not. Any other directory is
-added file by file. See [`cognee-ingestion`'s `code_repo`](../crates/ingestion/src/code_repo.rs).
+added file by file. With `allowed_local_file_roots` set, the directory and
+each file it yields must lie under the roots by their real paths (symlinks
+resolved): one outside is added as its path text, as Python stores it (see
+[configuration](configuration.md#outbound-requests--local-paths)). See [`cognee-ingestion`'s `code_repo`](../crates/ingestion/src/code_repo.rs).
 
 ### cognify (knowledge-graph extraction)
 

@@ -3011,11 +3011,15 @@ impl AddPipeline {
         {
             let llm_available = self.llm_available;
             let document_extensions = self.loaders.document_extensions();
+            // Every file a directory yields is checked against the caller's
+            // roots, as Python checks each one (SDK-1704).
+            let allowed_roots = self.repo_sources.local_roots();
             tokio::task::spawn_blocking(move || {
                 crate::code_repo::resolve_data_directories(
                     inputs,
                     llm_available,
                     &document_extensions,
+                    allowed_roots.as_deref(),
                 )
             })
             .await

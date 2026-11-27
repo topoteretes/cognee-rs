@@ -596,16 +596,33 @@ pub struct ResolveDirectoryError {
 /// [`DataInput::FilePath`] naming an existing directory is touched; everything
 /// else passes through unchanged.
 ///
+/// `allowed_roots` (`RepoSourceSettings::local_roots`; `None` is no
+/// restriction) are checked against the real path of the directory and of
+/// every file it yields, symlinks resolved, as Python's
+/// `resolve_local_path` checks each one: a directory, or a file found in one,
+/// outside the roots is the path as text (Python's non-strict read stores it
+/// as text), and a code project's document outside them is an error (Python
+/// reads those strictly). So a symlink inside an allowed directory cannot
+/// pull in a file outside the roots.
+///
 /// Blocking: walks and hashes files. Call it off the async executor.
 ///
 /// # Errors
 ///
-/// [`ResolveDirectoryError`] for a directory that cannot be read.
+/// [`ResolveDirectoryError`] for a directory that cannot be read, or a code
+/// project document outside `allowed_roots`.
 pub fn resolve_data_directories(
     inputs: Vec<DataInput>,
     llm_available: bool,
     document_extensions: &HashSet<&'static str>,
+    allowed_roots: Option<&[PathBuf]>,
 ) -> Result<Vec<DataInput>, ResolveDirectoryError> {
+    // The real path (symlinks resolved) lies under a root, or no root is set.
+    let within_roots = |path: &Path| {
+        allowed_roots.is_none_or(|roots| {
+            fs::canonicalize(path).is_ok_and(|real| roots.iter().any(|root| real.starts_with(root)))
+        })
+    };
     let mut resolved = Vec::with_capacity(inputs.len());
     for input in inputs {
         let DataInput::FilePath(path) = &input else {
@@ -615,6 +632,10 @@ pub fn resolve_data_directories(
         let local = Path::new(path.strip_prefix("file://").unwrap_or(path));
         if !local.is_dir() {
             resolved.push(input);
+            continue;
+        }
+        if !within_roots(local) {
+            resolved.push(DataInput::Text(path.clone()));
             continue;
         }
         let error = |source: io::Error| ResolveDirectoryError {
@@ -628,6 +649,19 @@ pub fn resolve_data_directories(
             let repository =
                 resolve_code_repository(&directory, true, llm_available, None, document_extensions)
                     .map_err(error)?;
+            if let Some(outside) = repository
+                .document_paths
+                .iter()
+                .find(|document| !within_roots(document))
+            {
+                return Err(ResolveDirectoryError {
+                    path: path_text(outside),
+                    source: io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "Local file path is outside allowed roots.",
+                    ),
+                });
+            }
             resolved.push(repository.manifest_item);
             resolved.extend(
                 repository
@@ -640,7 +674,13 @@ pub fn resolve_data_directories(
                 flatten_directory(&directory)
                     .map_err(error)?
                     .iter()
-                    .map(|file| DataInput::FilePath(path_text(file))),
+                    .map(|file| {
+                        if within_roots(file) {
+                            DataInput::FilePath(path_text(file))
+                        } else {
+                            DataInput::Text(path_text(file))
+                        }
+                    }),
             );
         }
     }
@@ -1159,6 +1199,7 @@ mod tests {
             ],
             true,
             &every_loader(),
+            None,
         )
         .unwrap();
         assert_eq!(resolved.len(), 3);
@@ -1222,6 +1263,7 @@ mod tests {
             vec![DataInput::FilePath(path_text(&root))],
             true,
             &every_loader(),
+            None,
         )
         .unwrap();
         let paths: Vec<String> = resolved
@@ -1240,6 +1282,51 @@ mod tests {
         );
     }
 
+    /// With allowed roots, every file a directory yields is checked by its
+    /// real path (SDK-1704): a symlink out of the roots is the path as text,
+    /// not the file it points at, and a directory outside the roots is not
+    /// walked at all (Python's `resolve_local_path` on each one).
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_yields_only_files_under_the_allowed_roots() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let outside_dir = tempfile::tempdir().unwrap();
+        let outside = fs::canonicalize(outside_dir.path()).unwrap();
+        write(&outside, "secret.txt", b"secret\n");
+        write(&root, "docs/a.txt", b"a\n");
+        std::os::unix::fs::symlink(outside.join("secret.txt"), root.join("docs/leak.txt")).unwrap();
+        let roots = [root.clone()];
+
+        let resolved = resolve_data_directories(
+            vec![
+                DataInput::FilePath(path_text(&root.join("docs"))),
+                DataInput::FilePath(path_text(&outside)),
+            ],
+            true,
+            &every_loader(),
+            Some(&roots),
+        )
+        .unwrap();
+        let leak = path_text(&root.join("docs/leak.txt"));
+        assert!(
+            matches!(&resolved[0], DataInput::FilePath(p) if *p == path_text(&root.join("docs/a.txt")))
+        );
+        assert!(matches!(&resolved[1], DataInput::Text(t) if *t == leak));
+        assert!(matches!(&resolved[2], DataInput::Text(t) if *t == path_text(&outside)));
+        assert_eq!(resolved.len(), 3);
+
+        // No roots: the symlink is followed, as before.
+        let unrestricted = resolve_data_directories(
+            vec![DataInput::FilePath(path_text(&root.join("docs")))],
+            true,
+            &every_loader(),
+            None,
+        )
+        .unwrap();
+        assert!(matches!(&unrestricted[1], DataInput::FilePath(p) if *p == leak));
+    }
+
     #[test]
     fn files_and_missing_paths_pass_through() {
         let dir = tempfile::tempdir().unwrap();
@@ -1253,6 +1340,7 @@ mod tests {
             ],
             true,
             &every_loader(),
+            None,
         )
         .unwrap();
         assert!(matches!(&resolved[0], DataInput::FilePath(path) if *path == file));

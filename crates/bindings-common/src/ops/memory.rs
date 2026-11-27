@@ -41,8 +41,10 @@
 //! the configured embedding engine (Python `index_vectors`; off by default,
 //! so the default run makes no embedding call). `nodeSet` is ignored, as in
 //! Python. `sessionId` and `branch` are refused with it, as is `indexVectors`
-//! or `repoCredentials` without it. `branch` without `contentType` (Python
-//! forwards it to `add`) is refused too: pass it to `add` instead.
+//! or `repoCredentials` without it. `branch` without `contentType` is
+//! forwarded to the `add` step, as Python does: the branch to clone for each
+//! GitHub/GitLab repository URL among the inputs. It is refused with
+//! `sessionId`, which never adds.
 //!
 //! `extractor` (Python's argument) and `graphBackend` select the graph
 //! extractor as for `cognify`; `extractor` with `sessionId` is an error, as in
@@ -103,7 +105,7 @@ use serde_json::json;
 
 use cognee::api::{
     ImproveParams, ImproveResult, RememberCodeParams, RememberContentType, RememberOptionCheck,
-    remember, remember_code, remember_entry, validate_remember_options,
+    remember_code, remember_entry, remember_with_params, validate_remember_options,
 };
 use cognee::models::{FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
 
@@ -277,15 +279,12 @@ pub async fn run_remember(
     if content_type == Some(RememberContentType::Code) {
         return run_remember_code(state, inputs, dataset_name, tenant_id, opts).await;
     }
-    // Python forwards `branch` to `add()`; this `remember` does not take add
-    // options yet, so it is refused rather than dropped.
-    if opt_str(opts, "branch")?.is_some() {
-        return Err(SdkError::Validation(
-            "`branch` is not supported by remember() in this SDK yet: call add() with the \
-             branch, then cognify()."
-                .to_string(),
-        ));
-    }
+    // Python forwards `branch` to `add()` (SDK-1704): checked before anything
+    // is stored, and refused with `sessionId` (above), which never adds.
+    let add_params = cognee::add::AddParams {
+        branch: super::pipeline::branch_option(opts)?,
+        ..cognee::add::AddParams::default()
+    };
     if session_id.is_some()
         && opts
             .get(crate::graph_backend::EXTRACTOR_OPT)
@@ -322,7 +321,7 @@ pub async fn run_remember(
             settings.auto_feedback_enabled(),
         )
     };
-    let result = remember(
+    let result = remember_with_params(
         inputs,
         dataset_name,
         session_id,
@@ -343,9 +342,10 @@ pub async fn run_remember(
         improve_config,
         personalization,
         auto_feedback,
+        &add_params,
     )
     .await
-    .map_err(|e| SdkError::Runtime(format!("remember failed: {e}")))?;
+    .map_err(remember_error)?;
 
     crate::ops::lifecycle::checkpoint_graph_after(svc.as_ref(), "remember").await;
 
