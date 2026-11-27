@@ -497,6 +497,22 @@ async fn process_input_reusing(
         (fname, ext.clone(), mime.clone(), ext, mime, lbl, loader)
     };
 
+    // A fetched binary body (image, audio, PDF) is stored verbatim and read
+    // at cognify by the loader its extension names. One whose type maps to
+    // no loader (`bin`: a subtype the URL resolver does not know and whose
+    // bytes sniff as none of those types) is refused here, as a file no
+    // loader claims is refused below, rather than stored as a row cognify
+    // would read as text and fail on (SDK-1694 O10).
+    if let Some(metadata) = resolved_url_metadata.as_ref()
+        && matches!(effective_input, DataInput::Binary { .. })
+        && cognee_models::doc_type_for_extension(&metadata.stored_extension).is_none()
+    {
+        return Err(Box::new(IngestionError::NoLoaderForFile {
+            extension: metadata.stored_extension.clone(),
+            mime_type: metadata.stored_mime_type.clone(),
+        }));
+    }
+
     // S3 ingestion is not yet implemented (decision D3): the loader-dispatch
     // path below must NOT silently store raw S3 bytes. Surface a clear error
     // instead. The `original_*` metadata above still carries the placeholder.
@@ -3392,6 +3408,81 @@ mod tests {
             .create_async()
             .await;
         server
+    }
+
+    /// SDK-1694 O10: a fetched binary whose type no loader takes is refused
+    /// at add, as a file no loader claims is, instead of becoming a `bin` row
+    /// that cognify would read as text and fail on. Nothing is stored.
+    #[cfg(feature = "html-loader")]
+    #[tokio::test]
+    async fn test_process_input_url_refuses_a_binary_no_loader_claims() {
+        let mut server = server_with_robots().await;
+        let url = format!("{}/blob", server.url());
+        let _mock = server
+            .mock("GET", "/blob")
+            .with_header("content-type", "audio/x-unknown")
+            .with_body(vec![0x00, 0xFF, 0x13, 0x37])
+            .create_async()
+            .await;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = LocalStorage::new(temp_dir.path().to_path_buf());
+
+        let err = process_input(
+            &DataInput::Url(url),
+            &storage,
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            matches!(
+                err.downcast_ref::<IngestionError>(),
+                Some(IngestionError::NoLoaderForFile { extension, .. }) if extension == "bin"
+            ),
+            "{err}"
+        );
+        assert_eq!(
+            std::fs::read_dir(temp_dir.path())
+                .map(|d| d.count())
+                .unwrap_or(0),
+            0,
+            "nothing is stored"
+        );
+    }
+
+    /// A TIFF fetched from a URL is a `tif` row the image loader reads.
+    #[cfg(feature = "html-loader")]
+    #[tokio::test]
+    async fn test_process_input_url_stores_a_tiff_as_tif() {
+        let mut server = server_with_robots().await;
+        let url = format!("{}/scan.tiff", server.url());
+        let _mock = server
+            .mock("GET", "/scan.tiff")
+            .with_header("content-type", "image/tiff")
+            .with_body(b"II*\x00fake".to_vec())
+            .create_async()
+            .await;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = LocalStorage::new(temp_dir.path().to_path_buf());
+
+        let processed = process_input(
+            &DataInput::Url(url),
+            &storage,
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(processed.stored_extension, "tif");
+        assert_eq!(
+            processed.storage_location,
+            format!("fetched_{}.tif", processed.content_hash)
+        );
     }
 
     #[cfg(feature = "html-loader")]

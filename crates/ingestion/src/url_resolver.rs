@@ -38,8 +38,29 @@ pub async fn resolve_url_input(url: &str) -> Result<ResolvedUrlInput, UrlFetcher
         raw_essence.to_string()
     };
 
-    let (source_extension, source_mime_type, loader_engine) = metadata_from_mime(&essence);
+    let (mut source_extension, mut source_mime_type, mut loader_engine) =
+        metadata_from_mime(&essence);
     let raw_bytes = fetch_result.bytes;
+    let is_binary_type = (essence.starts_with("image/") && essence != "image/svg+xml")
+        || essence.starts_with("audio/")
+        || essence == "application/pdf";
+    if is_binary_type && cognee_models::doc_type_for_extension(&source_extension).is_none() {
+        // A subtype the table above does not name: type the body by its
+        // bytes, as `add` types a file (`file_type::guess_file_type`). A body
+        // that sniffs as none of the loader types keeps `bin`, and `add`
+        // refuses it (`IngestionError::NoLoaderForFile`), as it refuses a
+        // file no loader claims.
+        let sniffed =
+            crate::file_type::guess_file_type(&raw_bytes, &url_path_extension(&fetch_result.url));
+        if matches!(
+            cognee_models::doc_type_for_extension(&sniffed.extension),
+            Some("image" | "audio" | "pdf")
+        ) {
+            source_extension = sniffed.extension;
+            source_mime_type = sniffed.mime;
+            loader_engine = get_loader_name(&source_extension).to_string();
+        }
+    }
 
     let (input, stored_extension, stored_mime_type) = if essence == "text/html"
         || essence == "application/xhtml+xml"
@@ -61,10 +82,7 @@ pub async fn resolve_url_input(url: &str) -> Result<ResolvedUrlInput, UrlFetcher
             source_extension.clone(),
             source_mime_type.clone(),
         )
-    } else if essence.starts_with("image/")
-        || essence.starts_with("audio/")
-        || essence == "application/pdf"
-    {
+    } else if is_binary_type {
         let file_name = format!("url_fetched.{source_extension}");
         (
             DataInput::Binary {
@@ -170,6 +188,20 @@ fn mime_from_url_path(url: &str) -> Option<String> {
     None
 }
 
+/// The extension of `url`'s path (`scan.TIFF` → `TIFF`), or empty.
+#[cfg(feature = "html-loader")]
+fn url_path_extension(url: &str) -> String {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|parsed| {
+            let segment = parsed.path_segments()?.next_back()?.to_string();
+            segment
+                .rsplit_once('.')
+                .map(|(_, extension)| extension.to_string())
+        })
+        .unwrap_or_default()
+}
+
 /// Derive `(extension, mime, loader_engine)` from a MIME essence string.
 #[cfg(feature = "html-loader")]
 fn metadata_from_mime(essence: &str) -> (String, String, String) {
@@ -180,26 +212,50 @@ fn metadata_from_mime(essence: &str) -> (String, String, String) {
         "application/json" => "json",
         "text/csv" => "csv",
         "application/pdf" => "pdf",
+        // SVG is markup: stored as text, as Python stores every fetched body
+        // (`save_data_item_to_storage.py:82-89`; its `text_loader` reads it).
+        "image/svg+xml" => "txt",
         _ if essence.starts_with("image/") => {
-            // Pick a common extension from the sub-type.
+            // The extension of each image type the image loader takes
+            // (`file_type::IMAGE_MIMES`, plus common aliases).
             match essence {
                 "image/png" => "png",
-                "image/jpeg" => "jpg",
+                "image/jpeg" | "image/pjpeg" => "jpg",
                 "image/gif" => "gif",
                 "image/webp" => "webp",
-                "image/svg+xml" => "svg",
+                "image/tiff" => "tif",
+                "image/bmp" | "image/x-bmp" | "image/x-ms-bmp" => "bmp",
+                "image/avif" => "avif",
+                "image/heic" | "image/heif" => "heic",
+                "image/apng" => "apng",
+                "image/jpx" | "image/jp2" => "jpx",
+                "image/jxr" | "image/vnd.ms-photo" => "jxr",
+                "image/vnd.adobe.photoshop" => "psd",
+                "image/vnd.microsoft.icon" | "image/x-icon" => "ico",
+                "image/vnd.dwg" => "dwg",
+                "image/x-xcf" => "xcf",
+                "image/x-canon-cr2" => "cr2",
                 _ => "bin",
             }
         }
         _ if essence.starts_with("audio/") => match essence {
-            "audio/mpeg" => "mp3",
-            "audio/wav" => "wav",
-            "audio/ogg" => "ogg",
+            "audio/mpeg" | "audio/mp3" => "mp3",
+            "audio/wav" | "audio/x-wav" | "audio/wave" | "audio/vnd.wave" => "wav",
+            "audio/ogg" | "audio/opus" => "ogg",
+            "audio/flac" | "audio/x-flac" => "flac",
+            "audio/mp4" | "audio/m4a" | "audio/x-m4a" => "m4a",
+            "audio/aac" | "audio/x-aac" => "aac",
+            "audio/midi" | "audio/x-midi" | "audio/mid" => "mid",
+            "audio/amr" => "amr",
+            "audio/aiff" | "audio/x-aiff" => "aiff",
             _ => "bin",
         },
         _ => "bin",
     };
-    let mime = if matches!(essence, "text/html" | "application/xhtml+xml") {
+    let mime = if matches!(
+        essence,
+        "text/html" | "application/xhtml+xml" | "image/svg+xml"
+    ) {
         "text/plain".to_string()
     } else {
         essence.to_string()
@@ -364,6 +420,99 @@ mod tests {
             assert_eq!(resolved.metadata.stored_extension, extension);
             assert_eq!(resolved.metadata.loader_engine, loader);
         }
+    }
+
+    /// SDK-1694 O10: an image or audio subtype is stored under the extension
+    /// its loader takes, never as `bin`, so cognify does not read it as text.
+    #[tokio::test]
+    async fn image_and_audio_subtypes_map_to_their_loader_extension() {
+        for (path, content_type, extension, loader) in [
+            ("/scan.tiff", "image/tiff", "tif", "image_loader"),
+            ("/pic", "image/x-ms-bmp", "bmp", "image_loader"),
+            ("/pic.avif", "image/avif", "avif", "image_loader"),
+            ("/icon", "image/x-icon", "ico", "image_loader"),
+            ("/song", "audio/flac", "flac", "audio_loader"),
+            ("/song", "audio/x-m4a", "m4a", "audio_loader"),
+            ("/song", "audio/x-aiff", "aiff", "audio_loader"),
+        ] {
+            let mut server = server_with_robots().await;
+            let url = format!("{}{}", server.url(), path);
+            let _mock = server
+                .mock("GET", path)
+                .with_header("content-type", content_type)
+                .with_body(vec![1, 2, 3, 4])
+                .create_async()
+                .await;
+
+            let resolved = resolve_url_input(&url).await.unwrap();
+
+            assert!(
+                matches!(resolved.input, DataInput::Binary { .. }),
+                "{content_type}"
+            );
+            assert_eq!(
+                resolved.metadata.stored_extension, extension,
+                "{content_type}"
+            );
+            assert_eq!(resolved.metadata.loader_engine, loader, "{content_type}");
+        }
+    }
+
+    /// A subtype the table does not name is typed by its bytes, as `add`
+    /// types a file; bytes that sniff as no loader type keep `bin`, which
+    /// `add` then refuses.
+    #[tokio::test]
+    async fn an_unnamed_subtype_is_typed_by_its_bytes() {
+        let mut server = server_with_robots().await;
+        let bmp = format!("{}/odd", server.url());
+        let mut bmp_bytes = b"BM".to_vec();
+        bmp_bytes.extend_from_slice(&[0; 64]);
+        let _bmp = server
+            .mock("GET", "/odd")
+            .with_header("content-type", "image/x-something")
+            .with_body(bmp_bytes)
+            .create_async()
+            .await;
+        let opaque = format!("{}/opaque", server.url());
+        let _opaque = server
+            .mock("GET", "/opaque")
+            .with_header("content-type", "image/x-something")
+            .with_body(vec![0x00, 0xFF, 0x13, 0x37])
+            .create_async()
+            .await;
+
+        let resolved = resolve_url_input(&bmp).await.unwrap();
+        assert_eq!(resolved.metadata.stored_extension, "bmp");
+        assert_eq!(resolved.metadata.stored_mime_type, "image/bmp");
+        assert_eq!(resolved.metadata.loader_engine, "image_loader");
+
+        let resolved = resolve_url_input(&opaque).await.unwrap();
+        assert!(matches!(resolved.input, DataInput::Binary { .. }));
+        assert_eq!(resolved.metadata.stored_extension, "bin");
+    }
+
+    /// SVG is markup, and Python stores every fetched body as text
+    /// (`save_data_item_to_storage.py:82-89`): a `txt` text row, read by the
+    /// text loader.
+    #[tokio::test]
+    async fn svg_is_stored_as_text() {
+        let mut server = server_with_robots().await;
+        let url = format!("{}/logo.svg", server.url());
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"><title>Logo</title></svg>"#;
+        let _mock = server
+            .mock("GET", "/logo.svg")
+            .with_header("content-type", "image/svg+xml")
+            .with_body(svg)
+            .create_async()
+            .await;
+
+        let resolved = resolve_url_input(&url).await.unwrap();
+
+        assert!(matches!(resolved.input, DataInput::Text(ref text) if text == svg));
+        assert_eq!(resolved.metadata.stored_extension, "txt");
+        assert_eq!(resolved.metadata.stored_mime_type, "text/plain");
+        assert_eq!(resolved.metadata.source_extension, "txt");
+        assert_eq!(resolved.metadata.loader_engine, "text_loader");
     }
 
     #[tokio::test]
