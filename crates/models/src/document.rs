@@ -30,18 +30,31 @@ pub struct Document {
 }
 
 /// Map a file extension to a document type string, returning `None` for
-/// unrecognised extensions.
+/// an extension the table does not list.
 ///
 /// Public wrapper over the internal [`extension_to_doc_type`] mapping, the
 /// extension → document-type table that [`classify_documents`] uses at cognify
-/// time. At ADD time the ingestion pipeline routes by sniffed content type
-/// instead and consults this table only for the office (`unstructured`)
-/// formats.
+/// time. `None` means "not in the table", not "unsupported":
+/// [`classify_documents`] reads such an item as text
+/// ([`FALLBACK_DOC_TYPE`]), as Python does. At ADD time the ingestion pipeline
+/// routes by sniffed content type instead and consults this table only for
+/// the office (`unstructured`) formats.
 pub fn doc_type_for_extension(ext: &str) -> Option<&'static str> {
     extension_to_doc_type(ext)
 }
 
-/// Map a file extension to a document type string.
+/// The document type of an item whose extension the table does not list
+/// (or that has none): plain text, read by the strict UTF-8 text loader.
+///
+/// Python's `document_class_for` ends with
+/// `EXTENSION_TO_DOCUMENT_CLASS.get(extension, TextDocument)`
+/// (`cognee/tasks/documents/classify_documents.py:130-131`), and
+/// `TextDocument.read` opens the file with `encoding="utf-8"` in strict mode,
+/// so bytes that are not UTF-8 fail that one item there as they do here.
+pub const FALLBACK_DOC_TYPE: &str = "text";
+
+/// Map a file extension to a document type string, or `None` when the
+/// extension is not in the table.
 ///
 /// Matches the 39-entry `EXTENSION_TO_DOCUMENT_CLASS` mapping in the Python SDK
 /// (`cognee/tasks/documents/classify_documents.py`).
@@ -115,21 +128,24 @@ fn metadata_value_is_dlt_sourced(value: &serde_json::Value) -> bool {
 
 /// Classify Data items into Documents based on file extension.
 ///
-/// Mirrors the Python `classify_documents` function. DLT-sourced items are
-/// classified as `DltRowDocument`; all others use the extension-to-document-type
-/// mapping. `md`/`json`/`xml`/`yaml` map to text as they do in Python;
-/// unrecognised extensions are skipped, which is how source-code files are
-/// kept out of the prose pipeline. Cognify records what is skipped so an item
-/// dropped here is never marked complete.
+/// Mirrors the Python `classify_documents` function and returns one
+/// `Document` per item, in input order. DLT-sourced items are classified as
+/// `DltRowDocument`; all others use the extension-to-document-type mapping.
+/// `md`/`json`/`xml`/`yaml` map to text as they do in Python, and so does an
+/// extension the table does not list, or none at all ([`FALLBACK_DOC_TYPE`]):
+/// Python's `document_class_for` falls back to `TextDocument`
+/// (`classify_documents.py:130-131`). Source-code files are kept out of this
+/// pipeline by their `system_metadata.source == "code"` stamp, which cognify
+/// routes ahead of classification, not by their extension.
 pub fn classify_documents(data_items: &[Data]) -> Vec<Document> {
     data_items
         .iter()
-        .filter_map(|data| {
+        .map(|data| {
             // DLT detection takes priority
             let doc_type = if is_dlt_sourced(&data.external_metadata) {
                 "dlt_row"
             } else {
-                extension_to_doc_type(&data.extension)?
+                extension_to_doc_type(&data.extension).unwrap_or(FALLBACK_DOC_TYPE)
             };
 
             let class_name = doc_type_to_class_name(doc_type);
@@ -194,7 +210,7 @@ pub fn classify_documents(data_items: &[Data]) -> Vec<Document> {
                 }
             }
 
-            Some(doc)
+            doc
         })
         .collect()
 }
@@ -543,28 +559,55 @@ mod tests {
         }
     }
 
-    // ----- Unknown extensions are skipped -----
+    // ----- Unknown extensions are read as text (Python's fallback) -----
 
+    /// Python: `EXTENSION_TO_DOCUMENT_CLASS.get(extension, TextDocument)`
+    /// (`classify_documents.py:131`).
     #[test]
-    fn skips_unknown_extensions() {
+    fn unknown_extensions_classify_as_text() {
         let data = vec![make_data("application/octet-stream", "xyz")];
         let docs = classify_documents(&data);
-        assert!(docs.is_empty());
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].document_type, FALLBACK_DOC_TYPE);
+        assert_eq!(docs[0].base.data_type, "TextDocument");
+        assert_eq!(docs[0].extension, "xyz", "the item keeps its extension");
+        assert_eq!(docs[0].mime_type, "application/octet-stream");
     }
 
+    /// Python lower-cases `data_item.extension or ""`, so a missing extension
+    /// is an unknown one too.
     #[test]
-    fn source_code_extensions_are_not_classified() {
+    fn an_item_without_an_extension_classifies_as_text() {
+        let docs = classify_documents(&[make_data("text/plain", "")]);
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].document_type, "text");
+        assert_eq!(docs[0].base.data_type, "TextDocument");
+    }
+
+    /// A code file reaches classification only without its
+    /// `system_metadata.source == "code"` stamp (cognify routes a stamped one
+    /// first), and Python then reads it as text, extension or not.
+    #[test]
+    fn source_code_extensions_classify_as_text() {
         for ext in &["py", "rs", "js", "ts", "c", "cpp", "go", "java", "rb", "sh"] {
-            let data = vec![make_data("text/plain", ext)];
-            let docs = classify_documents(&data);
-            assert!(docs.is_empty(), "extension .{ext} should not be classified");
+            let docs = classify_documents(&[make_data("text/plain", ext)]);
+            assert_eq!(docs.len(), 1, "extension .{ext}");
+            assert_eq!(docs[0].document_type, "text", "extension .{ext}");
+            assert_eq!(docs[0].base.data_type, "TextDocument", "extension .{ext}");
         }
     }
 
-    // ----- Mixed input: only known extensions pass through -----
+    #[test]
+    fn the_table_still_reports_an_unlisted_extension_as_none() {
+        assert_eq!(doc_type_for_extension("xyz"), None);
+        assert_eq!(doc_type_for_extension(""), None);
+        assert_eq!(doc_type_for_extension("docx"), Some("unstructured"));
+    }
+
+    // ----- Mixed input: one document per item, in input order -----
 
     #[test]
-    fn mixed_input_filters_correctly() {
+    fn mixed_input_classifies_every_item_in_order() {
         let data = vec![
             make_data("text/plain", "txt"),
             make_data("application/octet-stream", "xyz"),
@@ -573,11 +616,10 @@ mod tests {
             make_data("audio/mp3", "mp3"),
         ];
         let docs = classify_documents(&data);
-        assert_eq!(docs.len(), 4);
-        assert_eq!(docs[0].document_type, "text");
-        assert_eq!(docs[1].document_type, "pdf");
-        assert_eq!(docs[2].document_type, "image");
-        assert_eq!(docs[3].document_type, "audio");
+        let ids: Vec<Uuid> = docs.iter().map(|d| d.data_id).collect();
+        assert_eq!(ids, data.iter().map(|d| d.id).collect::<Vec<_>>());
+        let types: Vec<&str> = docs.iter().map(|d| d.document_type.as_str()).collect();
+        assert_eq!(types, ["text", "text", "pdf", "image", "audio"]);
     }
 
     // ----- DLT detection -----

@@ -125,9 +125,11 @@ pub enum ItemStatus {
     /// Its processing failed ([`crate::FailureReport::failed_items`]).
     /// Python's `PipelineRunErrored` entry. Not kept; the next run redoes it.
     Failed,
-    /// Never processed: a fail-fast stop came first, or no loader matches
-    /// its extension ([`crate::FailureReport::unreached_items`]). Not
-    /// marked; the next run sends it again. Python has no such entry: its
+    /// Never processed: a fail-fast stop came first
+    /// ([`crate::FailureReport::unreached_items`]). Not marked; the next run
+    /// sends it again. Not produced by an item's extension: one the
+    /// document-type table does not list is read as text, as Python does
+    /// (SDK-1694 O10). Python has no such entry: its
     /// fail-fast run cancels the items in flight and reports none for them.
     Unreached,
     /// Processed by a run that then errored and did not keep it: swept with

@@ -357,44 +357,24 @@ impl LedgerIdentity {
 
 /// Classify Data items into typed Documents (Task 1).
 ///
-/// Maps each Data item to a Document based on mime_type.
-/// Non-text items are filtered out.
+/// One `Document` per item, by extension; an extension the table does not
+/// list is read as text, as Python's `document_class_for` does
+/// (`classify_documents.py:131`, SDK-1694 O10). Classification therefore
+/// drops nothing and records no failure: an item whose bytes the text loader
+/// cannot decode fails later, in [`extract_chunks_from_documents`], as
+/// Python's `TextDocument.read` raises there.
 pub fn classify_documents(
     input: &CognifyInput,
     failure_policy: FailurePolicy,
 ) -> Result<ClassifiedDocuments, CognifyError> {
     let documents: Vec<Document> = model_classify_documents(&input.data_items);
     info!(doc_count = documents.len(), "documents classified");
-
-    // `model_classify_documents` filter_maps items whose extension maps to no
-    // document type (`md`, `json`, `xml` and `yaml` map to text; source code
-    // and any other unmapped extension does not). They are
-    // dropped silently, so without this they are neither failed nor unreached
-    // and a completing run would mark them done — and, since markers now skip,
-    // never revisit them. Record each as a file-unit failure instead.
-    let mut failures = FailureReport::with_policy(&failure_policy);
-    if documents.len() != input.data_items.len() {
-        let classified: HashSet<Uuid> = documents.iter().map(|d| d.data_id).collect();
-        for item in input
-            .data_items
-            .iter()
-            .filter(|d| !classified.contains(&d.id))
-        {
-            warn!(
-                data_id = %item.id,
-                extension = %item.extension,
-                "no document type for this extension; the item cannot be cognified"
-            );
-            // Unreached, not failed. Failing it would make one `.py` in a
-            // dataset error and sweep every run under the default scope,
-            // forever. Leaving it out of the report entirely was worse still:
-            // it was then neither failed nor unreached, so a completing run
-            // marked it done and the marker skipped it for good. Unreached
-            // keeps it unmarked and retried, and the no-survivor backstop
-            // still catches a dataset where nothing is supported.
-            failures.mark_unreached(item.id);
-        }
-    }
+    debug_assert_eq!(
+        documents.len(),
+        input.data_items.len(),
+        "classification maps every item"
+    );
+    let failures = FailureReport::with_policy(&failure_policy);
 
     Ok(ClassifiedDocuments {
         documents,
@@ -579,10 +559,6 @@ async fn chunk_one_document(
 ///   files that completed can still travel down the rest of the pipeline and be
 ///   persisted.
 /// * `RunToEnd` — keep going and collect every failing document.
-///
-/// Items `model_classify_documents` silently skipped (an unrecognised
-/// extension) are *not* recorded: Python skips them silently too, and recording
-/// them would fail every dataset containing a `.png` under the default policy.
 #[allow(clippy::too_many_arguments)]
 pub async fn extract_chunks_from_documents(
     input: &ClassifiedDocuments,
@@ -600,10 +576,11 @@ pub async fn extract_chunks_from_documents(
         .map_err(|e| CognifyError::ChunkingError(e.to_string()))?;
     let mut all_chunks = Vec::new();
     let mut kept_documents: Vec<Document> = Vec::new();
-    // Seeded from classification so items dropped there stay in the report.
+    // Seeded from the classified input so what an earlier stage recorded (a
+    // code route's items) stays in the report.
     let mut failures = input.failures.clone();
-    // Denominator counts everything handed to the run, including anything
-    // classification dropped — those never become `documents`. Counted from
+    // Denominator counts everything handed to the run, including anything an
+    // earlier stage left unreached — those never become `documents`. Counted from
     // `unreached_items`, which is never capped; `entries` is truncated at
     // `failure_report_cap`, so counting it would undercount the denominator
     // and could trip the no-survivor backstop on a run full of survivors.
@@ -8887,24 +8864,34 @@ mod tests {
         assert!(result.failures.unreached_items().is_empty());
     }
 
-    /// A genuinely unsupported extension is skipped but never silently lost.
+    /// An extension the table does not list is read as text, as Python's
+    /// `document_class_for` does (`classify_documents.py:131`, SDK-1694 O10):
+    /// a document, not a skipped or unreached item.
     #[test]
-    fn unsupported_extension_is_recorded_as_unreached() {
-        let source = Data::builder(
-            Uuid::new_v4(),
-            "main.py",
-            "/storage/main.py",
-            "file://main.py",
-            "py",
-            "text/x-python",
-            "hash-py",
-            Uuid::new_v4(),
-        )
-        .build();
-        let source_id = source.id;
+    fn an_unlisted_extension_is_classified_as_text() {
+        let items: Vec<Data> = [
+            ("main.py", "py", "text/x-python"),
+            ("data.xyz", "xyz", "application/octet-stream"),
+        ]
+        .into_iter()
+        .map(|(name, ext, mime)| {
+            Data::builder(
+                Uuid::new_v4(),
+                name,
+                format!("/storage/{name}"),
+                format!("file://{name}"),
+                ext,
+                mime,
+                format!("hash-{ext}"),
+                Uuid::new_v4(),
+            )
+            .build()
+        })
+        .collect();
+        let ids: Vec<Uuid> = items.iter().map(|d| d.id).collect();
 
         let input = CognifyInput {
-            data_items: vec![source],
+            data_items: items,
             dataset_id: Uuid::new_v4(),
             user_id: None,
             tenant_id: None,
@@ -8912,39 +8899,20 @@ mod tests {
 
         let result = classify_documents(&input, FailurePolicy::default()).unwrap();
 
-        assert!(result.documents.is_empty(), "source files stay out");
-        assert!(
-            result.failures.entries().is_empty(),
-            "skipping is not a failure — it must not error the run"
+        assert_eq!(
+            result
+                .documents
+                .iter()
+                .map(|d| d.data_id)
+                .collect::<Vec<_>>(),
+            ids
         );
-        assert!(
-            result.failures.unreached_items().contains(&source_id),
-            "but it must be recorded, or a completing run marks it done"
-        );
-    }
-
-    #[test]
-    fn test_classify_documents_skips_unknown_extension() {
-        let data = Data::builder(
-            Uuid::new_v4(),
-            "data.xyz",
-            "/storage/data.xyz",
-            "file://data.xyz",
-            "xyz",
-            "application/octet-stream",
-            "hash456",
-            Uuid::new_v4(),
-        )
-        .build();
-
-        let input = CognifyInput {
-            data_items: vec![data],
-            dataset_id: Uuid::new_v4(),
-            user_id: None,
-            tenant_id: None,
-        };
-        let result = classify_documents(&input, FailurePolicy::default()).unwrap();
-        assert!(result.documents.is_empty());
+        for document in &result.documents {
+            assert_eq!(document.document_type, "text", "{}", document.extension);
+            assert_eq!(document.base.data_type, "TextDocument");
+        }
+        assert!(result.failures.entries().is_empty());
+        assert!(result.failures.unreached_items().is_empty());
     }
 
     #[tokio::test]
@@ -10041,9 +10009,9 @@ mod tests {
     //
     // The chunk stage is the only producer of file-unit failures: storage
     // `retrieve`, UTF-8 decode, an unregistered document type, and the loader's
-    // own `extract` all surface here. `classify_documents` itself is infallible,
-    // and `model_classify_documents` silently skips items with an unrecognised
-    // extension, exactly as Python does.
+    // own `extract` all surface here. `classify_documents` itself is infallible
+    // and drops nothing: an item with an unlisted extension is a text document,
+    // exactly as in Python, and fails here if its bytes are not UTF-8.
 
     /// A document type intentionally never registered in
     /// `LoaderRegistry::default()`. The fixture used to say "pdf", but the PDF

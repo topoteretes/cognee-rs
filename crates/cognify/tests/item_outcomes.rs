@@ -219,16 +219,90 @@ async fn an_errored_whole_run_discards_what_it_processed() {
     }
 }
 
-/// An item no loader matches is left unreached by a run that still completes
-/// (it fails nothing, and is not marked): the outcome says unreached, not
-/// completed.
+/// An item whose extension no document type lists is read as text and
+/// completes, as Python's `document_class_for` falls back to `TextDocument`
+/// (`classify_documents.py:131`, SDK-1694 O10). It used to be left unreached
+/// on every run.
 #[tokio::test]
-async fn an_item_no_loader_matches_is_unreached_on_a_completed_run() {
+async fn an_item_with_an_unknown_extension_completes_as_text() {
     let mut harness = Harness::new().await;
     let text = harness.add_file("Alice works at Acme.").await;
-    let unsupported = harness.add_file("Opaque bytes.").await;
-    // An extension no document type maps.
-    let mut opaque = harness.data(unsupported);
+    let unknown = harness.add_file("Bob works at Acme.").await;
+    // An extension no document type maps, as a Python-written row or a
+    // fetched URL can carry.
+    let mut opaque = harness.data(unknown);
+    opaque.extension = "xyz".into();
+    opaque.mime_type = "application/octet-stream".into();
+
+    let llm = Arc::new(CountingLlm::lenient(4));
+    let result = harness
+        .run_with_llm(
+            &extraction_config(),
+            llm.clone(),
+            vec![harness.data(text), opaque],
+        )
+        .await
+        .expect("the run completes");
+
+    assert_eq!(
+        result.items,
+        outcomes(&[
+            (text, ItemStatus::Completed),
+            (unknown, ItemStatus::Completed),
+        ])
+    );
+    assert_eq!(
+        llm.call_count(),
+        2,
+        "the unknown-extension item is extracted"
+    );
+    assert!(harness.is_marked(unknown).await);
+}
+
+/// An unknown-extension item whose bytes are not UTF-8 fails, as Python's
+/// `TextDocument.read` (`open(..., encoding="utf-8")`, strict) raises
+/// `UnicodeDecodeError` for it: under `failed_items` the run errors and keeps
+/// the other item. It is not left unreached.
+#[tokio::test]
+async fn an_unknown_extension_item_that_is_not_utf8_fails() {
+    let mut harness = Harness::new().await;
+    let text = harness.add_file("Alice works at Acme.").await;
+    let binary = harness.add_file("placeholder").await;
+    let location = harness
+        .storage
+        .store(&[0x89, 0x00, 0xFF, 0xFE, 0x01, 0x80], "opaque.bin")
+        .await
+        .expect("store the binary bytes");
+    let mut opaque = harness.data(binary);
+    opaque.extension = "bin".into();
+    opaque.mime_type = "application/octet-stream".into();
+    opaque.raw_data_location = location;
+
+    let outcome = errored_outcomes(
+        harness
+            .run_with_llm(
+                &failed_items(extraction_config()),
+                Arc::new(CountingLlm::lenient(4)),
+                vec![harness.data(text), opaque],
+            )
+            .await,
+    );
+    assert_eq!(
+        outcome,
+        outcomes(&[(text, ItemStatus::Completed), (binary, ItemStatus::Failed),])
+    );
+    assert!(harness.is_marked(text).await, "the decodable item is kept");
+    assert!(!harness.is_marked(binary).await);
+}
+
+/// An empty unknown-extension file has nothing to read and completes, as
+/// Python's `TextDocument.read` yields no chunk for it.
+#[tokio::test]
+async fn an_empty_unknown_extension_item_completes() {
+    let mut harness = Harness::new().await;
+    let text = harness.add_file("Alice works at Acme.").await;
+    let empty = harness.add_file("").await;
+    let mut opaque = harness.data(empty);
     opaque.extension = "xyz".into();
     opaque.mime_type = "application/octet-stream".into();
 
@@ -239,16 +313,15 @@ async fn an_item_no_loader_matches_is_unreached_on_a_completed_run() {
             vec![harness.data(text), opaque],
         )
         .await
-        .expect("an unsupported item fails nothing");
+        .expect("the run completes");
 
     assert_eq!(
         result.items,
         outcomes(&[
             (text, ItemStatus::Completed),
-            (unsupported, ItemStatus::Unreached),
+            (empty, ItemStatus::Completed)
         ])
     );
-    assert!(!harness.is_marked(unsupported).await);
 }
 
 // ── Probes from the O8 review ────────────────────────────────────────────────

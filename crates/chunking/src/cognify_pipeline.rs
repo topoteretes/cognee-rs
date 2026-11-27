@@ -182,14 +182,20 @@ mod tests {
         assert_eq!(crlf, lf, "stored CRLF text chunks as its LF version");
     }
 
+    /// An extension the table does not list is read as text, as Python's
+    /// `document_class_for` does (`classify_documents.py:131`).
     #[tokio::test]
-    async fn extract_chunks_skips_unknown_extension() {
+    async fn extract_chunks_reads_an_unknown_extension_as_text() {
         let storage = Arc::new(MockStorage::new());
+        let location = storage
+            .store(b"Hello world. This is a test.", "data.xyz")
+            .await
+            .unwrap();
 
         let data = Data::builder(
             Uuid::new_v4(),
             "data.xyz",
-            "/storage/data.xyz",
+            location,
             "file://data.xyz",
             "xyz",
             "application/octet-stream",
@@ -200,6 +206,7 @@ mod tests {
 
         let pipeline = ExtractTextChunksPipeline::new(storage);
         let chunks = pipeline.extract_chunks(vec![data], 100).await.unwrap();
-        assert!(chunks.is_empty());
+        assert!(!chunks.is_empty());
+        assert!(chunks[0].text.contains("Hello world"));
     }
 }
